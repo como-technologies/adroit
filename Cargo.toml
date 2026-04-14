@@ -1,0 +1,10 @@
+[package]
+name = "adroit"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "A snappy TUI for managing Architecture Decision Records"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
