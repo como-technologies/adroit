@@ -7,7 +7,7 @@ init:
     rustup component add clippy rustfmt
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
-# Run all CI checks (mirrors .github/workflows/ci.yml)
+# Run all CI checks (used by .github/workflows/ci.yml)
 ci: fmt-check lint test book crate-outdated crate-audit
 
 # Format code

@@ -22,19 +22,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Format check
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Tests
-        run: cargo test
-
-      - name: Install mdbook
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
         with:
-          tool: mdbook
+          tool: just,mdbook,cargo-outdated,cargo-audit
 
-      - name: Build book
-        run: mdbook build book
+      - name: CI
+        run: just ci
