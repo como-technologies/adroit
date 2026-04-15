@@ -13,6 +13,9 @@ pub enum StoreError {
 
     #[error("failed to parse ADR: {0}")]
     Parse(String),
+
+    #[error("no ADR found with number {0}")]
+    NumberNotFound(Number),
 }
 
 /// Generate the canonical filename for an ADR: `0001-some-title.md`
@@ -104,6 +107,19 @@ impl Store {
     pub fn read(&self, path: &Path) -> Result<Adr, StoreError> {
         let content = std::fs::read_to_string(path)?;
         crate::frontmatter::deserialize(&content).map_err(|e| StoreError::Parse(e.to_string()))
+    }
+
+    /// Find the file path for an ADR by its sequential number.
+    pub fn find_path_by_number(&self, number: Number) -> Result<PathBuf, StoreError> {
+        let prefix = format!("{number}-");
+        self.list_files()?
+            .into_iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix))
+            })
+            .ok_or(StoreError::NumberNotFound(number))
     }
 
     /// List all ADRs in the store, parsed from disk.
@@ -214,6 +230,24 @@ mod tests {
         store.write(&mut Adr::new("First").unwrap()).unwrap();
         store.write(&mut Adr::new("Second").unwrap()).unwrap();
         assert_eq!(store.next_number().unwrap(), Number::new(3));
+    }
+
+    #[test]
+    fn find_path_by_number_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
+        store.write(&mut Adr::new("First").unwrap()).unwrap();
+        store.write(&mut Adr::new("Second").unwrap()).unwrap();
+
+        let path = store.find_path_by_number(Number::new(2)).unwrap();
+        assert!(path.ends_with("0002-second.md"));
+    }
+
+    #[test]
+    fn find_path_by_number_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
+        assert!(store.find_path_by_number(Number::new(99)).is_err());
     }
 
     #[test]

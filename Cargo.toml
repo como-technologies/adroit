@@ -9,14 +9,18 @@ description = "A snappy TUI for managing Architecture Decision Records"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
+dialoguer = "0.12"
 directories = "6"
+edit = "0.1"
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
+shellexpand = "3"
 serde_yaml_ng = "0.10"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
 time = { version = "0.3", features = ["serde-human-readable", "formatting", "parsing", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+which = "8"
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -24,6 +24,23 @@ pub enum Command {
     },
     /// List existing ADRs.
     List,
+    /// Show a single ADR by number.
+    Show {
+        /// ADR number to display.
+        number: u32,
+    },
+    /// Update the status of an ADR.
+    Status {
+        /// ADR number to update.
+        number: u32,
+        /// New status (proposed, accepted, deprecated, superseded).
+        status: String,
+    },
+    /// Open an ADR in your editor ($EDITOR or $VISUAL).
+    Edit {
+        /// ADR number to edit.
+        number: u32,
+    },
 }
 
 #[cfg(test)]

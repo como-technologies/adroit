@@ -1,7 +1,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use strum::Display;
+use strum::{Display, EnumString};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -94,7 +94,10 @@ impl fmt::Display for Created {
 // ---------------------------------------------------------------------------
 
 /// The lifecycle status of an Architecture Decision Record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, Serialize, Deserialize,
+)]
+#[strum(ascii_case_insensitive)]
 pub enum Status {
     #[default]
     Proposed,
@@ -213,6 +216,19 @@ mod tests {
     #[test]
     fn number_default() {
         assert_eq!(Number::default().get(), 1);
+    }
+
+    #[test]
+    fn status_parses_case_insensitive() {
+        assert_eq!("accepted".parse::<Status>().unwrap(), Status::Accepted);
+        assert_eq!("PROPOSED".parse::<Status>().unwrap(), Status::Proposed);
+        assert_eq!("Deprecated".parse::<Status>().unwrap(), Status::Deprecated);
+        assert_eq!("superseded".parse::<Status>().unwrap(), Status::Superseded);
+    }
+
+    #[test]
+    fn status_parse_invalid() {
+        assert!("invalid".parse::<Status>().is_err());
     }
 
     #[test]
