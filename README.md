@@ -33,8 +33,73 @@ adroit init
 # Create a new ADR
 adroit new "Use PostgreSQL for primary datastore"
 
+# List existing ADRs
+adroit list
+
 # Launch the interactive TUI
 adroit
+```
+
+## Documentation
+
+The [User Manual](https://como-technologies.github.io/adroit/) is built with mdbook and published to GitHub Pages on every push to `main`.
+
+To work on the book locally:
+
+```sh
+just book-serve
+```
+
+## Development
+
+Requires [Rust](https://rustup.rs/) and [just](https://github.com/casey/just).
+
+```sh
+# Install all project tools (clippy, rustfmt, cargo-watch, mdbook)
+just init
+
+# See all available recipes
+just
+
+# Run the full CI suite (format check, clippy, tests, book build)
+just ci
+
+# Run all tests
+just test
+
+# Run only unit tests
+just unit
+
+# Auto-format code
+just fmt
+
+# Build a release binary
+just release
+
+# Build the user manual
+just book
+
+# Run with arguments
+just run init
+just run new "My decision"
+just run list
+```
+
+## Project structure
+
+```
+src/
+  lib.rs       Library crate root
+  adr.rs       ADR model types (Adr, Status)
+  store.rs     Filesystem storage for ADRs
+  cli.rs       CLI argument parsing (clap)
+  tui.rs       Interactive TUI (ratatui)
+  main.rs      Binary entry point — delegates to lib
+tests/
+  cli.rs       Integration tests against the compiled binary
+book/
+  book.toml    mdbook configuration
+  src/         User manual source (Markdown)
 ```
 
 ## License

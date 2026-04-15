@@ -30,3 +30,11 @@ jobs:
 
       - name: Tests
         run: cargo test
+
+      - name: Install mdbook
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook
+
+      - name: Build book
+        run: mdbook build book
