@@ -9,6 +9,7 @@ description = "A snappy TUI for managing Architecture Decision Records"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
+directories = "6"
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"

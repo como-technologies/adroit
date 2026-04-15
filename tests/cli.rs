@@ -15,17 +15,18 @@ fn no_args_prints_tui_stub() {
 }
 
 #[test]
-fn init_creates_directory() {
+fn new_auto_creates_directory() {
     let tmp = tempdir().unwrap();
     let adr_dir = tmp.path().join("adr");
 
+    // No init needed — directory is auto-created
     adroit()
-        .args(["--dir", adr_dir.to_str().unwrap(), "init"])
+        .args(["--dir", adr_dir.to_str().unwrap(), "new", "First decision"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Initialized"));
+        .success();
 
     assert!(adr_dir.is_dir());
+    assert!(adr_dir.join("0001-first-decision.md").exists());
 }
 
 #[test]
@@ -33,13 +34,6 @@ fn new_creates_adr_file() {
     let tmp = tempdir().unwrap();
     let adr_dir = tmp.path().join("adr");
 
-    // init first
-    adroit()
-        .args(["--dir", adr_dir.to_str().unwrap(), "init"])
-        .assert()
-        .success();
-
-    // create an ADR
     adroit()
         .args([
             "--dir",
@@ -64,11 +58,6 @@ fn new_creates_frontmatter() {
     let adr_dir = tmp.path().join("adr");
 
     adroit()
-        .args(["--dir", adr_dir.to_str().unwrap(), "init"])
-        .assert()
-        .success();
-
-    adroit()
         .args(["--dir", adr_dir.to_str().unwrap(), "new", "Test decision"])
         .assert()
         .success();
@@ -87,11 +76,6 @@ fn list_shows_adrs() {
     let adr_dir = tmp.path().join("adr");
 
     adroit()
-        .args(["--dir", adr_dir.to_str().unwrap(), "init"])
-        .assert()
-        .success();
-
-    adroit()
         .args(["--dir", adr_dir.to_str().unwrap(), "new", "First decision"])
         .assert()
         .success();
@@ -101,6 +85,18 @@ fn list_shows_adrs() {
         .assert()
         .success()
         .stdout(predicate::str::contains("0001-first-decision.md"));
+}
+
+#[test]
+fn list_empty_store() {
+    let tmp = tempdir().unwrap();
+    let adr_dir = tmp.path().join("adr");
+
+    adroit()
+        .args(["--dir", adr_dir.to_str().unwrap(), "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
 }
 
 #[test]
