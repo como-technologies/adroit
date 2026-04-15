@@ -6,9 +6,10 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "adroit", version, about)]
 pub struct Cli {
-    /// Path to the ADR directory.
-    #[arg(short, long, default_value = "docs/adr")]
-    pub dir: PathBuf,
+    /// Path to the ADR directory. Overrides the config file and
+    /// XDG data directory default (~/.local/share/adroit/).
+    #[arg(short, long)]
+    pub dir: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -16,8 +17,6 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Initialize an ADR directory.
-    Init,
     /// Create a new ADR.
     New {
         /// Title for the new decision record.

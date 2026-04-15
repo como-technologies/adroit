@@ -15,10 +15,20 @@ pub enum StoreError {
     Parse(String),
 }
 
+/// Generate the canonical filename for an ADR: `0001-some-title.md`
+fn filename(number: Number, title: &str) -> String {
+    let slug: String = title
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+    format!("{number}-{slug}.md")
+}
+
 /// Manages reading and writing ADRs on disk.
 #[derive(Debug)]
 pub struct Store {
-    /// Root directory containing the ADR files (e.g. `docs/adr/`).
+    /// Root directory containing the ADR files (e.g. `~/.local/share/adroit/`).
     root: PathBuf,
 }
 
@@ -32,10 +42,12 @@ impl Store {
         Ok(Self { root })
     }
 
-    /// Initialize a new ADR directory, creating it if necessary.
-    pub fn init(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
+    /// Open an ADR store, creating the directory if it doesn't exist.
+    pub fn open_or_create(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let root = root.into();
-        std::fs::create_dir_all(&root)?;
+        if !root.is_dir() {
+            std::fs::create_dir_all(&root)?;
+        }
         Ok(Self { root })
     }
 
@@ -80,9 +92,10 @@ impl Store {
         if adr.number.is_none() {
             adr.number = Some(self.next_number()?);
         }
+        let number = adr.number.expect("number was just assigned above");
         let content =
             crate::frontmatter::serialize(adr).map_err(|e| StoreError::Parse(e.to_string()))?;
-        let path = self.root.join(adr.filename());
+        let path = self.root.join(filename(number, &adr.title));
         std::fs::write(&path, content)?;
         Ok(path)
     }
@@ -106,10 +119,23 @@ mod tests {
     use crate::adr::Adr;
 
     #[test]
-    fn init_creates_directory() {
+    fn filename_format() {
+        assert_eq!(
+            filename(Number::new(1), "Use PostgreSQL for primary datastore"),
+            "0001-use-postgresql-for-primary-datastore.md"
+        );
+    }
+
+    #[test]
+    fn filename_zero_pads() {
+        assert_eq!(filename(Number::new(42), "Something"), "0042-something.md");
+    }
+
+    #[test]
+    fn open_or_create_creates_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let adr_dir = tmp.path().join("adr");
-        let store = Store::init(&adr_dir).unwrap();
+        let store = Store::open_or_create(&adr_dir).unwrap();
         assert!(store.root().is_dir());
     }
 
@@ -122,7 +148,7 @@ mod tests {
     #[test]
     fn write_and_list_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
 
         let mut adr = Adr::new("Use PostgreSQL").unwrap();
         store.write(&mut adr).unwrap();
@@ -135,7 +161,7 @@ mod tests {
     #[test]
     fn write_assigns_number_lazily() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
 
         let mut adr = Adr::new("Lazy numbering").unwrap();
         assert!(adr.number.is_none());
@@ -147,7 +173,7 @@ mod tests {
     #[test]
     fn write_produces_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
 
         let mut adr = Adr::new("Use PostgreSQL").unwrap();
         let path = store.write(&mut adr).unwrap();
@@ -161,7 +187,7 @@ mod tests {
     #[test]
     fn write_then_read_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
 
         let mut adr = Adr::new("Use PostgreSQL").unwrap();
         let path = store.write(&mut adr).unwrap();
@@ -177,14 +203,14 @@ mod tests {
     #[test]
     fn next_number_starts_at_one() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
         assert_eq!(store.next_number().unwrap(), Number::new(1));
     }
 
     #[test]
     fn next_number_increments() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
         store.write(&mut Adr::new("First").unwrap()).unwrap();
         store.write(&mut Adr::new("Second").unwrap()).unwrap();
         assert_eq!(store.next_number().unwrap(), Number::new(3));
@@ -193,7 +219,7 @@ mod tests {
     #[test]
     fn list_returns_parsed_adrs() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Store::init(tmp.path().join("adr")).unwrap();
+        let store = Store::open_or_create(tmp.path().join("adr")).unwrap();
         store.write(&mut Adr::new("First").unwrap()).unwrap();
         store.write(&mut Adr::new("Second").unwrap()).unwrap();
 

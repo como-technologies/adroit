@@ -155,22 +155,6 @@ impl Adr {
             git_sha: None,
         })
     }
-
-    /// Canonical filename: `0001-some-title.md`
-    ///
-    /// Panics if `number` has not been assigned.
-    pub fn filename(&self) -> String {
-        let number = self
-            .number
-            .expect("number must be assigned before generating filename");
-        let slug: String = self
-            .title
-            .to_lowercase()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-");
-        format!("{number}-{slug}.md")
-    }
 }
 
 #[cfg(test)]
@@ -190,23 +174,6 @@ mod tests {
     fn new_adr_empty_title_errors() {
         assert!(Adr::new("").is_err());
         assert!(Adr::new("   ").is_err());
-    }
-
-    #[test]
-    fn filename_format() {
-        let mut adr = Adr::new("Use PostgreSQL for primary datastore").unwrap();
-        adr.number = Some(Number::new(1));
-        assert_eq!(
-            adr.filename(),
-            "0001-use-postgresql-for-primary-datastore.md"
-        );
-    }
-
-    #[test]
-    fn filename_zero_pads() {
-        let mut adr = Adr::new("Something").unwrap();
-        adr.number = Some(Number::new(42));
-        assert_eq!(adr.filename(), "0042-something.md");
     }
 
     #[test]
