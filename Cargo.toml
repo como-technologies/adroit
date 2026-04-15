@@ -13,7 +13,7 @@ directories = "6"
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
 time = { version = "0.3", features = ["serde-human-readable", "formatting", "parsing", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }

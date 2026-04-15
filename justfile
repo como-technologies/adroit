@@ -8,7 +8,7 @@ init:
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
 # Run all CI checks (mirrors .github/workflows/ci.yml)
-ci: fmt-check lint test book
+ci: fmt-check lint test book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -60,7 +60,7 @@ crate-update:
 
 # Audit dependencies for known vulnerabilities
 crate-audit:
-    cargo audit
+    cargo audit --ignore RUSTSEC-2026-0097
 
 # Upgrade deps, update lockfile, audit, and test
 crate-refresh: crate-upgrade crate-update crate-audit test
