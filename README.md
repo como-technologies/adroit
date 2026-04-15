@@ -27,10 +27,7 @@ cargo install adroit
 ## Usage
 
 ```sh
-# Initialize an ADR directory in your project
-adroit init
-
-# Create a new ADR
+# Create a new ADR (directory is auto-created)
 adroit new "Use PostgreSQL for primary datastore"
 
 # List existing ADRs
@@ -40,66 +37,77 @@ adroit list
 adroit
 ```
 
-## Documentation
+## Getting started (new developers)
 
-The [User Manual](https://como-technologies.github.io/adroit/) is built with mdbook and published to GitHub Pages on every push to `main`.
-
-To work on the book locally:
+Prerequisites: [Rust](https://rustup.rs/) and [just](https://github.com/casey/just).
 
 ```sh
-just book-serve
+git clone https://github.com/como-technologies/adroit.git
+cd adroit
+just init    # installs all tooling: clippy, rustfmt, cargo-watch, mdbook, cargo-outdated, cargo-edit, cargo-audit
+just ci      # run the full CI suite to verify everything works
 ```
 
-## Development
+That's it. Run `just` to see all available recipes.
 
-Requires [Rust](https://rustup.rs/) and [just](https://github.com/casey/just).
+## Development workflow
 
-```sh
-# Install all project tools (clippy, rustfmt, cargo-watch, mdbook)
-just init
+### Day-to-day
 
-# See all available recipes
-just
+| Recipe | What it does |
+|---|---|
+| `just ci` | Full CI suite: format check, clippy, tests, book build |
+| `just test` | Run all tests (unit + integration) |
+| `just unit` | Run unit tests only |
+| `just check` | Quick type-check without building |
+| `just fmt` | Auto-format code |
+| `just lint` | Clippy with `-D warnings` |
+| `just watch` | Auto-run tests on file changes |
+| `just run <args>` | Run the binary (e.g. `just run new "My decision"`, `just run list`) |
 
-# Run the full CI suite (format check, clippy, tests, book build)
-just ci
+### Building
 
-# Run all tests
-just test
+| Recipe | What it does |
+|---|---|
+| `just build` | Debug build |
+| `just release` | Release build |
 
-# Run only unit tests
-just unit
+### Dependency management
 
-# Auto-format code
-just fmt
+| Recipe | What it does |
+|---|---|
+| `just crate-refresh` | Upgrade, update lockfile, audit, and test -- all in one |
+| `just crate-outdated` | Check for outdated dependencies |
+| `just crate-upgrade` | Upgrade deps (including incompatible versions) |
+| `just crate-update` | Update Cargo.lock to latest compatible versions |
+| `just crate-audit` | Audit for known vulnerabilities |
 
-# Build a release binary
-just release
+### Documentation
 
-# Build the user manual
-just book
+| Recipe | What it does |
+|---|---|
+| `just book` | Build the user manual |
+| `just book-serve` | Local dev server with live reload |
+| `just doc` | Generate and open API docs |
 
-# Run with arguments
-just run init
-just run new "My decision"
-just run list
-```
+The [User Manual](https://como-technologies.github.io/adroit/) is published to GitHub Pages on every push to `main`.
 
 ## Project structure
 
 ```
 src/
-  lib.rs       Library crate root
-  adr.rs       ADR model types (Adr, Status)
-  store.rs     Filesystem storage for ADRs
-  cli.rs       CLI argument parsing (clap)
-  tui.rs       Interactive TUI (ratatui)
-  main.rs      Binary entry point — delegates to lib
+  lib.rs           Library crate root
+  adr.rs           ADR model types (AdrId, Number, Created, Status, Adr)
+  frontmatter.rs   YAML frontmatter serialization
+  store.rs         Filesystem storage for ADRs
+  cli.rs           CLI argument parsing (clap)
+  tui.rs           Interactive TUI (ratatui)
+  main.rs          Binary entry point -- delegates to lib
 tests/
-  cli.rs       Integration tests against the compiled binary
+  cli.rs           Integration tests against the compiled binary
 book/
-  book.toml    mdbook configuration
-  src/         User manual source (Markdown)
+  book.toml        mdbook configuration
+  src/             User manual source (Markdown)
 ```
 
 ## License

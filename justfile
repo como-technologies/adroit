@@ -5,7 +5,7 @@ default:
 # Install project dependencies and tools
 init:
     rustup component add clippy rustfmt
-    cargo install cargo-watch mdbook
+    cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
 # Run all CI checks (mirrors .github/workflows/ci.yml)
 ci: fmt-check lint test book
@@ -45,6 +45,25 @@ release:
 # Run the binary with arguments
 run *ARGS:
     cargo run -- {{ARGS}}
+
+# Check for outdated dependencies
+crate-outdated:
+    cargo outdated
+
+# Upgrade dependencies (including incompatible versions)
+crate-upgrade:
+    cargo upgrade --incompatible
+
+# Update Cargo.lock to latest compatible versions
+crate-update:
+    cargo update
+
+# Audit dependencies for known vulnerabilities
+crate-audit:
+    cargo audit
+
+# Upgrade deps, update lockfile, audit, and test
+crate-refresh: crate-upgrade crate-update crate-audit test
 
 # Clean build artifacts
 clean:

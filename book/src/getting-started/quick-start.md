@@ -1,26 +1,20 @@
 # Quick Start
 
-## Initialize
-
-Create an ADR directory in your project:
-
-```sh
-adroit init
-```
-
-This creates `docs/adr/` by default. Use `--dir` to choose a different location:
-
-```sh
-adroit init --dir decisions
-```
-
 ## Create your first ADR
+
+No setup needed — adroit auto-creates the ADR directory on first use:
 
 ```sh
 adroit new "Use PostgreSQL for primary datastore"
 ```
 
-This creates a numbered Markdown file like `0001-use-postgresql-for-primary-datastore.md` with a standard template.
+This creates `~/.local/share/adroit/0001-use-postgresql-for-primary-datastore.md` with YAML frontmatter and a standard template.
+
+Use `--dir` to choose a different location:
+
+```sh
+adroit --dir decisions new "Use PostgreSQL for primary datastore"
+```
 
 ## List decisions
 

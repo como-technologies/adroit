@@ -6,7 +6,7 @@
 adroit new "Title of the decision"
 ```
 
-Each ADR is automatically assigned the next sequential number and written as a Markdown file.
+Each ADR is automatically assigned the next sequential number and written as a Markdown file. The ADR directory is created automatically if it doesn't exist.
 
 ## Listing ADRs
 
@@ -31,7 +31,11 @@ New ADRs start with status **Proposed**.
 
 ## Custom ADR directory
 
-By default, adroit looks for ADRs in `docs/adr/`. Override this with the `--dir` flag:
+By default, adroit stores ADRs in `~/.local/share/adroit/` (XDG data directory). You can override this with:
+
+- The `--dir` CLI flag (highest priority)
+- The `dir` field in `~/.config/adroit/config.yaml`
+- The built-in default: `~/.local/share/adroit/`
 
 ```sh
 adroit --dir architecture/decisions list
