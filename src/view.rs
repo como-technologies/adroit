@@ -176,8 +176,14 @@ pub struct GraphEdge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
-    /// `from` supersedes `to` (`from` is the newer decision).
+    /// `from` supersedes `to` (`from` is the newer decision). Directed.
     Supersedes,
+    /// `from` depends on `to` (a typed relational link). Directed.
+    DependsOn,
+    /// `from` refines / elaborates `to` (a typed relational link). Directed.
+    Refines,
+    /// `from` is related to `to` (a typed, non-directional relational link).
+    RelatesTo,
     /// `from` links to `to` via a markdown link in its body (non-supersession).
     Related,
 }

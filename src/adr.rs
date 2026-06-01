@@ -240,6 +240,12 @@ pub struct Adr {
     pub supersedes: Option<crate::naming::AdrRef>,
     /// Reference to an ADR that supersedes this record (the newer decision).
     pub superseded_by: Option<crate::naming::AdrRef>,
+    /// Typed relational links to other ADRs (scheme-agnostic [`AdrRef`]s), which
+    /// flow into the graph as distinct edge kinds. Persisted in the frontmatter
+    /// profile; empty under the markdown profile.
+    pub relates_to: Vec<crate::naming::AdrRef>,
+    pub depends_on: Vec<crate::naming::AdrRef>,
+    pub refines: Vec<crate::naming::AdrRef>,
     /// Optional review deadline. When a still-`Proposed` ADR is past this date
     /// it is flagged as review-due by the query layer.
     pub review_by: Option<ReviewBy>,
@@ -265,6 +271,9 @@ impl Adr {
             git_sha: None,
             supersedes: None,
             superseded_by: None,
+            relates_to: Vec::new(),
+            depends_on: Vec::new(),
+            refines: Vec::new(),
             review_by: None,
         })
     }

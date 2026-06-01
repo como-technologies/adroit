@@ -8,7 +8,7 @@ use adroit::format::Format;
 use adroit::naming::AdrRef;
 use adroit::query::{self, Filter};
 use adroit::store::{Store, StoreOptions};
-use adroit::view::AdrSummary;
+use adroit::view::{AdrSummary, EdgeKind};
 
 /// Parse a CLI ADR identifier into an [`AdrRef`] under the configured scheme.
 fn resolve_ref(cfg: &Config, id: &str) -> Result<AdrRef> {
@@ -328,6 +328,17 @@ fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
     }
     if let Some(r) = &s.superseded_by {
         println!("Superseded by: {r}");
+    }
+    // Typed relational links + plain body links (supersession already shown).
+    for link in &detail.related {
+        let label = match link.kind {
+            EdgeKind::Supersedes => continue,
+            EdgeKind::DependsOn => "Depends on",
+            EdgeKind::Refines => "Refines",
+            EdgeKind::RelatesTo => "Relates to",
+            EdgeKind::Related => "Related",
+        };
+        println!("{label}: {}", link.reference);
     }
     println!("Path:    {}", path.display());
     // Git-derived lifecycle (proposed → accepted/rejected/…). Empty outside git.

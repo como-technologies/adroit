@@ -22,6 +22,12 @@ struct Frontmatter {
     supersedes: Option<AdrRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     superseded_by: Option<AdrRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relates_to: Vec<AdrRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<AdrRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    refines: Vec<AdrRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     review_by: Option<ReviewBy>,
 }
@@ -42,6 +48,9 @@ pub fn serialize(adr: &crate::adr::Adr) -> anyhow::Result<String> {
         created: adr.created,
         supersedes: adr.supersedes.clone(),
         superseded_by: adr.superseded_by.clone(),
+        relates_to: adr.relates_to.clone(),
+        depends_on: adr.depends_on.clone(),
+        refines: adr.refines.clone(),
         review_by: adr.review_by,
     };
 
@@ -75,6 +84,9 @@ pub fn deserialize(input: &str) -> anyhow::Result<crate::adr::Adr> {
         git_sha: None,
         supersedes: fm.supersedes,
         superseded_by: fm.superseded_by,
+        relates_to: fm.relates_to,
+        depends_on: fm.depends_on,
+        refines: fm.refines,
         review_by: fm.review_by,
     })
 }
@@ -216,7 +228,33 @@ mod tests {
         // Clean files: optional fields are not emitted when unset.
         assert!(!text.contains("supersedes:"));
         assert!(!text.contains("superseded_by:"));
+        assert!(!text.contains("relates_to:"));
+        assert!(!text.contains("depends_on:"));
+        assert!(!text.contains("refines:"));
         assert!(!text.contains("review_by:"));
+    }
+
+    #[test]
+    fn typed_links_round_trip() {
+        let mut adr = sample_adr();
+        adr.depends_on = vec![AdrRef::Number(2), AdrRef::Number(3)];
+        adr.relates_to = vec![AdrRef::Slug("20260601-adopt-x".into())];
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("depends_on:"));
+        assert!(text.contains("relates_to:"));
+        // `refines` is empty → not emitted (clean files).
+        assert!(!text.contains("refines:"));
+
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(
+            parsed.depends_on,
+            vec![AdrRef::Number(2), AdrRef::Number(3)]
+        );
+        assert_eq!(
+            parsed.relates_to,
+            vec![AdrRef::Slug("20260601-adopt-x".into())]
+        );
+        assert!(parsed.refines.is_empty());
     }
 
     #[test]

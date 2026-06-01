@@ -269,6 +269,10 @@ pub fn parse_markdown(
             .superseded_by
             .as_deref()
             .and_then(|f| naming.ref_in_note(f)),
+        // Typed relational links are a frontmatter-profile feature.
+        relates_to: Vec::new(),
+        depends_on: Vec::new(),
+        refines: Vec::new(),
         review_by: region.review_by,
     })
 }

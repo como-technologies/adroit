@@ -242,8 +242,15 @@ pub fn graph(store: &Store) -> Result<Graph, QueryError> {
                 EdgeKind::Supersedes,
             );
         }
+        // Typed relational links (frontmatter): one directed edge per entry.
+        for (targets, kind) in typed_links(a) {
+            for r in targets {
+                push_unique(&mut edges, from.clone(), scheme.display(r), kind);
+            }
+        }
         // Markdown links to other ADRs in the body become `Related` edges,
-        // unless that pair already has a supersession edge.
+        // unless that pair already has a more specific edge (supersession or a
+        // typed link).
         for r in linked_refs(&a.body, scheme) {
             let to = scheme.display(&r);
             if to == from {
@@ -251,7 +258,7 @@ pub fn graph(store: &Store) -> Result<Graph, QueryError> {
             }
             if edges
                 .iter()
-                .any(|e| e.kind == EdgeKind::Supersedes && pair_matches(e, &from, &to))
+                .any(|e| e.kind != EdgeKind::Related && pair_matches(e, &from, &to))
             {
                 continue;
             }
@@ -260,6 +267,15 @@ pub fn graph(store: &Store) -> Result<Graph, QueryError> {
     }
 
     Ok(Graph { nodes, edges })
+}
+
+/// The typed relational links of an ADR, paired with their edge kind.
+fn typed_links(a: &Adr) -> [(&[crate::naming::AdrRef], EdgeKind); 3] {
+    [
+        (&a.depends_on, EdgeKind::DependsOn),
+        (&a.refines, EdgeKind::Refines),
+        (&a.relates_to, EdgeKind::RelatesTo),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -430,15 +446,23 @@ fn related_links(adr: &Adr, scheme: NamingScheme) -> Vec<RelatedLink> {
     if let Some(r) = &adr.superseded_by {
         push_related(&mut out, scheme, r, EdgeKind::Supersedes);
     }
+    // Typed relational links (frontmatter).
+    for (targets, kind) in typed_links(adr) {
+        for r in targets {
+            push_related(&mut out, scheme, r, kind);
+        }
+    }
     let self_ref = adr.reference();
     for r in linked_refs(&adr.body, scheme) {
         if r == self_ref {
             continue;
         }
         let address = r.addr();
+        // A plain body link is the weakest edge; skip if a more specific one
+        // (supersession or a typed link) already covers this target.
         if out
             .iter()
-            .any(|x| x.address == address && x.kind == EdgeKind::Supersedes)
+            .any(|x| x.address == address && x.kind != EdgeKind::Related)
         {
             continue;
         }
@@ -809,6 +833,36 @@ mod tests {
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].from, "ADR-0003");
         assert_eq!(related[0].to, "ADR-0001");
+    }
+
+    #[test]
+    fn graph_emits_typed_link_edges() {
+        use crate::adr::Adr;
+        use crate::naming::AdrRef;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open_or_create_with(
+            tmp.path(),
+            StoreOptions {
+                format: Format::Frontmatter,
+                ..StoreOptions::default()
+            },
+        )
+        .unwrap();
+        let mut base = Adr::new("Base").unwrap();
+        store.write(&mut base).unwrap(); // ADR 1
+        let mut dependent = Adr::new("Dependent").unwrap();
+        dependent.depends_on = vec![AdrRef::Number(1)];
+        store.write(&mut dependent).unwrap(); // ADR 2 depends_on ADR 1
+
+        let g = graph(&store).unwrap();
+        let deps: Vec<_> = g
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::DependsOn)
+            .collect();
+        assert_eq!(deps.len(), 1, "one depends_on edge");
+        assert_eq!(deps[0].from, "ADR-0002");
+        assert_eq!(deps[0].to, "ADR-0001");
     }
 
     #[test]
