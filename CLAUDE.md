@@ -213,18 +213,21 @@ view contract and is filled from that single optional.
 In by-status a status change moves the file between dirs, which would strand
 relative links (`[..](../proposed/0009-x.md)`) in other ADRs and in the moved
 file itself. `links::rewrite_links(content, source_dir, resolve)` is the pure
-engine: it scans `](target)` spans, and for each *relative* `.md` target whose
-filename number resolves to a unique ADR, rewrites it to the canonical relative
-path of that ADR's current file (preserving `#anchors`, keeping `./` for
-same-dir); external URLs / anchors / non-ADR links are left byte-for-byte.
-`Store::relink` runs it over every file, writing only those that changed
-(idempotent → no-op on a canonical repo). `relink(apply)` with `apply == false`
-is the dry-run path (`adroit relink --dry-run` reports `changed_files` without
-writing). `set_status_inner` calls `relink(true)` after any move, so `adroit
-status`/`supersede` self-heal links; `adroit relink` exposes it on demand
-(repairs repos edited outside adroit); `cmd_check` adds check #5 (broken target
-/ stale-vs-canonical). `query.rs` reuses
-`links::number_in_target` for its graph link parsing.
+engine: it scans `](target)` spans, and for each *relative* `.md` target where
+`resolve(target)` yields a path, rewrites it to the canonical relative path of
+that ADR's current file (preserving `#anchors`, keeping `./` for same-dir);
+external URLs / anchors / non-ADR links are left byte-for-byte. Resolving a link
+target → ADR is the caller's job, so the engine is **scheme-agnostic**:
+`Store::relink` builds a map keyed by each ADR's `reference()` (skipping
+ambiguous duplicates) and resolves a target via `naming.ref_in_link(target)`, so
+date/uuid slug links relink just like sequential numbers. It writes only files
+that changed (idempotent → no-op on a canonical repo). `relink(apply)` with
+`apply == false` is the dry-run path (`adroit relink --dry-run` reports
+`changed_files` without writing). `set_status_at` calls `relink(true)` after any
+move, so `adroit status`/`supersede` self-heal links; `adroit relink` exposes it
+on demand (repairs repos edited outside adroit); `cmd_check` adds check #5
+(broken target / stale-vs-canonical). `query.rs` reuses
+`links::number_in_target` for its (numeric) graph link parsing.
 
 `Store::renumber` (`adroit renumber <old> <new> [--file]`) resolves a duplicate
 number: rename the file, rewrite its heading + self-refs, then

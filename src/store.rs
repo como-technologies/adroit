@@ -374,20 +374,20 @@ impl Store {
     /// what *would* change (for `adroit relink --dry-run`).
     pub fn relink(&self, apply: bool) -> Result<RelinkReport, StoreError> {
         let entries = self.list_with_paths()?;
-        // Count numbers so duplicates can be skipped (can't disambiguate them).
-        let mut seen: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        // Map each ADR's scheme identity to its current file, so a link target's
+        // ref (via the seam) resolves to where that ADR now lives. Identities
+        // seen more than once are ambiguous duplicates and are left out (their
+        // links are kept byte-for-byte and flagged by `check`).
+        let mut seen: std::collections::HashMap<AdrRef, usize> = std::collections::HashMap::new();
         for (_, adr) in &entries {
-            if let Some(n) = adr.number {
-                *seen.entry(n.get()).or_default() += 1;
-            }
+            *seen.entry(adr.reference()).or_default() += 1;
         }
-        let mut by_number: std::collections::HashMap<u32, PathBuf> =
+        let mut by_ref: std::collections::HashMap<AdrRef, PathBuf> =
             std::collections::HashMap::new();
         for (path, adr) in &entries {
-            if let Some(n) = adr.number
-                && seen.get(&n.get()) == Some(&1)
-            {
-                by_number.insert(n.get(), path.clone());
+            let r = adr.reference();
+            if seen.get(&r) == Some(&1) {
+                by_ref.insert(r, path.clone());
             }
         }
 
@@ -395,8 +395,12 @@ impl Store {
         for (path, _) in &entries {
             let dir = path.parent().unwrap_or_else(|| Path::new(""));
             let original = std::fs::read_to_string(path)?;
-            let (rewritten, changed) =
-                crate::links::rewrite_links(&original, dir, |n| by_number.get(&n).cloned());
+            let (rewritten, changed) = crate::links::rewrite_links(&original, dir, |target| {
+                self.opts
+                    .naming
+                    .ref_in_link(target)
+                    .and_then(|r| by_ref.get(&r).cloned())
+            });
             if changed > 0 && rewritten != original {
                 if apply {
                     std::fs::write(path, &rewritten)?;

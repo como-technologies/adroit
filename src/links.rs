@@ -74,14 +74,17 @@ pub fn relative_md_targets(content: &str) -> Vec<&str> {
 
 /// Rewrite every cross-ADR relative link in `content` to point at the current
 /// location of the ADR it references. `source_dir` is the directory of the file
-/// being rewritten; `resolve(number)` returns the canonical absolute path of
-/// that ADR's file, or `None` to leave the link untouched (unknown number, or
-/// an ambiguous duplicate). Non-ADR, external, and anchor-only links are kept
-/// byte-for-byte. Returns the rewritten content and the number of links changed.
+/// being rewritten; `resolve(target)` returns the canonical absolute path of the
+/// ADR that link target refers to, or `None` to leave the link untouched
+/// (non-ADR target, unknown id, or an ambiguous duplicate). Resolving the link
+/// target → ADR is the caller's job (it routes through the naming seam), so this
+/// engine stays scheme-agnostic. Non-ADR, external, and anchor-only links are
+/// kept byte-for-byte. Returns the rewritten content and the number of links
+/// changed.
 pub fn rewrite_links(
     content: &str,
     source_dir: &Path,
-    resolve: impl Fn(u32) -> Option<PathBuf>,
+    resolve: impl Fn(&str) -> Option<PathBuf>,
 ) -> (String, usize) {
     let mut out = String::with_capacity(content.len());
     let mut last = 0;
@@ -90,17 +93,10 @@ pub fn rewrite_links(
         if !is_relative_md(target) {
             return;
         }
-        let Some(num) = number_in_target(target) else {
+        let Some(abs) = resolve(target) else {
             return;
         };
-        let Some(abs) = resolve(num) else {
-            return;
-        };
-        let (pathpart, anchor) = match target.split_once('#') {
-            Some((_, a)) => (target, Some(a)),
-            None => (target, None),
-        };
-        let _ = pathpart;
+        let anchor = target.split_once('#').map(|(_, a)| a);
         let mut newt = rel_link(source_dir, &abs);
         if let Some(a) = anchor {
             newt.push('#');
@@ -202,9 +198,10 @@ fn for_each_link<'a>(content: &'a str, mut f: impl FnMut(&'a str, usize, usize))
 mod tests {
     use super::*;
 
-    // Resolver over a fixed by-status tree rooted at /r.
-    fn resolve(n: u32) -> Option<PathBuf> {
-        match n {
+    // Resolver over a fixed by-status tree rooted at /r. Mirrors the sequential
+    // caller: extract the ADR number from the target, then map it to a path.
+    fn resolve(target: &str) -> Option<PathBuf> {
+        match number_in_target(target)? {
             3 => Some(PathBuf::from("/r/accepted/0003-thing.md")),
             6 => Some(PathBuf::from("/r/accepted/0006-other.md")),
             _ => None, // 9 is "duplicate"/unknown -> untouched

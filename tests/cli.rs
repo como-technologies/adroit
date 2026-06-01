@@ -1270,6 +1270,51 @@ fn date_scheme_check_flags_duplicate_slug() {
 }
 
 #[test]
+fn date_scheme_relinks_cross_adr_links_on_status_move() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    adroit_date(&dir)
+        .args(["new", "Use Redis cache", "--no-edit"])
+        .assert()
+        .success();
+
+    // Find the two date-slug files and make A link to B (same dir).
+    let a = adr_files(dir.path())
+        .into_iter()
+        .find(|p| p.to_str().unwrap().contains("adopt-postgresql"))
+        .unwrap();
+    let b_name = adr_files(dir.path())
+        .into_iter()
+        .find(|p| p.to_str().unwrap().contains("use-redis-cache"))
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut body = fs::read_to_string(&a).unwrap();
+    body.push_str(&format!("\n## Context\n\nSee [{b_name}](./{b_name}).\n"));
+    fs::write(&a, body).unwrap();
+
+    // Accepting B moves it to accepted/ and must rewrite A's link via the seam.
+    let b_slug = b_name.strip_suffix(".md").unwrap();
+    adroit_date(&dir)
+        .args(["status", b_slug, "accepted"])
+        .assert()
+        .success();
+
+    let a_after = fs::read_to_string(&a).unwrap();
+    assert!(
+        a_after.contains(&format!("(../accepted/{b_name})")),
+        "date-slug cross-link should be relinked to the new dir, got:\n{a_after}"
+    );
+    adroit_date(&dir).arg("check").assert().success();
+}
+
+#[test]
 fn date_scheme_rejects_numeric_only_commands() {
     let dir = TempDir::new().unwrap();
     adroit_date(&dir)
