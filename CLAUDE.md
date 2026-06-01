@@ -226,6 +226,17 @@ status`/`supersede` self-heal links; `adroit relink` exposes it on demand
 / stale-vs-canonical). `query.rs` reuses
 `links::number_in_target` for its graph link parsing.
 
+`Store::renumber` (`adroit renumber <old> <new> [--file]`) resolves a duplicate
+number: rename the file, rewrite its heading + self-refs, then
+`links::relabel_links_to` retargets+relabels inbound `[ADR-old](…)` links
+matched by **basename** (so a same-number/different-slug sibling is untouched),
+then `relink`. `--file` disambiguates when `old` has two files.
+
+The naming/identity **seam** (`src/naming.rs`) — `AdrRef` + `NamingScheme`
+(`sequential`/`date`/`uuid`/`per_category`) + `Scope` — owns all scheme behavior
+so adding a scheme edits only that module. (Built + unit-tested; wiring the
+~12 consumers through it + the alternate schemes are the in-progress phases.)
+
 ### Review deadlines (`review_by`)
 
 `Adr.review_by: Option<ReviewBy>` is an optional ISO-8601 (`YYYY-MM-DD`) review

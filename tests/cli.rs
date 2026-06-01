@@ -694,6 +694,90 @@ fn check_flags_broken_link_and_relink_repairs_it() {
 }
 
 // ---------------------------------------------------------------------------
+// `adroit renumber`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn renumber_renames_rewrites_heading_and_inbound_refs() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    let accepted = dir.path().join("accepted");
+    fs::create_dir_all(&proposed).unwrap();
+    fs::create_dir_all(&accepted).unwrap();
+    fs::write(
+        proposed.join("0001-a.md"),
+        "# ADR-0001: A\n\n## Status\n\nProposed\n\nSee [ADR-0002](../accepted/0002-b.md).\n",
+    )
+    .unwrap();
+    fs::write(
+        accepted.join("0002-b.md"),
+        "# ADR-0002: B\n\n## Status\n\nAccepted\n",
+    )
+    .unwrap();
+
+    adroit(&dir)
+        .args(["renumber", "2", "5"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0005"));
+
+    assert!(accepted.join("0005-b.md").exists());
+    assert!(!accepted.join("0002-b.md").exists());
+    assert!(
+        fs::read_to_string(accepted.join("0005-b.md"))
+            .unwrap()
+            .contains("# ADR-0005: B")
+    );
+    let a = fs::read_to_string(proposed.join("0001-a.md")).unwrap();
+    assert!(a.contains("[ADR-0005](../accepted/0005-b.md)"), "got: {a}");
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn renumber_resolves_duplicate_with_file_flag() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    let accepted = dir.path().join("accepted");
+    fs::create_dir_all(&proposed).unwrap();
+    fs::create_dir_all(&accepted).unwrap();
+    // Duplicate 0009 (different slugs) — the real-world collision.
+    fs::write(
+        proposed.join("0009-crossplane.md"),
+        "# ADR-0009: Crossplane\n\n## Status\n\nProposed\n",
+    )
+    .unwrap();
+    fs::write(
+        accepted.join("0009-dex.md"),
+        "# ADR-0009: Dex\n\n## Status\n\nAccepted\n",
+    )
+    .unwrap();
+
+    // Ambiguous without --file.
+    adroit(&dir)
+        .args(["renumber", "9", "21"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous"));
+
+    adroit(&dir)
+        .args([
+            "renumber",
+            "9",
+            "21",
+            "--file",
+            proposed.join("0009-crossplane.md").to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(proposed.join("0021-crossplane.md").exists());
+    assert!(
+        accepted.join("0009-dex.md").exists(),
+        "the other 0009 is untouched"
+    );
+    adroit(&dir).arg("check").assert().success();
+}
+
+// ---------------------------------------------------------------------------
 // Profile mismatch guard + `migrate`
 // ---------------------------------------------------------------------------
 

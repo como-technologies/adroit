@@ -58,8 +58,9 @@ both go green and land a collision:
   pipelines** (runs `check` on the merged ref) and ideally **merge trains**
   (which serialize merges).
 - **Safety net** — the `push` / `main` job runs `check` after every merge, so
-  even if a race slips through it fails immediately on `main`, surfacing the
-  collision to fix rather than shipping it silently.
+  even if a race slips through it fails immediately on `main`. Resolve it with
+  [`adroit renumber <old> <new>`](../reference/cli.md#adroit-renumber-old-new---file-path),
+  which renames the file and fixes every inbound reference.
 
 The real guarantee is serializing merges (merge queue / merge train); without it
 there is always a small window where two PRs are both green and merge nearly

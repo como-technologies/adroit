@@ -62,6 +62,15 @@ impl MigrateReport {
     }
 }
 
+/// Outcome of [`Store::renumber`].
+#[derive(Debug, Default)]
+pub struct RenumberReport {
+    pub from: u32,
+    pub to: u32,
+    /// Files rewritten (the renamed ADR + every file with an inbound reference).
+    pub files_updated: usize,
+}
+
 /// How a [`Store`] is configured to serialize and lay out ADRs.
 #[derive(Debug, Clone, Default)]
 pub struct StoreOptions {
@@ -502,6 +511,103 @@ impl Store {
         }
         report.applied = true;
         report.links_rewritten = self.relink(true)?.links_rewritten;
+        Ok(report)
+    }
+
+    /// Renumber a sequential ADR from `old` to `new`: rename the file (slug
+    /// preserved), rewrite its heading, retarget + relabel every inbound
+    /// reference, then relink. Resolves a duplicate-number collision. `file`
+    /// disambiguates when two files share `old`. Errors if `new` is taken, `old`
+    /// is missing, or `old` is ambiguous without `file`.
+    pub fn renumber(
+        &self,
+        old: Number,
+        new: Number,
+        file: Option<&Path>,
+    ) -> Result<RenumberReport, StoreError> {
+        let candidates: Vec<PathBuf> = self
+            .list_files()?
+            .into_iter()
+            .filter(|p| number_from_filename(p) == Some(old))
+            .collect();
+        let old_path = match file {
+            Some(f) if candidates.iter().any(|c| c == f) => f.to_path_buf(),
+            Some(f) => {
+                return Err(StoreError::Parse(format!(
+                    "{} is not an ADR-{old} file",
+                    f.display()
+                )));
+            }
+            None => match candidates.as_slice() {
+                [] => return Err(StoreError::NumberNotFound(old)),
+                [one] => one.clone(),
+                many => {
+                    let list = many
+                        .iter()
+                        .map(|p| rel_to(&self.root, p).display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(StoreError::Parse(format!(
+                        "ADR-{old} is ambiguous ({} files) — pass --file <path>: {list}",
+                        many.len()
+                    )));
+                }
+            },
+        };
+        if self
+            .list_files()?
+            .iter()
+            .any(|p| number_from_filename(p) == Some(new))
+        {
+            return Err(StoreError::Parse(format!("ADR-{new} already exists")));
+        }
+
+        let old_base = old_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("ADR path has a filename")
+            .to_string();
+        let ndigits = old_base.chars().take_while(|c| c.is_ascii_digit()).count();
+        let new_base = format!("{:04}{}", new.get(), &old_base[ndigits..]);
+        let new_path = old_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(&new_base);
+        let old_label = format!("ADR-{:04}", old.get());
+        let new_label = format!("ADR-{:04}", new.get());
+
+        std::fs::rename(&old_path, &new_path)?;
+        let mut report = RenumberReport {
+            from: old.get(),
+            to: new.get(),
+            files_updated: 0,
+        };
+
+        // The renamed file: update its own heading / self-references.
+        let own = std::fs::read_to_string(&new_path)?;
+        let own_new = own.replace(&old_label, &new_label);
+        if own_new != own {
+            std::fs::write(&new_path, own_new)?;
+            report.files_updated += 1;
+        }
+
+        // Every other file: retarget + relabel inbound links to this ADR.
+        for path in self.list_files()? {
+            if path == new_path {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)?;
+            let (rewritten, n) = crate::links::relabel_links_to(
+                &content, &old_base, &new_base, &old_label, &new_label,
+            );
+            if n > 0 && rewritten != content {
+                std::fs::write(&path, rewritten)?;
+                report.files_updated += 1;
+            }
+        }
+
+        // Canonicalize any relative-path drift left by the move.
+        self.relink(true)?;
         Ok(report)
     }
 

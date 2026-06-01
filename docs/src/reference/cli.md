@@ -176,6 +176,24 @@ adroit relink              # rewrite stale links in place
 adroit relink --dry-run    # show what would change, write nothing
 ```
 
+### `adroit renumber <OLD> <NEW> [--file <PATH>]`
+
+Renumber a sequential ADR — to resolve a duplicate `NNNN` (e.g. two branches
+that each created `0009`). It renames the file (slug preserved), rewrites its
+`# ADR-NNNN:` heading, and **retargets + relabels every inbound reference**
+(`[ADR-OLD](…)` → `[ADR-NEW](…)`), then relinks. References are matched by
+filename, so a duplicate-numbered sibling with a different slug is left
+untouched.
+
+```sh
+adroit renumber 9 21                       # ADR-0009 -> ADR-0021
+# When two files share 0009, point at the one to move:
+adroit renumber 9 21 --file proposed/0009-adopt-crossplane.md
+```
+
+`<NEW>` must be unused; an ambiguous `<OLD>` (two files) errors unless you pass
+`--file`. (Applies to the sequential / per-category numbering schemes.)
+
 ### `adroit migrate [--dry-run] [--yes]`
 
 Convert the repo on disk to the **configured** layout/format. The source profile

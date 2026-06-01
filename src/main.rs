@@ -111,6 +111,9 @@ fn main() -> Result<()> {
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check) => cmd_check(&store)?,
         Some(Command::Relink { dry_run }) => cmd_relink(&store, dry_run)?,
+        Some(Command::Renumber { old, new, file }) => {
+            cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
+        }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { number }) => {
@@ -572,6 +575,21 @@ fn cmd_migrate(store: &Store, yes: bool, dry_run: bool) -> Result<()> {
     if done.links_rewritten > 0 {
         println!("Relinked {} cross-ADR link(s).", done.links_rewritten);
     }
+    Ok(())
+}
+
+/// `adroit renumber`: renumber a sequential ADR (resolves a collision).
+fn cmd_renumber(
+    store: &Store,
+    old: Number,
+    new: Number,
+    file: Option<&std::path::Path>,
+) -> Result<()> {
+    let r = store.renumber(old, new, file)?;
+    println!(
+        "Renumbered ADR-{:04} -> ADR-{:04} ({} file(s) updated).",
+        r.from, r.to, r.files_updated
+    );
     Ok(())
 }
 

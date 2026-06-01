@@ -117,6 +117,65 @@ pub fn rewrite_links(
     (out, changed)
 }
 
+/// Rewrite every cross-ADR link `[label](target)` whose target **basename**
+/// equals `old_base` so it points at `new_base` and its label's `old_label`
+/// becomes `new_label`. Used by `adroit renumber` to retarget *and* relabel the
+/// inbound references to a single renamed file — matching by basename so a
+/// duplicate-numbered sibling (different slug) is left untouched. Returns the
+/// rewritten content and the number of links changed.
+pub fn relabel_links_to(
+    content: &str,
+    old_base: &str,
+    new_base: &str,
+    old_label: &str,
+    new_label: &str,
+) -> (String, usize) {
+    let bytes = content.as_bytes();
+    let mut out = String::with_capacity(content.len());
+    let mut last = 0;
+    let mut count = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b']'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'('
+            && let Some(rel) = content[i + 2..].find(')')
+        {
+            let tstart = i + 2;
+            let tend = tstart + rel;
+            let target = &content[tstart..tend];
+            let base = target
+                .split('#')
+                .next()
+                .unwrap_or(target)
+                .rsplit('/')
+                .next()
+                .unwrap_or(target);
+            // The `[label]` is between the nearest preceding `[` and this `]`,
+            // on the same line (ADR link labels don't contain `[` or newlines).
+            let label_open = content[..i].rfind('[');
+            if base == old_base
+                && let Some(lb) = label_open
+                && !content[lb..i].contains('\n')
+            {
+                let label = &content[lb + 1..i];
+                out.push_str(&content[last..lb + 1]);
+                out.push_str(&label.replace(old_label, new_label));
+                out.push_str("](");
+                out.push_str(&target.replacen(old_base, new_base, 1));
+                out.push(')');
+                last = tend + 1;
+                count += 1;
+            }
+            i = tend + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out.push_str(&content[last..]);
+    (out, count)
+}
+
 /// Scan `content` for markdown link targets `](target)` and invoke `f` with the
 /// target text and its byte span `[start, end)` (exclusive of the parens). The
 /// `]` `(` `)` delimiters are ASCII, so byte indexing stays on char boundaries.
@@ -210,6 +269,28 @@ mod tests {
         assert_eq!(
             relative_md_targets(doc),
             vec!["../accepted/0003-x.md", "0006-z.md"]
+        );
+    }
+
+    #[test]
+    fn relabel_links_to_matches_basename_only() {
+        // Two links share the label `ADR-0009` but point at different files
+        // (a duplicate number with different slugs). Only the basename-matching
+        // one is retargeted + relabeled; the sibling is left untouched.
+        let doc = "see [ADR-0009](../proposed/0009-adopt-crossplane.md) and \
+                   [ADR-0009](../accepted/0009-dex.md).";
+        let (out, n) = relabel_links_to(
+            doc,
+            "0009-adopt-crossplane.md",
+            "0021-adopt-crossplane.md",
+            "ADR-0009",
+            "ADR-0021",
+        );
+        assert_eq!(n, 1);
+        assert!(out.contains("[ADR-0021](../proposed/0021-adopt-crossplane.md)"));
+        assert!(
+            out.contains("[ADR-0009](../accepted/0009-dex.md)"),
+            "sibling untouched: {out}"
         );
     }
 }

@@ -134,6 +134,20 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Renumber an ADR (sequential scheme) to resolve a collision.
+    ///
+    /// Renames the file (slug preserved), rewrites its `# ADR-NNNN:` heading and
+    /// every inbound reference (label + link), then relinks. `--file`
+    /// disambiguates when two files share the old number.
+    Renumber {
+        /// Current ADR number.
+        old: u32,
+        /// New ADR number (must be unused).
+        new: u32,
+        /// The file to renumber, when two ADRs share `old`.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Convert the repo on disk to the configured layout/format.
     ///
     /// The source profile is auto-detected; files are moved between
