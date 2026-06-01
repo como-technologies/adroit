@@ -54,6 +54,11 @@ function isDirected(kind: EdgeKind): boolean {
   return KINDS.find((k) => k.kind === kind)?.directed ?? false
 }
 
+// Layout mode: the interactive force-directed graph, or the simple
+// deterministic circle (kept as a toggle).
+type LayoutMode = 'force' | 'circular'
+const mode = ref<LayoutMode>('force')
+
 // Which edge kinds are currently shown (legend toggles).
 const visibleKinds = ref<Set<EdgeKind>>(new Set(KINDS.map((k) => k.kind)))
 function toggleKind(kind: EdgeKind) {
@@ -128,6 +133,36 @@ function build() {
     .on('tick', () => {
       frame.value++
     })
+  applyMode()
+}
+
+/// Apply the current layout mode: run the force sim, or pin nodes to a circle.
+function applyMode() {
+  if (mode.value === 'circular') {
+    layoutCircular()
+  } else {
+    simNodes.forEach((n) => {
+      n.fx = null
+      n.fy = null
+    })
+    sim?.alpha(0.9).restart()
+  }
+}
+
+/// Deterministic circular layout (the original view). Stops the sim and pins
+/// each node on a circle so it stays put.
+function layoutCircular() {
+  sim?.stop()
+  const n = Math.max(1, simNodes.length)
+  const radius = Math.min(W, H) / 2 - 70
+  simNodes.forEach((node, i) => {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2
+    node.x = W / 2 + radius * Math.cos(angle)
+    node.y = H / 2 + radius * Math.sin(angle)
+    node.fx = node.x
+    node.fy = node.y
+  })
+  frame.value++
 }
 
 // --- node drag (pointer events; sets fx/fy and reheats the sim) ------------
@@ -150,6 +185,7 @@ function nodeAt(e: PointerEvent): { x: number; y: number } {
   return { x: p.x, y: p.y }
 }
 function startDrag(node: SimNode, e: PointerEvent) {
+  if (mode.value !== 'force') return // nodes are pinned in circular mode
   dragging = node
   didDrag = false
   ;(e.target as Element).setPointerCapture?.(e.pointerId)
@@ -203,10 +239,29 @@ watch(
   () => props.graph,
   () => build(),
 )
+watch(mode, applyMode)
 </script>
 
 <template>
   <div>
+    <!-- Layout toggle: force-directed (interactive) vs. the simple circle. -->
+    <div class="layout-toggle">
+      <button
+        type="button"
+        :class="{ active: mode === 'force' }"
+        @click="mode = 'force'"
+      >
+        Force
+      </button>
+      <button
+        type="button"
+        :class="{ active: mode === 'circular' }"
+        @click="mode = 'circular'"
+      >
+        Circular
+      </button>
+    </div>
+
     <svg
       ref="svgRef"
       :viewBox="`0 0 ${W} ${H}`"
@@ -281,12 +336,34 @@ watch(
         <span class="swatch" :style="{ background: edgeColor(k.kind) }" />
         {{ k.label }}
       </button>
-      <span class="hint">drag to arrange · scroll to zoom · click a node to open</span>
+      <span class="hint">
+        {{ mode === 'force' ? 'drag to arrange · ' : '' }}scroll to zoom · click a node to open
+      </span>
     </div>
   </div>
 </template>
 
 <style scoped>
+.layout-toggle {
+  display: inline-flex;
+  gap: 1px;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--ad-border);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.layout-toggle button {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.7rem;
+  background: none;
+  border: none;
+  color: var(--ad-text-muted);
+  cursor: pointer;
+}
+.layout-toggle button.active {
+  background: var(--color-brand-500);
+  color: #fff;
+}
 .graph {
   width: 100%;
   height: auto;
