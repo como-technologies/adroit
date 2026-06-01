@@ -222,18 +222,19 @@ pub enum Mode {
     NewTitle { input: String },
     /// Picking a target status for the selected ADR.
     PickStatus { index: usize },
-    /// Typing the number of the OLD ADR the selected one supersedes.
+    /// Typing the identifier of the OLD ADR the selected one supersedes.
     Supersede { input: String },
     /// Scrolling / focused on the preview pane.
     Preview,
     /// Editing the selected ADR's markdown body in the right pane.
     ///
-    /// `number` is the ADR being edited, `dirty` tracks whether the buffer has
-    /// diverged from disk (drives the "modified" indicator + Esc confirm), and
-    /// `confirm_discard` is set once the user has pressed Esc on a dirty buffer
-    /// and we are awaiting a y/n (or second Esc) decision.
+    /// `address` is the scheme token of the ADR being edited, `dirty` tracks
+    /// whether the buffer has diverged from disk (drives the "modified"
+    /// indicator + Esc confirm), and `confirm_discard` is set once the user has
+    /// pressed Esc on a dirty buffer and we are awaiting a y/n (or second Esc)
+    /// decision.
     Edit {
-        number: u32,
+        address: String,
         dirty: bool,
         confirm_discard: bool,
     },
@@ -253,15 +254,17 @@ pub enum Action {
     Refresh,
     /// Create a new ADR with the given title via the [`Store`] write path.
     Create(String),
-    /// Change the selected ADR's status via [`Store::set_status`].
-    SetStatus(u32, Status),
+    /// Change the selected ADR's status via [`Store::set_status_ref`]. The
+    /// `String` is the ADR's scheme addressing token (number/slug/uuid).
+    SetStatus(String, Status),
     /// Supersede `old` with the selected ADR (`new`) via [`Store::supersede`].
-    Supersede { new: u32, old: u32 },
-    /// Open the given ADR number in `$EDITOR`.
-    Edit(u32),
-    /// Persist the edited body of an ADR via [`Store::set_body`], then reload
-    /// so the preview reflects it.
-    SaveBody { number: u32, body: String },
+    /// Both are scheme addressing tokens.
+    Supersede { new: String, old: String },
+    /// Open the given ADR (by addressing token) in `$EDITOR`.
+    Edit(String),
+    /// Persist the edited body of an ADR via [`Store::set_body_ref`], then reload
+    /// so the preview reflects it. `address` is the ADR's scheme token.
+    SaveBody { address: String, body: String },
 }
 
 /// Status filter cycled with `f`: `All` plus each [`Status`], in lifecycle order.
@@ -357,6 +360,12 @@ impl TuiState {
     /// The selected ADR number, if any (rows without a number are skipped).
     pub fn selected_number(&self) -> Option<u32> {
         self.selected().and_then(|s| s.number)
+    }
+
+    /// The selected ADR's scheme addressing token (number/slug/uuid), if any —
+    /// the scheme-agnostic handle the write actions use.
+    pub fn selected_address(&self) -> Option<String> {
+        self.selected().map(|s| s.address.clone())
     }
 
     /// Current mode.
@@ -509,14 +518,14 @@ impl TuiState {
 
     /// Enter the status picker for the selected ADR (no-op if no selection).
     pub fn begin_pick_status(&mut self) {
-        if self.selected_number().is_some() {
+        if self.selected_address().is_some() {
             self.mode = Mode::PickStatus { index: 0 };
         }
     }
 
     /// Enter supersede-input mode for the selected ADR (no-op if no selection).
     pub fn begin_supersede(&mut self) {
-        if self.selected_number().is_some() {
+        if self.selected_address().is_some() {
             self.mode = Mode::Supersede {
                 input: String::new(),
             };
@@ -536,8 +545,11 @@ impl TuiState {
     /// Append a character to the active text-input mode.
     pub fn push_char(&mut self, c: char) {
         match &mut self.mode {
-            Mode::Search { input } | Mode::NewTitle { input } => input.push(c),
-            Mode::Supersede { input } if c.is_ascii_digit() => input.push(c),
+            // Supersede now takes a scheme identifier (number, slug, or uuid),
+            // so it accepts the same free text as the other input modes.
+            Mode::Search { input } | Mode::NewTitle { input } | Mode::Supersede { input } => {
+                input.push(c)
+            }
             _ => {}
         }
     }
@@ -584,14 +596,20 @@ impl TuiState {
                     Action::Create(title)
                 }
             }
-            Mode::PickStatus { index } => match self.selected_number() {
-                Some(num) => Action::SetStatus(num, STATUSES[*index]),
+            Mode::PickStatus { index } => match self.selected_address() {
+                Some(addr) => Action::SetStatus(addr, STATUSES[*index]),
                 None => Action::None,
             },
-            Mode::Supersede { input } => match (self.selected_number(), input.parse::<u32>()) {
-                (Some(new), Ok(old)) => Action::Supersede { new, old },
-                _ => Action::None,
-            },
+            Mode::Supersede { input } => {
+                let old = input.trim();
+                match self.selected_address() {
+                    Some(new) if !old.is_empty() => Action::Supersede {
+                        new,
+                        old: old.to_string(),
+                    },
+                    _ => Action::None,
+                }
+            }
             _ => Action::None,
         };
         self.mode = Mode::List;
@@ -618,7 +636,7 @@ impl TuiState {
     /// Enter body-edit mode for the selected ADR, seeding the buffer from the
     /// loaded preview body. No-op if there is no selection or no preview loaded.
     pub fn begin_edit(&mut self) {
-        let Some(number) = self.selected_number() else {
+        let Some(address) = self.selected_address() else {
             return;
         };
         let Some(detail) = &self.preview else {
@@ -627,7 +645,7 @@ impl TuiState {
         self.editor = Some(EditorBuffer::from_str(&detail.body));
         self.edit_scroll = 0;
         self.mode = Mode::Edit {
-            number,
+            address,
             dirty: false,
             confirm_discard: false,
         };
@@ -756,9 +774,10 @@ impl TuiState {
     /// Produce the [`Action::SaveBody`] for the current edit buffer and clear
     /// the dirty flag (the driver applies the save). No-op outside edit mode.
     pub fn save_edit(&mut self) -> Action {
-        let Mode::Edit { number, .. } = self.mode else {
+        let Mode::Edit { address, .. } = &self.mode else {
             return Action::None;
         };
+        let address = address.clone();
         let Some(buf) = &self.editor else {
             return Action::None;
         };
@@ -772,7 +791,7 @@ impl TuiState {
             *dirty = false;
             *confirm_discard = false;
         }
-        Action::SaveBody { number, body }
+        Action::SaveBody { address, body }
     }
 
     /// Handle Esc in edit mode: cancel immediately if clean, otherwise arm a
@@ -943,6 +962,11 @@ fn create_adr(store: &Store, cfg: &Config, title: &str) -> Result<Adr> {
 /// — the driver handles editor spawning (it needs to suspend the terminal);
 /// this keeps `apply_action` headless and directly unit-testable against a
 /// tempdir-backed `Store`.
+/// Resolve a TUI addressing token into an [`AdrRef`] under the configured scheme.
+fn resolve_addr(cfg: &Config, addr: &str) -> Option<crate::naming::AdrRef> {
+    cfg.naming.parse_ref(addr)
+}
+
 fn apply_action(state: &mut TuiState, store: &Store, cfg: &Config, action: Action) -> Result<bool> {
     match action {
         Action::None | Action::Edit(_) => {}
@@ -956,32 +980,42 @@ fn apply_action(state: &mut TuiState, store: &Store, cfg: &Config, action: Actio
             }
             Err(e) => state.set_message(format!("create failed: {e}")),
         },
-        Action::SetStatus(num, status) => match store.set_status(Number::new(num), status) {
-            Ok(_) => {
-                state.set_message(format!("ADR {num:04} -> {status}"));
-                reload(state, store)?;
-            }
-            Err(e) => state.set_message(format!("status change failed: {e}")),
-        },
-        Action::Supersede { new, old } => {
-            match store.supersede(
-                &crate::naming::AdrRef::Number(new),
-                &crate::naming::AdrRef::Number(old),
-            ) {
+        Action::SetStatus(addr, status) => match resolve_addr(cfg, &addr) {
+            Some(r) => match store.set_status_ref(&r, status) {
                 Ok(_) => {
-                    state.set_message(format!("ADR {old:04} superseded by {new:04}"));
+                    state.set_message(format!("{} -> {status}", cfg.naming.display(&r)));
                     reload(state, store)?;
                 }
-                Err(e) => state.set_message(format!("supersede failed: {e}")),
+                Err(e) => state.set_message(format!("status change failed: {e}")),
+            },
+            None => state.set_message(format!("invalid ADR id '{addr}'")),
+        },
+        Action::Supersede { new, old } => {
+            match (resolve_addr(cfg, &new), resolve_addr(cfg, &old)) {
+                (Some(new_r), Some(old_r)) => match store.supersede(&new_r, &old_r) {
+                    Ok(_) => {
+                        state.set_message(format!(
+                            "{} superseded by {}",
+                            cfg.naming.display(&old_r),
+                            cfg.naming.display(&new_r)
+                        ));
+                        reload(state, store)?;
+                    }
+                    Err(e) => state.set_message(format!("supersede failed: {e}")),
+                },
+                _ => state.set_message("invalid ADR id".to_string()),
             }
         }
-        Action::SaveBody { number, body } => match store.set_body(Number::new(number), &body) {
-            Ok(_) => {
-                state.set_message(format!("Saved ADR {number:04}"));
-                // Refresh the preview so it reflects the saved body.
-                refresh_preview(state, store)?;
-            }
-            Err(e) => state.set_message(format!("save failed: {e}")),
+        Action::SaveBody { address, body } => match resolve_addr(cfg, &address) {
+            Some(r) => match store.set_body_ref(&r, &body) {
+                Ok(_) => {
+                    state.set_message(format!("Saved {}", cfg.naming.display(&r)));
+                    // Refresh the preview so it reflects the saved body.
+                    refresh_preview(state, store)?;
+                }
+                Err(e) => state.set_message(format!("save failed: {e}")),
+            },
+            None => state.set_message(format!("invalid ADR id '{address}'")),
         },
     }
     Ok(false)
@@ -1046,8 +1080,8 @@ mod driver {
                 let action = handle_key(state, key);
                 // The editor needs the terminal suspended; everything else goes
                 // through the shared, headless `apply_action`.
-                if let Action::Edit(num) = action {
-                    run_editor(terminal, state, store, config, num)?;
+                if let Action::Edit(addr) = action {
+                    run_editor(terminal, state, store, config, &addr)?;
                     continue;
                 }
                 if apply_action(state, store, config, action)? {
@@ -1065,15 +1099,20 @@ mod driver {
         state: &mut TuiState,
         store: &Store,
         config: &Config,
-        num: u32,
+        addr: &str,
     ) -> Result<()> {
-        let path = match store.find_path_by_number(Number::new(num)) {
+        let Some(r) = resolve_addr(config, addr) else {
+            state.set_message(format!("invalid ADR id '{addr}'"));
+            return Ok(());
+        };
+        let path = match store.find_path_by_ref(&r) {
             Ok(p) => p,
             Err(e) => {
-                state.set_message(format!("ADR {num:04} not found: {e}"));
+                state.set_message(format!("{} not found: {e}", config.naming.display(&r)));
                 return Ok(());
             }
         };
+        let label = config.naming.display(&r);
         teardown(terminal)?;
         // Resolve the editor the same way the CLI does (VISUAL/EDITOR > config
         // > auto-detect). `resolve_editor` may mutate config (caching a choice),
@@ -1087,7 +1126,7 @@ mod driver {
         *terminal = setup()?;
         terminal.clear()?;
         match result {
-            Ok(()) => state.set_message(format!("edited ADR {num:04}")),
+            Ok(()) => state.set_message(format!("edited {label}")),
             Err(e) => state.set_message(format!("editor failed: {e}")),
         }
         reload(state, store)?;
@@ -1171,8 +1210,8 @@ mod driver {
                 state.begin_supersede();
                 Action::None
             }
-            KeyCode::Char('e') => match state.selected_number() {
-                Some(num) => Action::Edit(num),
+            KeyCode::Char('e') => match state.selected_address() {
+                Some(addr) => Action::Edit(addr),
                 None => Action::None,
             },
             KeyCode::Char('i') => {
@@ -1361,9 +1400,9 @@ mod driver {
     /// cursor. Reports the inner height back to `state` for scroll-follow.
     fn render_editor(f: &mut Frame, state: &mut TuiState, area: Rect) {
         let title = match state.mode() {
-            Mode::Edit { number, dirty, .. } => {
+            Mode::Edit { address, dirty, .. } => {
                 let flag = if *dirty { " [modified]" } else { "" };
-                format!(" Edit ADR {number:04}{flag} ")
+                format!(" Edit {address}{flag} ")
             }
             _ => " Edit ".to_string(),
         };
@@ -1577,7 +1616,7 @@ mod driver {
             Mode::Search { .. } => "type to search  Enter apply  Esc cancel",
             Mode::NewTitle { .. } => "type title  Enter create  Esc cancel",
             Mode::PickStatus { .. } => "j/k pick  Enter apply  Esc cancel",
-            Mode::Supersede { .. } => "type OLD adr number  Enter supersede  Esc cancel",
+            Mode::Supersede { .. } => "type OLD adr id  Enter supersede  Esc cancel",
             Mode::Edit {
                 confirm_discard: true,
                 ..
@@ -1590,7 +1629,7 @@ mod driver {
         let prompt = match state.mode() {
             Mode::Search { input } => Some(format!("search: {input}")),
             Mode::NewTitle { input } => Some(format!("new title: {input}")),
-            Mode::Supersede { input } => Some(format!("this supersedes ADR # {input}")),
+            Mode::Supersede { input } => Some(format!("this supersedes {input}")),
             Mode::Edit {
                 confirm_discard: true,
                 ..
@@ -1855,7 +1894,10 @@ mod tests {
         s.select_next(); // ADR 2
         s.begin_pick_status();
         s.picker_next(); // Proposed -> Accepted
-        assert_eq!(s.confirm(), Action::SetStatus(2, Status::Accepted));
+        assert_eq!(
+            s.confirm(),
+            Action::SetStatus("2".to_string(), Status::Accepted)
+        );
     }
 
     #[test]
@@ -1874,8 +1916,13 @@ mod tests {
         s.select_last(); // ADR 3 is the NEW one
         s.begin_supersede();
         s.push_char('1');
-        s.push_char('x'); // non-digits ignored in supersede mode
-        assert_eq!(s.confirm(), Action::Supersede { new: 3, old: 1 });
+        assert_eq!(
+            s.confirm(),
+            Action::Supersede {
+                new: "3".to_string(),
+                old: "1".to_string()
+            }
+        );
     }
 
     #[test]
@@ -1993,7 +2040,7 @@ mod tests {
             &mut s,
             &store,
             &cfg,
-            Action::SetStatus(num, Status::Accepted),
+            Action::SetStatus(num.to_string(), Status::Accepted),
         )
         .unwrap();
         assert!(!quit);
@@ -2021,7 +2068,16 @@ mod tests {
         let mut s = TuiState::new();
         reload(&mut s, &store).unwrap();
 
-        apply_action(&mut s, &store, &cfg, Action::Supersede { new, old }).unwrap();
+        apply_action(
+            &mut s,
+            &store,
+            &cfg,
+            Action::Supersede {
+                new: new.to_string(),
+                old: old.to_string(),
+            },
+        )
+        .unwrap();
         assert_eq!(
             query::detail(&store, old).unwrap().summary.status,
             Status::Superseded
@@ -2215,8 +2271,11 @@ mod tests {
 
         let action = s.save_edit();
         match action {
-            Action::SaveBody { number, ref body } => {
-                assert_eq!(number, num);
+            Action::SaveBody {
+                ref address,
+                ref body,
+            } => {
+                assert_eq!(address, &num.to_string());
                 assert!(body.ends_with('Z'));
             }
             other => panic!("expected SaveBody, got {other:?}"),
