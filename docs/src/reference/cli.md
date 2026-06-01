@@ -38,6 +38,12 @@ default `~/.local/share/adroit/`.
 
 adroit defaults to the **markdown / by-status** profile (status encoded by directory). See [ADR Format](./adr-format.md) for details on both profiles.
 
+**Profile must match the repo.** adroit infers a repo's actual layout/format
+from disk; if that disagrees with your configured `layout`/`format`, every
+command **refuses to run** with a message (rather than silently hiding ADRs or
+corrupting numbering). Either set `--layout`/`--format` (or config/`.env`) to
+match, or run [`adroit migrate`](#adroit-migrate-yes) to convert the repo.
+
 ## Commands
 
 ### `adroit new <TITLE>`
@@ -167,6 +173,30 @@ duplicate numbers are skipped (and flagged by `check`).
 ```sh
 adroit relink
 ```
+
+### `adroit migrate [--yes]`
+
+Convert the repo on disk to the **configured** layout/format. The source profile
+is auto-detected; a layout change moves files between flat / by-status dirs
+(bytes preserved), a format change re-serializes markdown ↔ frontmatter, and
+cross-ADR links are fixed afterward (via `relink`). Filenames are kept as-is.
+
+Set the *target* with `--layout` / `--format` (or config / `.env`), then run
+migrate. It prints a **preview** by default; pass `--yes` to apply.
+
+```sh
+# Convert a by-status repo to flat:
+adroit --layout flat migrate          # preview
+adroit --layout flat migrate --yes    # apply
+
+# Convert markdown ADRs to the frontmatter profile:
+adroit --format frontmatter migrate --yes
+```
+
+Because adroit otherwise **refuses to operate** on a repo whose on-disk profile
+doesn't match your config (see below), `migrate` is the supported way to change
+your `layout`/`format` preference on an existing repo. It is idempotent (a repo
+already in the target profile reports nothing to do).
 
 ### `adroit index [--check]`
 

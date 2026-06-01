@@ -130,6 +130,17 @@ pub enum Command {
     /// CI). Status changes already relink automatically; this repairs a repo
     /// edited outside adroit. Idempotent.
     Relink,
+    /// Convert the repo on disk to the configured layout/format.
+    ///
+    /// The source profile is auto-detected; files are moved between
+    /// flat/by-status dirs and/or re-serialized markdown<->frontmatter, then
+    /// cross-ADR links are fixed. Prints a preview by default — pass `--yes` to
+    /// apply. Set the target via --layout / --format (or config / .env).
+    Migrate {
+        /// Apply the migration (default: preview only).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Regenerate the ADR section of SUMMARY.md (or print it to stdout).
     Index {
         /// Don't write — just verify SUMMARY.md is up to date (CI gate).

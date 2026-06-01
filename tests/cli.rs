@@ -694,6 +694,96 @@ fn check_flags_broken_link_and_relink_repairs_it() {
 }
 
 // ---------------------------------------------------------------------------
+// Profile mismatch guard + `migrate`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mismatched_layout_refuses_to_run() {
+    let dir = TempDir::new().unwrap();
+    // by_status/markdown repo (the default).
+    adroit(&dir)
+        .args(["new", "One", "--no-edit"])
+        .assert()
+        .success();
+    // Reading it as flat must refuse loudly (not silently show an empty list).
+    adroit(&dir)
+        .args(["--layout", "flat", "list"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("migrate"));
+}
+
+#[test]
+fn migrate_converts_by_status_to_flat() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "One", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Two", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["status", "2", "accepted"])
+        .assert()
+        .success();
+    assert!(dir.path().join("proposed/0001-one.md").exists());
+    assert!(dir.path().join("accepted/0002-two.md").exists());
+
+    // Preview only — re-run with --yes to apply; nothing changes yet.
+    adroit(&dir)
+        .args(["--layout", "flat", "migrate"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Preview only"));
+    assert!(dir.path().join("proposed/0001-one.md").exists());
+
+    // Apply.
+    adroit(&dir)
+        .args(["--layout", "flat", "migrate", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Migrated"));
+    assert!(dir.path().join("0001-one.md").exists());
+    assert!(dir.path().join("0002-two.md").exists());
+    assert!(!dir.path().join("proposed/0001-one.md").exists());
+
+    // Flat now reads them; the old default (by_status) config now mismatches.
+    adroit(&dir)
+        .args(["--layout", "flat", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0002"));
+    adroit(&dir).arg("list").assert().failure();
+}
+
+#[test]
+fn migrate_markdown_to_frontmatter() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "One", "--no-edit"])
+        .assert()
+        .success();
+
+    adroit(&dir)
+        .args(["--format", "frontmatter", "migrate", "--yes"])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join("proposed/0001-one.md")).unwrap();
+    assert!(
+        content.starts_with("---"),
+        "file should now be frontmatter:\n{content}"
+    );
+    adroit(&dir)
+        .args(["--format", "frontmatter", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("One"));
+}
+
+// ---------------------------------------------------------------------------
 // Legacy flat + frontmatter profile (still supported)
 // ---------------------------------------------------------------------------
 

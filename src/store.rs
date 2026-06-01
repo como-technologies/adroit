@@ -29,6 +29,37 @@ pub struct RelinkReport {
     pub links_rewritten: usize,
 }
 
+/// What an ADR directory looks like on disk, inferred from the files present
+/// (independent of how a [`Store`] is configured). `None` for a dimension when
+/// the repo is empty or it can't be determined.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Detected {
+    pub layout: Option<Layout>,
+    pub format: Option<Format>,
+}
+
+/// A planned (or applied) profile migration — see [`Store::migrate`].
+#[derive(Debug, Default)]
+pub struct MigrateReport {
+    pub layout_change: Option<(Layout, Layout)>,
+    pub format_change: Option<(Format, Format)>,
+    /// Number of ADR files migrated.
+    pub files: usize,
+    /// `(from, to)` (relative to the store root) for each file that moves.
+    pub moves: Vec<(PathBuf, PathBuf)>,
+    /// `true` if the migration was applied (not just planned).
+    pub applied: bool,
+    /// Cross-ADR links rewritten afterward.
+    pub links_rewritten: usize,
+}
+
+impl MigrateReport {
+    /// `true` when source and target profiles already match (nothing to do).
+    pub fn is_noop(&self) -> bool {
+        self.layout_change.is_none() && self.format_change.is_none()
+    }
+}
+
 /// How a [`Store`] is configured to serialize and lay out ADRs.
 #[derive(Debug, Clone, Default)]
 pub struct StoreOptions {
@@ -315,6 +346,157 @@ impl Store {
         Ok(report)
     }
 
+    /// Infer the on-disk layout + format from the files actually present,
+    /// independent of how this store is configured.
+    pub fn detect_profile(&self) -> Detected {
+        let root_adrs = adr_files_in(&self.root);
+        let mut subdir_adrs = Vec::new();
+        for status in Status::ALL {
+            let d = self.root.join(self.opts.dir_name(status));
+            if d.is_dir() {
+                subdir_adrs.extend(adr_files_in(&d));
+            }
+        }
+        let layout = if !subdir_adrs.is_empty() {
+            Some(Layout::ByStatus)
+        } else if !root_adrs.is_empty() {
+            Some(Layout::Flat)
+        } else {
+            None
+        };
+        let sample = subdir_adrs.first().or_else(|| root_adrs.first());
+        let format = sample
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|c| {
+                if c.trim_start().starts_with("---") {
+                    Format::Frontmatter
+                } else {
+                    Format::Markdown
+                }
+            });
+        Detected { layout, format }
+    }
+
+    /// If the on-disk profile disagrees with this store's configured layout /
+    /// format, return a human explanation; otherwise `None`. Callers refuse to
+    /// operate on a mismatch (it would hide ADRs or corrupt numbering) and point
+    /// at `adroit migrate`.
+    pub fn profile_mismatch(&self) -> Option<String> {
+        let d = self.detect_profile();
+        let mut diffs = Vec::new();
+        if let Some(l) = d.layout
+            && l != self.opts.layout
+        {
+            diffs.push(format!(
+                "laid out as `{l}` but configured for `{}`",
+                self.opts.layout
+            ));
+        }
+        if let Some(f) = d.format
+            && f != self.opts.format
+        {
+            diffs.push(format!(
+                "written as `{f}` but configured for `{}`",
+                self.opts.format
+            ));
+        }
+        if diffs.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "this ADR directory is {}. Run `adroit migrate` to convert it, or set \
+             --layout / --format (or config / .env) to match — refusing to run to \
+             avoid hiding ADRs or corrupting numbering.",
+            diffs.join(", and ")
+        ))
+    }
+
+    /// Plan (or, with `apply`, perform) a migration of the repo on disk to this
+    /// store's configured layout/format. The source profile is auto-detected;
+    /// a layout-only change moves files verbatim, a format change re-serializes,
+    /// and cross-ADR links are fixed afterward via [`Store::relink`].
+    pub fn migrate(&self, apply: bool) -> Result<MigrateReport, StoreError> {
+        let detected = self.detect_profile();
+        let src_layout = detected.layout.unwrap_or(self.opts.layout);
+        let src_format = detected.format.unwrap_or(self.opts.format);
+
+        let mut report = MigrateReport::default();
+        if src_layout != self.opts.layout {
+            report.layout_change = Some((src_layout, self.opts.layout));
+        }
+        if src_format != self.opts.format {
+            report.format_change = Some((src_format, self.opts.format));
+        }
+        if report.is_noop() {
+            return Ok(report);
+        }
+
+        // Read every ADR through a source-profile view of the same directory.
+        let src = Store {
+            root: self.root.clone(),
+            opts: StoreOptions {
+                format: src_format,
+                layout: src_layout,
+                status_dir: self.opts.status_dir.clone(),
+                review_overdue_days: self.opts.review_overdue_days,
+                date_source: self.opts.date_source,
+            },
+        };
+        let entries = src.list_with_paths()?;
+        report.files = entries.len();
+
+        // Target path per ADR (filenames preserved), guarding collisions.
+        let mut planned: Vec<(PathBuf, PathBuf, Adr)> = Vec::new();
+        let mut claimed: std::collections::HashMap<PathBuf, PathBuf> =
+            std::collections::HashMap::new();
+        for (src_path, adr) in entries {
+            let file_name = src_path
+                .file_name()
+                .map(|n| n.to_owned())
+                .expect("ADR path has a filename");
+            let target = self.status_dir(adr.status).join(&file_name);
+            if let Some(other) = claimed.insert(target.clone(), src_path.clone()) {
+                return Err(StoreError::Parse(format!(
+                    "migration would collide: {} and {} both map to {}",
+                    other.display(),
+                    src_path.display(),
+                    target.display()
+                )));
+            }
+            if target != src_path {
+                report
+                    .moves
+                    .push((rel_to(&self.root, &src_path), rel_to(&self.root, &target)));
+            }
+            planned.push((src_path, target, adr));
+        }
+
+        if !apply {
+            return Ok(report);
+        }
+
+        let reserialize = report.format_change.is_some();
+        for (src_path, target, adr) in planned {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if reserialize {
+                let content = format::serialize(&adr, self.opts.format)
+                    .map_err(|e| StoreError::Parse(e.to_string()))?;
+                std::fs::write(&target, content)?;
+                if target != src_path {
+                    std::fs::remove_file(&src_path)?;
+                }
+            } else if target != src_path {
+                // Layout-only: move the bytes verbatim (no reformat).
+                std::fs::rename(&src_path, &target)?;
+            }
+        }
+        report.applied = true;
+        report.links_rewritten = self.relink()?.links_rewritten;
+        Ok(report)
+    }
+
     /// Change an ADR's status. In `by_status` markdown mode this MOVES the file
     /// to the matching status dir and rewrites the `## Status` section
     /// (minimal-diff). Returns the new path.
@@ -456,6 +638,22 @@ fn read_md_files(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
         .map(|e| e.path())
         .filter(|p| is_adr_file(p))
         .collect())
+}
+
+/// ADR files (`NNNN-*.md`, excluding README/template) directly in `dir` — i.e.
+/// only those whose name carries a leading number, so stray `.md` notes don't
+/// trip layout detection.
+fn adr_files_in(dir: &Path) -> Vec<PathBuf> {
+    read_md_files(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| number_from_filename(p).is_some())
+        .collect()
+}
+
+/// `path` relative to `root` (for display), or `path` itself if not under it.
+fn rel_to(root: &Path, path: &Path) -> PathBuf {
+    path.strip_prefix(root).unwrap_or(path).to_path_buf()
 }
 
 /// Compute a relative path from a directory to a target file using `../`.

@@ -5,6 +5,12 @@ default is the *markdown* profile with a *by-status* layout (status encoded by
 directory). The original *frontmatter* profile with a *flat* layout is still
 fully supported.
 
+adroit infers a repo's actual profile from the files on disk and **refuses to
+run** when that disagrees with your configured `layout`/`format` (so it never
+silently hides ADRs or corrupts numbering). To change your preference on an
+existing repo, run [`adroit migrate`](./cli.md#adroit-migrate-yes) — it moves
+files and/or re-serializes between profiles, then fixes cross-ADR links.
+
 ## Markdown profile + by-status layout (default)
 
 In this mode an ADR's **status is encoded by the directory** it lives in, and

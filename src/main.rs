@@ -55,6 +55,15 @@ fn main() -> Result<()> {
 
     let store = Store::open_or_create_with(&dir, opts)?;
 
+    // Refuse to operate on a repo whose on-disk layout/format doesn't match the
+    // configured one — it would silently hide ADRs or corrupt numbering.
+    // `migrate` is the conversion path, so it's exempt.
+    if !matches!(cli.command, Some(Command::Migrate { .. }))
+        && let Some(msg) = store.profile_mismatch()
+    {
+        anyhow::bail!("{msg}");
+    }
+
     match cli.command {
         Some(Command::New {
             title,
@@ -95,6 +104,7 @@ fn main() -> Result<()> {
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check) => cmd_check(&store)?,
         Some(Command::Relink) => cmd_relink(&store)?,
+        Some(Command::Migrate { yes }) => cmd_migrate(&store, yes)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { number }) => {
             let number = Number::new(number);
@@ -410,6 +420,36 @@ fn cmd_index_check(
             path.display()
         );
     }
+}
+
+/// `adroit migrate`: convert the repo to the configured layout/format. Prints a
+/// preview by default; `--yes` applies it.
+fn cmd_migrate(store: &Store, yes: bool) -> Result<()> {
+    let plan = store.migrate(false)?;
+    if plan.is_noop() {
+        println!("Already in the configured layout/format — nothing to migrate.");
+        return Ok(());
+    }
+    if let Some((from, to)) = plan.layout_change {
+        println!("Layout: {from} -> {to}");
+    }
+    if let Some((from, to)) = plan.format_change {
+        println!("Format: {from} -> {to}");
+    }
+    println!("{} ADR file(s) affected.", plan.files);
+    for (from, to) in &plan.moves {
+        println!("  {} -> {}", from.display(), to.display());
+    }
+    if !yes {
+        println!("\nPreview only — re-run with `--yes` to apply.");
+        return Ok(());
+    }
+    let done = store.migrate(true)?;
+    println!("\nMigrated {} file(s).", done.files);
+    if done.links_rewritten > 0 {
+        println!("Relinked {} cross-ADR link(s).", done.links_rewritten);
+    }
+    Ok(())
 }
 
 /// `adroit relink`: rewrite cross-ADR relative links to each ADR's current

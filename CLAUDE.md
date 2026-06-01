@@ -160,6 +160,19 @@ convention (status encoded by directory).
   are skipped; `next_number` is the max across all subdirs + 1; status changes
   move the file. `layout = flat`: one directory (original behaviour).
 
+**Profile-mismatch guard + migrate.** `Store::detect_profile` infers the on-disk
+layout/format from the files present (status-subdirs-with-numbered-`.md` ⇒
+by_status, root-numbered-`.md` ⇒ flat; leading `---` ⇒ frontmatter); a stray
+non-numbered `.md` doesn't count. `Store::profile_mismatch` compares that to the
+configured opts, and `main.rs` **bails** (before dispatch) on any mismatch for
+every command except `migrate` — otherwise a wrong `--layout`/`--format` would
+silently hide ADRs (e.g. by_status read as flat lists nothing) or collide
+numbers. `Store::migrate(apply)` is the conversion path (`adroit migrate`,
+preview unless `--yes`): it reads through a detected-source-profile `Store`,
+moves files verbatim for a layout-only change or re-serializes via
+`format::serialize` for a format change (filenames preserved; target collisions
+refused), then `relink`s. `cmd_migrate` prints the plan / applies.
+
 Templates live in `src/template.rs` (built-in `madr` + `nygard`, plus custom
 file/`templates_dir`, with a repo-local `adr-template.md` preferred). SUMMARY.md
 regeneration lives in `src/index.rs`.
