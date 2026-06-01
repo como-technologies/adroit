@@ -167,7 +167,7 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
             }
         })
         .collect();
-    proposed_age.sort_by(|a, b| b.age_days.cmp(&a.age_days));
+    proposed_age.sort_by_key(|p| std::cmp::Reverse(p.age_days));
 
     // Created-over-time, bucketed by calendar month (YYYY-MM), oldest first.
     let mut months: BTreeMap<String, usize> = BTreeMap::new();
@@ -466,10 +466,12 @@ fn push_related(
 
 fn sort_summaries(rows: &mut [AdrSummary], sort: Sort) {
     match sort {
-        Sort::NumberAsc => rows.sort_by(|a, b| a.number.cmp(&b.number)),
-        Sort::NumberDesc => rows.sort_by(|a, b| b.number.cmp(&a.number)),
+        Sort::NumberAsc => rows.sort_by_key(|a| a.number),
+        Sort::NumberDesc => rows.sort_by_key(|a| std::cmp::Reverse(a.number)),
+        // `created` is `Option<String>` (not `Copy`); the comparator reverse
+        // avoids cloning the key per element.
         Sort::CreatedDesc => rows.sort_by(|a, b| b.created.cmp(&a.created)),
-        Sort::TitleAsc => rows.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+        Sort::TitleAsc => rows.sort_by_key(|a| a.title.to_lowercase()),
     }
 }
 

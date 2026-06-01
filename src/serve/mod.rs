@@ -249,7 +249,8 @@ async fn list_adrs(
     Ok(Json(items))
 }
 
-/// `GET /api/adrs/{number}` → `AdrDetail` with `body_html` filled.
+/// `GET /api/adrs/{id}` → `AdrDetail` with `body_html` filled. `id` is the
+/// scheme addressing token (number / slug / uuid prefix / `category/NNNN`).
 async fn get_adr(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -373,7 +374,7 @@ async fn browse_dir(
             path: entry.path().display().to_string(),
         });
     }
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|e| e.name.to_lowercase());
 
     Ok(Json(BrowseListing {
         parent: dir.parent().map(|p| p.display().to_string()),
@@ -634,8 +635,13 @@ mod tests {
         let resp = get(&root, "/api/adrs/2").await;
         let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         // ADR 2 links to ADR 1 in its body -> a related edge for navigation.
+        // RelatedLink is now scheme-agnostic: `reference` (display) + `address`.
         let related = v["related"].as_array().unwrap();
-        assert!(related.iter().any(|r| r["number"] == 1));
+        assert!(
+            related
+                .iter()
+                .any(|r| r["reference"] == "ADR-0001" && r["address"] == "1")
+        );
     }
 
     #[tokio::test]
