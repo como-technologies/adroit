@@ -164,6 +164,18 @@ impl NamingScheme {
         }
     }
 
+    /// The H1 heading line for an ADR — also identity-shaped, so it lives here
+    /// (consumers / templates route through this instead of hardcoding
+    /// `# ADR-NNNN:`). Numeric schemes get `# ADR-NNNN: Title`; slug schemes
+    /// (date/uuid) get a plain `# Title` (log4brains-style, identity in the
+    /// filename).
+    pub fn heading(&self, r: &AdrRef, title: &str) -> String {
+        match r {
+            AdrRef::Number(n) => format!("# ADR-{n:04}: {title}"),
+            AdrRef::Slug(_) => format!("# {title}"),
+        }
+    }
+
     /// The label used inside a cross-ADR markdown link `[label](target)`.
     pub fn link_label(&self, r: &AdrRef) -> String {
         self.display(r)
@@ -343,6 +355,19 @@ mod tests {
                 uuid()
             ),
             AdrRef::Number(3)
+        );
+    }
+
+    #[test]
+    fn heading_is_identity_shaped() {
+        assert_eq!(
+            NamingScheme::Sequential.heading(&AdrRef::Number(9), "Adopt X"),
+            "# ADR-0009: Adopt X"
+        );
+        // Slug schemes carry identity in the filename, so the heading is plain.
+        assert_eq!(
+            NamingScheme::Date.heading(&AdrRef::Slug("20260601-adopt-x".into()), "Adopt X"),
+            "# Adopt X"
         );
     }
 }
