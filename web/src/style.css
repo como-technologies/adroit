@@ -53,8 +53,12 @@
   --ad-status-superseded: #a78bfa; /* violet-400 */
   /* Dark text drawn on a status-colored fill (e.g. node numbers on bubbles). */
   --ad-status-fg: #0f172a; /* slate-900 */
-  /* Relations-graph supersession edge — solid green ("replaced by"). */
+  /* Relations-graph edge colors, one per EdgeKind. */
   --ad-edge-supersedes: #10b981; /* emerald-500 */
+  --ad-edge-depends-on: #f59e0b; /* amber-500 */
+  --ad-edge-refines: #3b82f6; /* blue-500 */
+  --ad-edge-relates-to: #a78bfa; /* violet-400 */
+  --ad-edge-related: #94a3b8; /* slate-400 */
 }
 
 .dark {

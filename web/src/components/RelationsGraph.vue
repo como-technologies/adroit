@@ -1,180 +1,350 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import type { Graph, Status } from '@/api'
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  type Simulation,
+  type SimulationLinkDatum,
+  type SimulationNodeDatum,
+} from 'd3-force'
+import { select } from 'd3-selection'
+import { zoom, type D3ZoomEvent } from 'd3-zoom'
+import type { EdgeKind, Graph, Status } from '@/api'
 import { statusColor } from '@/statusColor'
 
-// Lightweight self-contained SVG graph (circular layout) — no external graph
-// library. Nodes are placed on a circle; edges are drawn as lines/arrows;
-// clicking a node opens that ADR. Colors are theme-aware via CSS tokens.
+// A force-directed "wiki-graph" of ADR relationships. d3 supplies the physics
+// (force simulation) and zoom/pan math; we keep rendering our own theme-aware
+// SVG (status-colored nodes, per-EdgeKind edges, click-to-open) so it matches
+// the rest of the dashboard. Node drag is hand-rolled via pointer events.
 const props = defineProps<{ graph: Graph }>()
-
 const router = useRouter()
 
 const W = 820
-const H = 620
-const R = 210
+const H = 600
+const NODE_R = 9
 
-interface Placed {
-  reference: string
+interface SimNode extends SimulationNodeDatum {
+  ref: string
   address: string | null
   title: string
   status: Status
-  x: number
-  y: number
-  labelX: number
-  labelY: number
-  anchor: 'start' | 'middle' | 'end'
+}
+interface SimLink extends SimulationLinkDatum<SimNode> {
+  kind: EdgeKind
 }
 
-const placed = computed<Placed[]>(() => {
-  const nodes = props.graph.nodes ?? []
-  const cx = W / 2
-  const cy = H / 2
-  const n = Math.max(1, nodes.length)
-  // Node radius is 22; offset labels well clear of the circle so they don't
-  // sit on the bubble (R + radius left zero gap and they overlapped).
-  const labelR = R + 40
-  return nodes.map((node, i) => {
-    const angle = (i / n) * Math.PI * 2 - Math.PI / 2
-    const cos = Math.cos(angle)
-    return {
-      reference: node.reference,
-      address: node.address,
-      title: node.title,
-      status: node.status,
-      x: cx + R * cos,
-      y: cy + R * Math.sin(angle),
-      labelX: cx + labelR * cos,
-      labelY: cy + labelR * Math.sin(angle),
-      anchor: Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end',
-    }
-  })
-})
+// All edge kinds, in legend order, with their CSS color token + whether the
+// relationship is directional (gets an arrowhead).
+const KINDS: { kind: EdgeKind; label: string; directed: boolean }[] = [
+  { kind: 'supersedes', label: 'Supersedes', directed: true },
+  { kind: 'depends_on', label: 'Depends on', directed: true },
+  { kind: 'refines', label: 'Refines', directed: true },
+  { kind: 'relates_to', label: 'Relates to', directed: false },
+  { kind: 'related', label: 'Related', directed: false },
+]
+function edgeColor(kind: EdgeKind): string {
+  return `var(--ad-edge-${kind.replace(/_/g, '-')})`
+}
+function isDirected(kind: EdgeKind): boolean {
+  return KINDS.find((k) => k.kind === kind)?.directed ?? false
+}
 
-const posByRef = computed(() => {
-  const map = new Map<string, Placed>()
-  for (const p of placed.value) map.set(p.reference, p)
-  return map
-})
+// Which edge kinds are currently shown (legend toggles).
+const visibleKinds = ref<Set<EdgeKind>>(new Set(KINDS.map((k) => k.kind)))
+function toggleKind(kind: EdgeKind) {
+  const next = new Set(visibleKinds.value)
+  if (next.has(kind)) next.delete(kind)
+  else next.add(kind)
+  visibleKinds.value = next
+}
 
-const edges = computed(() =>
-  (props.graph.edges ?? [])
-    .map((e) => {
-      const from = posByRef.value.get(e.from)
-      const to = posByRef.value.get(e.to)
-      if (!from || !to) return null
-      return { from, to, kind: e.kind }
-    })
-    .filter((e): e is { from: Placed; to: Placed; kind: 'supersedes' | 'related' } => e !== null),
+// d3 mutates these plain objects in place; `frame` is bumped each tick so the
+// computed `view` re-reads the fresh x/y and Vue re-renders.
+let simNodes: SimNode[] = []
+let simLinks: SimLink[] = []
+let sim: Simulation<SimNode, SimLink> | null = null
+const frame = ref(0)
+const transform = ref({ x: 0, y: 0, k: 1 })
+const svgRef = ref<SVGSVGElement | null>(null)
+
+const transformStr = computed(
+  () => `translate(${transform.value.x} ${transform.value.y}) scale(${transform.value.k})`,
 )
 
-function truncate(s: string, n = 18): string {
+const view = computed(() => {
+  void frame.value // re-read positions whenever the sim ticks
+  const nodes = simNodes
+  const links = simLinks
+    .filter((l) => visibleKinds.value.has(l.kind))
+    .map((l) => {
+      const s = l.source as SimNode
+      const t = l.target as SimNode
+      return {
+        x1: s.x ?? 0,
+        y1: s.y ?? 0,
+        x2: t.x ?? 0,
+        y2: t.y ?? 0,
+        kind: l.kind,
+      }
+    })
+  return { nodes, links }
+})
+
+function build() {
+  simNodes = props.graph.nodes.map((n) => ({
+    ref: n.reference,
+    address: n.address,
+    title: n.title,
+    status: n.status,
+  }))
+  const byRef = new Map(simNodes.map((n) => [n.ref, n]))
+  simLinks = props.graph.edges
+    .filter((e) => byRef.has(e.from) && byRef.has(e.to))
+    .map((e) => ({ source: byRef.get(e.from)!, target: byRef.get(e.to)!, kind: e.kind }))
+
+  sim?.stop()
+  sim = forceSimulation<SimNode, SimLink>(simNodes)
+    .force(
+      'link',
+      forceLink<SimNode, SimLink>(simLinks)
+        .id((d) => d.ref)
+        .distance(90)
+        .strength(0.4),
+    )
+    .force('charge', forceManyBody().strength(-280))
+    .force('center', forceCenter(W / 2, H / 2))
+    .force('collide', forceCollide(NODE_R + 24))
+    .on('tick', () => {
+      frame.value++
+    })
+}
+
+// --- node drag (pointer events; sets fx/fy and reheats the sim) ------------
+let dragging: SimNode | null = null
+let didDrag = false
+
+function nodeAt(e: PointerEvent): { x: number; y: number } {
+  const rect = svgRef.value!.getBoundingClientRect()
+  const t = transform.value
+  return {
+    x: (e.clientX - rect.left - t.x) / t.k,
+    y: (e.clientY - rect.top - t.y) / t.k,
+  }
+}
+function startDrag(node: SimNode, e: PointerEvent) {
+  dragging = node
+  didDrag = false
+  ;(e.target as Element).setPointerCapture?.(e.pointerId)
+  sim?.alphaTarget(0.3).restart()
+  e.stopPropagation() // don't start a background pan
+}
+function onPointerMove(e: PointerEvent) {
+  if (!dragging) return
+  const p = nodeAt(e)
+  dragging.fx = p.x
+  dragging.fy = p.y
+  didDrag = true
+}
+function endDrag() {
+  if (!dragging) return
+  dragging.fx = null
+  dragging.fy = null
+  dragging = null
+  sim?.alphaTarget(0)
+}
+function openNode(node: SimNode) {
+  if (didDrag) {
+    didDrag = false
+    return // it was a drag, not a click
+  }
+  if (node.address !== null) router.push(`/adr/${node.address}`)
+}
+
+function compactId(refStr: string): string {
+  const s = refStr.replace(/^ADR-/, '')
+  return s.length > 8 ? s.slice(0, 8) : s
+}
+function truncate(s: string, n = 22): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
 
-// Compact id for the node circle: drop the `ADR-` prefix, clip to 8 chars
-// (handles `ADR-0006` → `0006`, a date slug, or a short uuid alike).
-function nodeId(p: Placed): string {
-  const s = p.reference.replace(/^ADR-/, '')
-  return s.length > 8 ? s.slice(0, 8) : s
-}
-
-function open(p: Placed) {
-  if (p.address !== null) router.push(`/adr/${p.address}`)
-}
+onMounted(() => {
+  build()
+  // Zoom + pan on the whole svg; the transform drives the inner <g>.
+  if (svgRef.value) {
+    const z = zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.2, 4])
+      .on('zoom', (ev: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        transform.value = { x: ev.transform.x, y: ev.transform.y, k: ev.transform.k }
+      })
+    select(svgRef.value).call(z)
+  }
+})
+onBeforeUnmount(() => sim?.stop())
+watch(
+  () => props.graph,
+  () => build(),
+)
 </script>
 
 <template>
-  <svg :viewBox="`0 0 ${W} ${H}`" class="graph">
-    <defs>
-      <marker
-        id="arrow"
-        viewBox="0 0 10 10"
-        refX="9"
-        refY="5"
-        markerWidth="7"
-        markerHeight="7"
-        orient="auto-start-reverse"
+  <div>
+    <svg
+      ref="svgRef"
+      :viewBox="`0 0 ${W} ${H}`"
+      class="graph"
+      @pointermove="onPointerMove"
+      @pointerup="endDrag"
+      @pointerleave="endDrag"
+    >
+      <defs>
+        <marker
+          v-for="k in KINDS.filter((x) => x.directed)"
+          :id="`arrow-${k.kind}`"
+          :key="k.kind"
+          viewBox="0 0 10 10"
+          refX="18"
+          refY="5"
+          markerWidth="6"
+          markerHeight="6"
+          orient="auto-start-reverse"
+        >
+          <path d="M 0 0 L 10 5 L 0 10 z" :style="{ fill: edgeColor(k.kind) }" />
+        </marker>
+      </defs>
+
+      <g :transform="transformStr">
+        <line
+          v-for="(e, i) in view.links"
+          :key="`e${i}`"
+          :x1="e.x1"
+          :y1="e.y1"
+          :x2="e.x2"
+          :y2="e.y2"
+          class="edge"
+          :class="{ dashed: e.kind === 'related' || e.kind === 'relates_to' }"
+          :style="{ stroke: edgeColor(e.kind) }"
+          :marker-end="isDirected(e.kind) ? `url(#arrow-${e.kind})` : undefined"
+        />
+
+        <g
+          v-for="n in view.nodes"
+          :key="n.ref"
+          class="node"
+          :class="{ clickable: n.address !== null }"
+          @pointerdown="startDrag(n, $event)"
+          @click="openNode(n)"
+        >
+          <circle
+            :cx="n.x ?? 0"
+            :cy="n.y ?? 0"
+            :r="NODE_R"
+            class="node-circle"
+            :style="{ fill: statusColor(n.status) }"
+          />
+          <text :x="n.x ?? 0" :y="(n.y ?? 0) - NODE_R - 5" class="node-label">
+            {{ compactId(n.ref) }}
+          </text>
+          <title>{{ n.ref }} — {{ truncate(n.title, 60) }} ({{ n.status }})</title>
+        </g>
+      </g>
+    </svg>
+
+    <!-- Legend doubles as edge-kind filters -->
+    <div class="legend">
+      <button
+        v-for="k in KINDS"
+        :key="k.kind"
+        type="button"
+        class="legend-item"
+        :class="{ off: !visibleKinds.has(k.kind) }"
+        @click="toggleKind(k.kind)"
       >
-        <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head" />
-      </marker>
-    </defs>
-
-    <line
-      v-for="(e, i) in edges"
-      :key="`e${i}`"
-      :x1="e.from.x"
-      :y1="e.from.y"
-      :x2="e.to.x"
-      :y2="e.to.y"
-      :class="['edge', e.kind]"
-      :marker-end="e.kind === 'supersedes' ? 'url(#arrow)' : undefined"
-    />
-
-    <g v-for="(p, i) in placed" :key="`n${i}`" class="node" @click="open(p)">
-      <circle :cx="p.x" :cy="p.y" r="22" :style="{ fill: statusColor(p.status) }" class="node-circle" />
-      <text :x="p.x" :y="p.y" class="node-num">
-        {{ nodeId(p) }}
-      </text>
-      <text :x="p.labelX" :y="p.labelY" :text-anchor="p.anchor" class="node-label">
-        {{ truncate(p.title) }}
-      </text>
-      <title>{{ p.title }} ({{ p.status }})</title>
-    </g>
-  </svg>
+        <span class="swatch" :style="{ background: edgeColor(k.kind) }" />
+        {{ k.label }}
+      </button>
+      <span class="hint">drag to arrange · scroll to zoom · click a node to open</span>
+    </div>
+  </div>
 </template>
 
 <style scoped>
 .graph {
   width: 100%;
   height: auto;
+  touch-action: none;
+  cursor: grab;
 }
-
-/* Edges */
+.graph:active {
+  cursor: grabbing;
+}
 .edge {
-  stroke-width: 1.75;
+  stroke-width: 1.6;
+  opacity: 0.75;
 }
-/* Supersedes: solid green (a decision was replaced by a newer one). */
-.edge.supersedes {
-  stroke: var(--ad-edge-supersedes);
-}
-/* Related: dashed, muted grey. */
-.edge.related {
-  stroke: var(--ad-text-muted);
+.edge.dashed {
   stroke-dasharray: 4 3;
-  opacity: 0.45;
+  opacity: 0.55;
 }
-.arrow-head {
-  fill: var(--ad-edge-supersedes);
-}
-
-/* Nodes */
 .node {
+  cursor: default;
+}
+.node.clickable {
   cursor: pointer;
 }
 .node-circle {
   stroke: var(--ad-bg-elevated-solid);
-  stroke-width: 2.5;
-  transition: stroke 150ms ease;
+  stroke-width: 2;
+  transition: stroke 0.15s ease;
 }
-.node:hover .node-circle {
+.node.clickable:hover .node-circle {
   stroke: var(--color-brand-500);
-  stroke-width: 3.5;
-}
-.node-num {
-  text-anchor: middle;
-  dominant-baseline: central;
-  font-size: 0.62rem;
-  font-weight: 700;
-  fill: var(--ad-status-fg);
-  pointer-events: none;
+  stroke-width: 3;
 }
 .node-label {
-  dominant-baseline: central;
-  font-size: 0.7rem;
-  font-weight: 500;
-  fill: var(--ad-text);
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
+  fill: var(--ad-text-muted);
+  text-anchor: middle;
   pointer-events: none;
+  user-select: none;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--ad-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.legend-item.off {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+.swatch {
+  width: 0.85rem;
+  height: 0.2rem;
+  border-radius: 1px;
+  display: inline-block;
+}
+.hint {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--ad-text-muted);
+  opacity: 0.7;
 }
 </style>

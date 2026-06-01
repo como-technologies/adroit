@@ -5,7 +5,7 @@
 export type Status = 'Proposed' | 'Accepted' | 'Rejected' | 'Deprecated' | 'Superseded'
 
 // EdgeKind serializes snake_case (see view.rs).
-export type EdgeKind = 'supersedes' | 'related'
+export type EdgeKind = 'supersedes' | 'depends_on' | 'refines' | 'relates_to' | 'related'
 
 export interface AdrSummary {
   number: number | null

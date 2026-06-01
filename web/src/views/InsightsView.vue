@@ -101,24 +101,11 @@ useLiveReload(load)
         </div>
       </div>
 
-      <!-- Supersession & relations graph (last) -->
+      <!-- Relationship wiki-graph (last) -->
       <div class="card-glass p-5">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
-            Supersession &amp; relations
-          </h2>
-          <div class="flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
-            <span class="inline-flex items-center gap-2">
-              <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="legend-supersedes" /></svg>
-              supersedes
-            </span>
-            <span class="inline-flex items-center gap-2">
-              <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="legend-related" /></svg>
-              related
-            </span>
-            <span class="text-slate-400 dark:text-slate-500">click a node to open the ADR</span>
-          </div>
-        </div>
+        <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
+          Relationship graph
+        </h2>
 
         <div
           v-if="graph && graph.nodes.length === 0"
@@ -134,17 +121,3 @@ useLiveReload(load)
     </template>
   </section>
 </template>
-
-<style scoped>
-/* Legend swatches (mirror RelationsGraph edge styles). */
-.legend-supersedes {
-  stroke: var(--ad-edge-supersedes);
-  stroke-width: 2;
-}
-.legend-related {
-  stroke: var(--ad-text-muted);
-  stroke-width: 2;
-  stroke-dasharray: 4 3;
-  opacity: 0.5;
-}
-</style>
