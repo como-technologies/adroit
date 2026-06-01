@@ -1270,6 +1270,28 @@ fn date_scheme_check_flags_duplicate_slug() {
 }
 
 #[test]
+fn date_scheme_rejects_numeric_only_commands() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+
+    // supersede / renumber / review are number-shaped and don't apply to a
+    // non-numeric scheme — they bail with a clear message, not a "not found".
+    adroit_date(&dir)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires a numeric naming scheme"));
+    adroit_date(&dir)
+        .args(["renumber", "1", "2"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires a numeric naming scheme"));
+}
+
+#[test]
 fn uuid_scheme_new_and_show_by_prefix() {
     let dir = TempDir::new().unwrap();
     adroit(&dir)

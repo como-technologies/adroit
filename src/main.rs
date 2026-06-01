@@ -20,6 +20,19 @@ fn resolve_ref(cfg: &Config, id: &str) -> Result<AdrRef> {
     })
 }
 
+/// Bail when a numeric-only command (`supersede`/`renumber`/`review`, whose
+/// artifacts are number-shaped) runs under a non-numeric naming scheme.
+fn require_numeric_scheme(cfg: &Config, command: &str) -> Result<()> {
+    if cfg.naming.is_numeric() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "`{command}` requires a numeric naming scheme; the configured scheme is `{}`",
+            cfg.naming
+        )
+    }
+}
+
 fn main() -> Result<()> {
     // Load a `.env` file (CWD or a parent) before parsing so `ADROIT_DIR` and
     // friends can be sourced from a file instead of passed on every command.
@@ -115,6 +128,7 @@ fn main() -> Result<()> {
             );
         }
         Some(Command::Supersede { new, old }) => {
+            require_numeric_scheme(&cfg, "supersede")?;
             cmd_supersede(&store, Number::new(new), Number::new(old))?;
         }
         Some(Command::SetReview { id, date, clear }) => {
@@ -130,6 +144,7 @@ fn main() -> Result<()> {
         Some(Command::Check) => cmd_check(&store)?,
         Some(Command::Relink { dry_run }) => cmd_relink(&store, dry_run)?,
         Some(Command::Renumber { old, new, file }) => {
+            require_numeric_scheme(&cfg, "renumber")?;
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
@@ -144,6 +159,7 @@ fn main() -> Result<()> {
             quorum,
             output,
         }) => {
+            require_numeric_scheme(&cfg, "review")?;
             cmd_review(
                 &store,
                 &cfg,
