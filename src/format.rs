@@ -67,11 +67,17 @@ pub fn serialize(adr: &Adr, format: Format) -> anyhow::Result<String> {
 
 /// Parse an ADR from a document. `dir_status` is the status implied by the
 /// directory the file lives in (used by the markdown profile as the source of
-/// truth, falling back to the `## Status` section when absent).
-pub fn deserialize(input: &str, format: Format, dir_status: Option<Status>) -> anyhow::Result<Adr> {
+/// truth, falling back to the `## Status` section when absent). `naming` resolves
+/// the markdown supersession links into scheme-aware [`AdrRef`]s.
+pub fn deserialize(
+    input: &str,
+    format: Format,
+    dir_status: Option<Status>,
+    naming: crate::naming::NamingScheme,
+) -> anyhow::Result<Adr> {
     match format {
         Format::Frontmatter => crate::frontmatter::deserialize(input),
-        Format::Markdown => parse_markdown(input, dir_status),
+        Format::Markdown => parse_markdown(input, dir_status, naming),
     }
 }
 
@@ -135,11 +141,16 @@ fn is_heading(line: &str) -> bool {
 }
 
 /// What the parser extracts from the `## Status` region of a markdown ADR.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+///
+/// Supersession is captured as the **raw fragment** after the `Superseded by` /
+/// `Supersedes` keyword (the `[label](target)` or bare token). Resolving it to a
+/// scheme-aware [`AdrRef`] happens in [`parse_markdown`] /
+/// [`parse_markdown_section_supersession`], so this stays naming-free.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct StatusRegion {
     status: Option<Status>,
-    supersedes: Option<Number>,
-    superseded_by: Option<Number>,
+    supersedes: Option<String>,
+    superseded_by: Option<String>,
     review_by: Option<ReviewBy>,
 }
 
@@ -186,13 +197,13 @@ fn parse_status_line(line: &str, region: &mut StatusRegion) {
     if let Some(rest) = strip_prefix_ci(v, "Superseded by") {
         region.status.get_or_insert(Status::Superseded);
         if region.superseded_by.is_none() {
-            region.superseded_by = extract_adr_number(rest);
+            region.superseded_by = Some(rest.trim().to_string());
         }
         return;
     }
     if let Some(rest) = strip_prefix_ci(v, "Supersedes") {
         if region.supersedes.is_none() {
-            region.supersedes = extract_adr_number(rest);
+            region.supersedes = Some(rest.trim().to_string());
         }
         return;
     }
@@ -222,17 +233,14 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     }
 }
 
-/// Extract the first `ADR-NNNN` number found in a fragment.
-fn extract_adr_number(s: &str) -> Option<Number> {
-    let idx = s.to_ascii_uppercase().find("ADR-")?;
-    let after = &s[idx + 4..];
-    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse::<u32>().ok().map(Number::new)
-}
-
 /// Parse a full markdown ADR document. Directory status wins for `status`
-/// when supplied; otherwise the `## Status` section is used.
-pub fn parse_markdown(input: &str, dir_status: Option<Status>) -> anyhow::Result<Adr> {
+/// when supplied; otherwise the `## Status` section is used. `naming` resolves
+/// the supersession links/tokens into scheme-aware [`AdrRef`]s.
+pub fn parse_markdown(
+    input: &str,
+    dir_status: Option<Status>,
+    naming: crate::naming::NamingScheme,
+) -> anyhow::Result<Adr> {
     let heading = input
         .lines()
         .find(|l| l.trim_start().starts_with("# "))
@@ -252,8 +260,14 @@ pub fn parse_markdown(input: &str, dir_status: Option<Status>) -> anyhow::Result
         created: crate::adr::Created::now(),
         body: input.trim_end_matches('\n').to_string(),
         git_sha: None,
-        supersedes: region.supersedes,
-        superseded_by: region.superseded_by,
+        supersedes: region
+            .supersedes
+            .as_deref()
+            .and_then(|f| naming.ref_in_note(f)),
+        superseded_by: region
+            .superseded_by
+            .as_deref()
+            .and_then(|f| naming.ref_in_note(f)),
         review_by: region.review_by,
     })
 }
@@ -270,20 +284,34 @@ pub fn parse_markdown_section_status(input: &str) -> Option<Status> {
 }
 
 /// The supersession references declared in a markdown ADR's `## Status` section:
-/// `(supersedes, superseded_by)` ADR numbers, either of which may be `None`.
+/// `(supersedes, superseded_by)` as scheme-aware [`AdrRef`]s, either of which may
+/// be `None`.
 ///
 /// Exposed for `adroit check` so it can verify the referenced ADRs exist.
-pub fn parse_markdown_section_supersession(input: &str) -> (Option<Number>, Option<Number>) {
+pub fn parse_markdown_section_supersession(
+    input: &str,
+    naming: crate::naming::NamingScheme,
+) -> (Option<crate::naming::AdrRef>, Option<crate::naming::AdrRef>) {
     let region = parse_status_region(input);
-    (region.supersedes, region.superseded_by)
+    (
+        region
+            .supersedes
+            .as_deref()
+            .and_then(|f| naming.ref_in_note(f)),
+        region
+            .superseded_by
+            .as_deref()
+            .and_then(|f| naming.ref_in_note(f)),
+    )
 }
 
 /// Rewrite (in place, minimal-diff) the `## Status` value line and the
 /// `> State:` banner of a markdown ADR.
 ///
-/// `superseded_link` is the relative markdown link target used when the new
-/// status is [`Status::Superseded`], e.g. `../accepted/0006-adopt-adrs.md`,
-/// together with the superseding number.
+/// `supersede` carries the superseding ADR's display `label` and the relative
+/// markdown link `target` (e.g. `("ADR-0006", "../accepted/0006-adopt-adrs.md")`,
+/// or a slug label/target under date/uuid), used when the new status is
+/// [`Status::Superseded`].
 ///
 /// Only the status value line and banner change — all other bytes (including
 /// the original trailing newline) are preserved exactly. If the document has
@@ -291,11 +319,11 @@ pub fn parse_markdown_section_supersession(input: &str) -> (Option<Number>, Opti
 pub fn rewrite_status(
     original: &str,
     new_status: Status,
-    supersede: Option<(Number, &str)>,
+    supersede: Option<(&str, &str)>,
 ) -> String {
     let value = match (new_status, supersede) {
-        (Status::Superseded, Some((num, link))) => {
-            format!("Superseded by [ADR-{num}]({link})")
+        (Status::Superseded, Some((label, link))) => {
+            format!("Superseded by [{label}]({link})")
         }
         _ => new_status.to_string(),
     };
@@ -418,6 +446,12 @@ fn review_insert_point(lines: &[String]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::naming::{AdrRef, NamingScheme};
+
+    /// Parse a sequential markdown ADR (the scheme used by these format tests).
+    fn pm(input: &str, dir_status: Option<Status>) -> Adr {
+        parse_markdown(input, dir_status, NamingScheme::Sequential).unwrap()
+    }
 
     const SAMPLE: &str = "# ADR-0006: Adopt ADRs as Team Decision Process\n\
 \n\
@@ -455,7 +489,7 @@ We need a consistent way to capture architectural decisions.\n";
 
     #[test]
     fn parse_markdown_uses_dir_status() {
-        let adr = parse_markdown(SAMPLE, Some(Status::Accepted)).unwrap();
+        let adr = pm(SAMPLE, Some(Status::Accepted));
         assert_eq!(adr.number, Some(Number::new(6)));
         assert_eq!(adr.title, "Adopt ADRs as Team Decision Process");
         assert_eq!(adr.status, Status::Accepted);
@@ -463,16 +497,16 @@ We need a consistent way to capture architectural decisions.\n";
 
     #[test]
     fn parse_markdown_falls_back_to_section_status() {
-        let adr = parse_markdown(SAMPLE, None).unwrap();
+        let adr = pm(SAMPLE, None);
         assert_eq!(adr.status, Status::Accepted);
     }
 
     #[test]
     fn parse_superseded_link() {
         let doc = "# ADR-0002: Adopt ADRs\n\n## Status\n\nSuperseded by [ADR-0006](../accepted/0006-adopt-adrs.md)\n";
-        let adr = parse_markdown(doc, Some(Status::Superseded)).unwrap();
+        let adr = pm(doc, Some(Status::Superseded));
         assert_eq!(adr.status, Status::Superseded);
-        assert_eq!(adr.superseded_by, Some(Number::new(6)));
+        assert_eq!(adr.superseded_by, Some(AdrRef::Number(6)));
     }
 
     #[test]
@@ -490,7 +524,7 @@ We need a consistent way to capture architectural decisions.\n";
         let out = rewrite_status(
             SAMPLE,
             Status::Superseded,
-            Some((Number::new(9), "../accepted/0009-thing.md")),
+            Some(("ADR-0009", "../accepted/0009-thing.md")),
         );
         assert!(out.contains("Superseded by [ADR-0009](../accepted/0009-thing.md)"));
         assert!(out.contains("> State: Superseded"));
@@ -509,9 +543,9 @@ We need a consistent way to capture architectural decisions.\n";
     fn parse_supersedes_forward_note() {
         // The newer ADR carries a "Supersedes [ADR-NNNN]" note in `## Status`.
         let doc = "# ADR-0006: Adopt ADRs\n\n## Status\n\nAccepted\n\nSupersedes [ADR-0002](../superseded/0002-adopt-adrs.md)\n\n## Context\n\nBody.\n";
-        let adr = parse_markdown(doc, Some(Status::Accepted)).unwrap();
+        let adr = pm(doc, Some(Status::Accepted));
         assert_eq!(adr.status, Status::Accepted);
-        assert_eq!(adr.supersedes, Some(Number::new(2)));
+        assert_eq!(adr.supersedes, Some(AdrRef::Number(2)));
         assert_eq!(adr.superseded_by, None);
     }
 
@@ -519,22 +553,31 @@ We need a consistent way to capture architectural decisions.\n";
     fn parse_superseded_by_note() {
         // Mirrors superseded/0002-adopt-adrs.md.
         let doc = "# ADR-0002: Adopt ADRs\n\n## Status\n\nSuperseded by [ADR-0006](../accepted/0006-adopt-adrs.md)\n";
-        let adr = parse_markdown(doc, Some(Status::Superseded)).unwrap();
-        assert_eq!(adr.superseded_by, Some(Number::new(6)));
+        let adr = pm(doc, Some(Status::Superseded));
+        assert_eq!(adr.superseded_by, Some(AdrRef::Number(6)));
         assert_eq!(adr.supersedes, None);
     }
 
     #[test]
     fn parse_supersedes_bare_adr_reference() {
         let doc = "# ADR-0006: Adopt ADRs\n\n## Status\n\nAccepted\n\nSupersedes ADR-0002\n";
-        let adr = parse_markdown(doc, Some(Status::Accepted)).unwrap();
-        assert_eq!(adr.supersedes, Some(Number::new(2)));
+        let adr = pm(doc, Some(Status::Accepted));
+        assert_eq!(adr.supersedes, Some(AdrRef::Number(2)));
+    }
+
+    #[test]
+    fn parse_superseded_link_date_scheme_slug() {
+        // Under the date scheme the supersession link carries a slug, not a
+        // number — the seam resolves it to a Slug ref.
+        let doc = "# New approach\n\n## Status\n\nSuperseded by [20260601-old](../accepted/20260601-old.md)\n";
+        let adr = parse_markdown(doc, Some(Status::Superseded), NamingScheme::Date).unwrap();
+        assert_eq!(adr.superseded_by, Some(AdrRef::Slug("20260601-old".into())));
     }
 
     #[test]
     fn parse_review_by_line() {
         let doc = "# ADR-0003: Use Redis\n\n## Status\n\nProposed\n\nReview by: 2026-07-15\n";
-        let adr = parse_markdown(doc, Some(Status::Proposed)).unwrap();
+        let adr = pm(doc, Some(Status::Proposed));
         assert_eq!(adr.review_by, Some("2026-07-15".parse().unwrap()));
     }
 
@@ -542,9 +585,9 @@ We need a consistent way to capture architectural decisions.\n";
     fn markdown_supersession_round_trips_both_directions() {
         // parse -> the body is the document; re-parsing yields the same fields.
         let doc = "# ADR-0006: Adopt ADRs\n\n## Status\n\nAccepted\n\nSupersedes [ADR-0002](../superseded/0002.md)\n";
-        let adr = parse_markdown(doc, Some(Status::Accepted)).unwrap();
-        let again = parse_markdown(&adr.body, Some(Status::Accepted)).unwrap();
-        assert_eq!(again.supersedes, Some(Number::new(2)));
+        let adr = pm(doc, Some(Status::Accepted));
+        let again = pm(&adr.body, Some(Status::Accepted));
+        assert_eq!(again.supersedes, Some(AdrRef::Number(2)));
     }
 
     // --- review_by upsert/remove ---------------------------------------------
@@ -558,7 +601,7 @@ We need a consistent way to capture architectural decisions.\n";
         assert!(out.contains("We need a consistent way to capture architectural decisions."));
         assert!(out.ends_with('\n'));
         // Re-parses back.
-        let adr = parse_markdown(&out, Some(Status::Accepted)).unwrap();
+        let adr = pm(&out, Some(Status::Accepted));
         assert_eq!(adr.review_by, Some(rb));
     }
 

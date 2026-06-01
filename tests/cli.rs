@@ -1322,18 +1322,58 @@ fn date_scheme_rejects_numeric_only_commands() {
         .assert()
         .success();
 
-    // supersede / renumber / review are number-shaped and don't apply to a
-    // non-numeric scheme — they bail with a clear message, not a "not found".
-    adroit_date(&dir)
-        .args(["supersede", "2", "1"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("requires a numeric naming scheme"));
+    // renumber / review are number-shaped and don't apply to a non-numeric
+    // scheme — they bail with a clear message, not a confusing "not found".
     adroit_date(&dir)
         .args(["renumber", "1", "2"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("requires a numeric naming scheme"));
+    adroit_date(&dir)
+        .args(["review", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires a numeric naming scheme"));
+}
+
+#[test]
+fn date_scheme_supersede_by_slug() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Old approach", "--no-edit"])
+        .assert()
+        .success();
+    adroit_date(&dir)
+        .args(["new", "New approach", "--no-edit"])
+        .assert()
+        .success();
+    let slug_of = |needle: &str| {
+        adr_files(dir.path())
+            .into_iter()
+            .find(|p| p.to_str().unwrap().contains(needle))
+            .map(|p| p.file_stem().unwrap().to_str().unwrap().to_string())
+            .unwrap()
+    };
+    let old_slug = slug_of("old-approach");
+    let new_slug = slug_of("new-approach");
+
+    // Supersede by slug: the old ADR moves to superseded/ with a slug link;
+    // the new ADR gets a reciprocal "Supersedes [<old-slug>]" note.
+    adroit_date(&dir)
+        .args(["supersede", &new_slug, &old_slug])
+        .assert()
+        .success();
+
+    let old = dir.path().join(format!("superseded/{old_slug}.md"));
+    assert!(old.exists(), "old ADR moved to superseded/");
+    let old_body = fs::read_to_string(&old).unwrap();
+    assert!(old_body.contains(&format!("Superseded by [{new_slug}]")));
+    let new = dir.path().join(format!("proposed/{new_slug}.md"));
+    let new_body = fs::read_to_string(&new).unwrap();
+    assert!(new_body.contains(&format!("Supersedes [{old_slug}]")));
+
+    // The repo stays consistent (links resolve, no broken supersession refs).
+    adroit_date(&dir).arg("check").assert().success();
 }
 
 #[test]

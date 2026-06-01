@@ -20,7 +20,12 @@ use uuid::Uuid;
 ///
 /// `Number` backs the sequential and per-category schemes; `Slug` backs the
 /// date (`YYYYMMDD-title`) and uuid schemes (its identity is the filename stem).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Serializes **untagged** so it round-trips cleanly in YAML frontmatter:
+/// `Number(9)` ⇄ `9` (byte-identical with the old numeric fields), `Slug(s)` ⇄
+/// the bare string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum AdrRef {
     Number(u32),
     Slug(String),
@@ -38,6 +43,17 @@ impl AdrRef {
         match self {
             AdrRef::Slug(s) => Some(s),
             AdrRef::Number(_) => None,
+        }
+    }
+
+    /// The canonical **addressing** token — the string a user/URL passes to
+    /// reach this ADR, which [`NamingScheme::parse_ref`] round-trips back: the
+    /// bare number for numeric schemes, the slug/uuid for slug schemes. (Distinct
+    /// from the *display* string, e.g. `ADR-0009` or a shortened uuid.)
+    pub fn addr(&self) -> String {
+        match self {
+            AdrRef::Number(n) => n.to_string(),
+            AdrRef::Slug(s) => s.clone(),
         }
     }
 }
@@ -221,6 +237,33 @@ impl NamingScheme {
         self.display(r)
     }
 
+    /// Resolve a supersession reference from the fragment that follows
+    /// `Superseded by` / `Supersedes` in a markdown `## Status` region — either a
+    /// `[label](target)` link (resolved from the target via [`ref_in_link`]) or a
+    /// bare token (`ADR-0009` or a slug, resolved via [`parse_ref`]).
+    ///
+    /// [`ref_in_link`]: Self::ref_in_link
+    /// [`parse_ref`]: Self::parse_ref
+    pub fn ref_in_note(&self, fragment: &str) -> Option<AdrRef> {
+        if let Some(open) = fragment.find("](") {
+            let after = &fragment[open + 2..];
+            let target = after.split(')').next().unwrap_or(after);
+            return self.ref_in_link(target);
+        }
+        let token = fragment
+            .trim()
+            .trim_start_matches('[')
+            .split([']', ' ', ')', ','])
+            .next()
+            .unwrap_or("")
+            .trim();
+        if token.is_empty() {
+            None
+        } else {
+            self.parse_ref(token)
+        }
+    }
+
     /// Extract the ADR ref a relative link target points at (filename-based), so
     /// relink/check can match links to ADRs without knowing the scheme.
     pub fn ref_in_link(&self, target: &str) -> Option<AdrRef> {
@@ -392,6 +435,39 @@ mod tests {
         // Addressable by a unique leading prefix of the uuid.
         assert!(s.ref_matches(&r, &AdrRef::Slug("12345678".into())));
         assert!(!s.ref_matches(&r, &AdrRef::Slug("ffff".into())));
+    }
+
+    #[test]
+    fn ref_in_note_resolves_link_and_bare_token() {
+        let seq = NamingScheme::Sequential;
+        assert_eq!(
+            seq.ref_in_note(" [ADR-0006](../accepted/0006-adopt-adrs.md)"),
+            Some(AdrRef::Number(6))
+        );
+        assert_eq!(seq.ref_in_note(" ADR-0006"), Some(AdrRef::Number(6)));
+
+        let date = NamingScheme::Date;
+        assert_eq!(
+            date.ref_in_note(" [20260601-x](../accepted/20260601-x.md)"),
+            Some(AdrRef::Slug("20260601-x".into()))
+        );
+        assert_eq!(
+            date.ref_in_note(" 20260601-x"),
+            Some(AdrRef::Slug("20260601-x".into()))
+        );
+    }
+
+    #[test]
+    fn addr_round_trips_through_parse_ref() {
+        let seq = NamingScheme::Sequential;
+        let r = AdrRef::Number(9);
+        assert_eq!(r.addr(), "9");
+        assert_eq!(seq.parse_ref(&r.addr()), Some(r));
+
+        let date = NamingScheme::Date;
+        let r = AdrRef::Slug("20260601-x".into());
+        assert_eq!(r.addr(), "20260601-x");
+        assert_eq!(date.parse_ref(&r.addr()), Some(r));
     }
 
     #[test]

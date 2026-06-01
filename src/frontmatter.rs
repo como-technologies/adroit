@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::adr::{AdrId, Created, Number, ReviewBy, Status};
+use crate::naming::AdrRef;
 
 /// The YAML frontmatter fields persisted to disk.
 ///
@@ -18,9 +19,9 @@ struct Frontmatter {
     status: Status,
     created: Created,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    supersedes: Option<Number>,
+    supersedes: Option<AdrRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    superseded_by: Option<Number>,
+    superseded_by: Option<AdrRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     review_by: Option<ReviewBy>,
 }
@@ -39,8 +40,8 @@ pub fn serialize(adr: &crate::adr::Adr) -> anyhow::Result<String> {
         title: adr.title.clone(),
         status: adr.status,
         created: adr.created,
-        supersedes: adr.supersedes,
-        superseded_by: adr.superseded_by,
+        supersedes: adr.supersedes.clone(),
+        superseded_by: adr.superseded_by.clone(),
         review_by: adr.review_by,
     };
 
@@ -182,14 +183,29 @@ mod tests {
     #[test]
     fn supersession_fields_round_trip() {
         let mut adr = sample_adr();
-        adr.supersedes = Some(Number::new(2));
-        adr.superseded_by = Some(Number::new(9));
+        adr.supersedes = Some(AdrRef::Number(2));
+        adr.superseded_by = Some(AdrRef::Number(9));
         let text = serialize(&adr).unwrap();
-        assert!(text.contains("supersedes:"));
-        assert!(text.contains("superseded_by:"));
+        // Numeric refs serialize as bare numbers (byte-identical with the old
+        // `Option<Number>` fields).
+        assert!(text.contains("supersedes: 2"));
+        assert!(text.contains("superseded_by: 9"));
         let parsed = deserialize(&text).unwrap();
-        assert_eq!(parsed.supersedes, Some(Number::new(2)));
-        assert_eq!(parsed.superseded_by, Some(Number::new(9)));
+        assert_eq!(parsed.supersedes, Some(AdrRef::Number(2)));
+        assert_eq!(parsed.superseded_by, Some(AdrRef::Number(9)));
+    }
+
+    #[test]
+    fn supersession_slug_refs_round_trip() {
+        let mut adr = sample_adr();
+        adr.superseded_by = Some(AdrRef::Slug("20260601-adopt-x".into()));
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("superseded_by: 20260601-adopt-x"));
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(
+            parsed.superseded_by,
+            Some(AdrRef::Slug("20260601-adopt-x".into()))
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ import InsightsView from './views/InsightsView.vue'
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'dashboard', component: DashboardView },
   { path: '/browse', name: 'browse', component: BrowseView },
-  { path: '/adr/:number', name: 'detail', component: DetailView, props: true },
+  { path: '/adr/:id', name: 'detail', component: DetailView, props: true },
   { path: '/insights', name: 'insights', component: InsightsView },
   // Redirects from old paths so existing links/bookmarks don't 404.
   { path: '/stats', redirect: '/' },

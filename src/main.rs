@@ -20,8 +20,17 @@ fn resolve_ref(cfg: &Config, id: &str) -> Result<AdrRef> {
     })
 }
 
-/// Bail when a numeric-only command (`supersede`/`renumber`/`review`, whose
-/// artifacts are number-shaped) runs under a non-numeric naming scheme.
+/// The duplicate-detection / existence key for an ADR identity, so `cmd_check`
+/// groups and looks ADRs up uniformly across schemes.
+fn ident_key(r: &AdrRef) -> String {
+    match r {
+        AdrRef::Number(n) => format!("n:{n}"),
+        AdrRef::Slug(s) => format!("s:{s}"),
+    }
+}
+
+/// Bail when a numeric-only command (`renumber`/`review`, whose artifacts are
+/// number-shaped) runs under a non-numeric naming scheme.
 fn require_numeric_scheme(cfg: &Config, command: &str) -> Result<()> {
     if cfg.naming.is_numeric() {
         Ok(())
@@ -128,8 +137,12 @@ fn main() -> Result<()> {
             );
         }
         Some(Command::Supersede { new, old }) => {
-            require_numeric_scheme(&cfg, "supersede")?;
-            cmd_supersede(&store, Number::new(new), Number::new(old))?;
+            cmd_supersede(
+                &store,
+                &cfg,
+                &resolve_ref(&cfg, &new)?,
+                &resolve_ref(&cfg, &old)?,
+            )?;
         }
         Some(Command::SetReview { id, date, clear }) => {
             cmd_set_review(
@@ -289,11 +302,11 @@ fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
     if let Some(lm) = &detail.last_modified {
         println!("Updated: {}", ymd(lm));
     }
-    for n in &s.supersedes {
-        println!("Supersedes: ADR-{n:04}");
+    for r in &s.supersedes {
+        println!("Supersedes: {r}");
     }
-    if let Some(n) = s.superseded_by {
-        println!("Superseded by: ADR-{n:04}");
+    if let Some(r) = &s.superseded_by {
+        println!("Superseded by: {r}");
     }
     println!("Path:    {}", path.display());
     // Git-derived lifecycle (proposed → accepted/rejected/…). Empty outside git.
@@ -316,12 +329,14 @@ fn ymd(iso: &str) -> &str {
     iso.get(..10).unwrap_or(iso)
 }
 
-fn cmd_supersede(store: &Store, new: Number, old: Number) -> Result<()> {
+fn cmd_supersede(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) -> Result<()> {
     let old_path = store.supersede(new, old)?;
     // Add a reciprocal note to the new ADR referencing the old one.
-    add_supersedes_note(store, new, old)?;
+    add_supersedes_note(store, cfg, new, old)?;
     println!(
-        "ADR {old} superseded by ADR {new} (moved to {})",
+        "{} superseded by {} (moved to {})",
+        cfg.naming.display(old),
+        cfg.naming.display(new),
         old_path.display()
     );
     Ok(())
@@ -353,11 +368,12 @@ fn cmd_set_review(
     Ok(())
 }
 
-/// Append a "Supersedes ADR-<old>" note to the new ADR's body if not present.
-fn add_supersedes_note(store: &Store, new: Number, old: Number) -> Result<()> {
-    let path = store.find_path_by_number(new)?;
+/// Append a "Supersedes [<old>](...)" note to the new ADR's body if not present.
+fn add_supersedes_note(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) -> Result<()> {
+    let path = store.find_path_by_ref(new)?;
     let content = std::fs::read_to_string(&path)?;
-    let marker = format!("Supersedes [ADR-{old}]");
+    let old_label = cfg.naming.link_label(old);
+    let marker = format!("Supersedes [{old_label}]");
     if content.contains(&marker) {
         return Ok(());
     }
@@ -370,9 +386,9 @@ fn add_supersedes_note(store: &Store, new: Number, old: Number) -> Result<()> {
     updated.push_str(newline);
     updated.push_str(newline);
     // Relative link from new's dir to old's (now in superseded/).
-    let old_path = store.find_path_by_number(old)?;
+    let old_path = store.find_path_by_ref(old)?;
     let link = relative_link(&path, &old_path);
-    updated.push_str(&format!("> Supersedes [ADR-{old}]({link})"));
+    updated.push_str(&format!("> Supersedes [{old_label}]({link})"));
     updated.push_str(newline);
     std::fs::write(&path, updated)?;
     Ok(())
@@ -734,20 +750,13 @@ fn cmd_check(store: &Store) -> Result<()> {
         // Group by the scheme's identity for duplicate detection. A numeric ADR
         // with no number, or a file with no parseable identity, is skipped (same
         // as before) so stray notes don't register as collisions.
-        match adr.reference() {
-            AdrRef::Number(n) if adr.number.is_some() => {
-                by_ident
-                    .entry(format!("n:{n}"))
-                    .or_default()
-                    .push(path.clone());
-            }
-            AdrRef::Slug(s) => {
-                by_ident
-                    .entry(format!("s:{s}"))
-                    .or_default()
-                    .push(path.clone());
-            }
-            AdrRef::Number(_) => {}
+        let r = adr.reference();
+        let track = matches!(r, AdrRef::Slug(_)) || adr.number.is_some();
+        if track {
+            by_ident
+                .entry(ident_key(&r))
+                .or_default()
+                .push(path.clone());
         }
 
         // Markdown-specific checks need the file's raw text and section status.
@@ -770,9 +779,9 @@ fn cmd_check(store: &Store) -> Result<()> {
         }
     }
 
-    // (4) Broken supersession links. Collected after the full number set is
-    // known so forward/backward references in any order resolve.
-    let existing: std::collections::BTreeSet<u32> = by_number.keys().copied().collect();
+    // (4) Broken supersession links. Resolved through the naming seam and
+    // checked against the full identity set, so forward/backward references in
+    // any order — and slug schemes — all work.
     if markdown {
         for path in &files {
             let rel = path
@@ -784,20 +793,16 @@ fn cmd_check(store: &Store) -> Result<()> {
                 continue;
             };
             let (supersedes, superseded_by) =
-                adroit::format::parse_markdown_section_supersession(&content);
-            if let Some(n) = supersedes
-                && !existing.contains(&n.get())
-            {
-                problems.push(format!(
-                    "{rel}: ## Status says Supersedes ADR-{n} but no such ADR exists"
-                ));
-            }
-            if let Some(n) = superseded_by
-                && !existing.contains(&n.get())
-            {
-                problems.push(format!(
-                    "{rel}: ## Status says Superseded by ADR-{n} but no such ADR exists"
-                ));
+                adroit::format::parse_markdown_section_supersession(&content, scheme);
+            for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
+                if let Some(r) = r
+                    && !by_ident.contains_key(&ident_key(&r))
+                {
+                    problems.push(format!(
+                        "{rel}: ## Status says {kind} {} but no such ADR exists",
+                        scheme.display(&r)
+                    ));
+                }
             }
         }
     }

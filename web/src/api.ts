@@ -10,16 +10,22 @@ export type EdgeKind = 'supersedes' | 'related'
 export interface AdrSummary {
   number: number | null
   number_display: string
+  // Display id ("ADR-0006" / a date slug / "ADR-<short-uuid>").
+  reference: string
+  // Routing/addressing token (the value `/api/adrs/:id` accepts).
+  address: string
   title: string
   status: Status
   created: string | null
-  supersedes: number[]
-  superseded_by: number | null
+  // Display references of superseded / superseding ADRs.
+  supersedes: string[]
+  superseded_by: string | null
   review_due: boolean
 }
 
 export interface RelatedLink {
-  number: number
+  reference: string
+  address: string
   kind: EdgeKind
 }
 
@@ -48,6 +54,8 @@ export interface StatusCount {
 
 export interface ProposedAge {
   number: number | null
+  reference: string
+  address: string
   title: string
   age_days: number | null
 }
@@ -66,14 +74,18 @@ export interface Stats {
 }
 
 export interface GraphNode {
-  number: number | null
+  // Display id, also the key edges reference.
+  reference: string
+  // Routing token, or null for an unassigned ADR.
+  address: string | null
   title: string
   status: Status
 }
 
 export interface GraphEdge {
-  from: number
-  to: number
+  // Endpoints reference nodes by their `reference`.
+  from: string
+  to: string
   kind: EdgeKind
 }
 
@@ -117,8 +129,8 @@ export function listAdrs(opts: { status?: string; sort?: string } = {}): Promise
   return getJson<AdrSummary[]>(`/api/adrs${qs ? `?${qs}` : ''}`)
 }
 
-export function getAdr(number: number): Promise<AdrDetail> {
-  return getJson<AdrDetail>(`/api/adrs/${number}`)
+export function getAdr(id: string): Promise<AdrDetail> {
+  return getJson<AdrDetail>(`/api/adrs/${encodeURIComponent(id)}`)
 }
 
 export function search(q: string): Promise<AdrSummary[]> {

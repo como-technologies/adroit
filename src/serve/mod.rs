@@ -163,7 +163,7 @@ impl IntoResponse for ApiError {
 fn router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/api/adrs", get(list_adrs))
-        .route("/api/adrs/{number}", get(get_adr))
+        .route("/api/adrs/{id}", get(get_adr))
         .route("/api/search", get(search_adrs))
         .route("/api/stats", get(get_stats))
         .route("/api/graph", get(get_graph))
@@ -252,16 +252,20 @@ async fn list_adrs(
 /// `GET /api/adrs/{number}` → `AdrDetail` with `body_html` filled.
 async fn get_adr(
     State(state): State<AppState>,
-    Path(number): Path<u32>,
+    Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let store = state.store()?;
-    let mut detail = query::detail(&store, number).map_err(|e| match e {
-        // A missing number is a 404; anything else is an internal error.
-        query::QueryError::Store(StoreError::NumberNotFound(_)) => {
-            ApiError::NotFound(format!("ADR {number} not found"))
-        }
-        other => ApiError::internal(other),
-    })?;
+    // Resolve the addressing token through the configured naming scheme, so
+    // date/uuid ADRs (which have no number) are reachable too.
+    let r = store
+        .options()
+        .naming
+        .parse_ref(&id)
+        .ok_or_else(|| ApiError::NotFound(format!("ADR {id} not found")))?;
+    let path = store
+        .find_path_by_ref(&r)
+        .map_err(|_| ApiError::NotFound(format!("ADR {id} not found")))?;
+    let mut detail = query::detail_at(&store, &path).map_err(ApiError::internal)?;
     // Server-side markdown rendering (web-only concern). Cross-links are exposed
     // structurally via `detail.related` for SPA navigation; rewriting in-body
     // relative links is deferred (noted in the README / report).

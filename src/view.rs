@@ -24,6 +24,10 @@ pub struct AdrSummary {
     /// sequential scheme, the `YYYYMMDD-slug` for date, `"ADR-<short-uuid>"` for
     /// uuid. The surface-facing identity that works across all schemes.
     pub reference: String,
+    /// The canonical **addressing** token — what a URL/CLI passes to reach this
+    /// ADR (the bare number for numeric schemes, the slug/uuid for slug schemes).
+    /// Surfaces route by this so date/uuid ADRs are reachable too.
+    pub address: String,
     /// Short title describing the decision.
     pub title: String,
     /// Current lifecycle status.
@@ -33,10 +37,11 @@ pub struct AdrSummary {
     /// Stored as a string so the contract carries no `time` types and
     /// serializes identically across surfaces.
     pub created: Option<String>,
-    /// Numbers of older ADRs this record supersedes.
-    pub supersedes: Vec<u32>,
-    /// Number of the newer ADR that supersedes this record, if any.
-    pub superseded_by: Option<u32>,
+    /// Display references of older ADRs this record supersedes (e.g.
+    /// `["ADR-0002"]` or `["20260601-x"]`).
+    pub supersedes: Vec<String>,
+    /// Display reference of the newer ADR that supersedes this record, if any.
+    pub superseded_by: Option<String>,
     /// "This ADR is due for review": `true` when the ADR is still `Proposed`,
     /// has a `review_by` deadline, and that deadline is on or before today.
     /// Computed by [`crate::query`] from the ADR model's `review_by` field.
@@ -87,8 +92,10 @@ pub struct TimelineEvent {
 /// A resolved link from one ADR to another.
 #[derive(Debug, Clone, Serialize)]
 pub struct RelatedLink {
-    /// The target ADR number.
-    pub number: u32,
+    /// The target ADR's display reference (e.g. `"ADR-0006"` or a slug).
+    pub reference: String,
+    /// The target ADR's addressing token (for routing/links).
+    pub address: String,
     /// The kind of relationship.
     pub kind: EdgeKind,
 }
@@ -121,6 +128,9 @@ pub struct StatusCount {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProposedAge {
     pub number: Option<u32>,
+    /// Display id and routing token (so the surface can link it under any scheme).
+    pub reference: String,
+    pub address: String,
     pub title: String,
     /// Whole days since creation (best-effort; `None` if the created date is
     /// unknown).
@@ -142,21 +152,23 @@ pub struct Graph {
     pub edges: Vec<GraphEdge>,
 }
 
-/// A node in the [`Graph`]: one ADR.
+/// A node in the [`Graph`]: one ADR. Keyed by `reference` (its display id);
+/// `address` is the routing token (`None` for an unassigned ADR).
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNode {
-    pub number: Option<u32>,
+    pub reference: String,
+    pub address: Option<String>,
     pub title: String,
     pub status: Status,
 }
 
-/// A directed edge in the [`Graph`].
+/// A directed edge in the [`Graph`], connecting nodes by their `reference`.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphEdge {
-    /// Source ADR number.
-    pub from: u32,
-    /// Target ADR number.
-    pub to: u32,
+    /// Source ADR reference.
+    pub from: String,
+    /// Target ADR reference.
+    pub to: String,
     pub kind: EdgeKind,
 }
 

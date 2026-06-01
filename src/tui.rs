@@ -964,7 +964,10 @@ fn apply_action(state: &mut TuiState, store: &Store, cfg: &Config, action: Actio
             Err(e) => state.set_message(format!("status change failed: {e}")),
         },
         Action::Supersede { new, old } => {
-            match store.supersede(Number::new(new), Number::new(old)) {
+            match store.supersede(
+                &crate::naming::AdrRef::Number(new),
+                &crate::naming::AdrRef::Number(old),
+            ) {
                 Ok(_) => {
                     state.set_message(format!("ADR {old:04} superseded by {new:04}"));
                     reload(state, store)?;
@@ -1518,14 +1521,14 @@ mod driver {
                     Some(lm) => format!("\nUpdated: {}", ymd(lm)),
                     None => String::new(),
                 };
-                let superseded = match s.superseded_by {
-                    Some(n) => format!("\nSuperseded by: ADR-{n:04}"),
+                let superseded = match &s.superseded_by {
+                    Some(r) => format!("\nSuperseded by: {r}"),
                     None => String::new(),
                 };
                 Some((
                     format!(
-                        "ADR {}: {}\nStatus:  {}\nCreated: {created}{milestones}{updated}{superseded}\n\n",
-                        s.number_display, s.title, s.status,
+                        "{}: {}\nStatus:  {}\nCreated: {created}{milestones}{updated}{superseded}\n\n",
+                        s.reference, s.title, s.status,
                     ),
                     d,
                 ))
@@ -1665,6 +1668,7 @@ mod tests {
             number: Some(number),
             number_display: format!("{number:04}"),
             reference: format!("ADR-{number:04}"),
+            address: number.to_string(),
             title: title.to_string(),
             status,
             created: Some(format!("2024-01-{number:02}T00:00:00Z")),

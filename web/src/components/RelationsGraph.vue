@@ -16,7 +16,8 @@ const H = 620
 const R = 210
 
 interface Placed {
-  number: number | null
+  reference: string
+  address: string | null
   title: string
   status: Status
   x: number
@@ -38,7 +39,8 @@ const placed = computed<Placed[]>(() => {
     const angle = (i / n) * Math.PI * 2 - Math.PI / 2
     const cos = Math.cos(angle)
     return {
-      number: node.number,
+      reference: node.reference,
+      address: node.address,
       title: node.title,
       status: node.status,
       x: cx + R * cos,
@@ -50,19 +52,17 @@ const placed = computed<Placed[]>(() => {
   })
 })
 
-const posByNumber = computed(() => {
-  const map = new Map<number, Placed>()
-  for (const p of placed.value) {
-    if (p.number !== null) map.set(p.number, p)
-  }
+const posByRef = computed(() => {
+  const map = new Map<string, Placed>()
+  for (const p of placed.value) map.set(p.reference, p)
   return map
 })
 
 const edges = computed(() =>
   (props.graph.edges ?? [])
     .map((e) => {
-      const from = posByNumber.value.get(e.from)
-      const to = posByNumber.value.get(e.to)
+      const from = posByRef.value.get(e.from)
+      const to = posByRef.value.get(e.to)
       if (!from || !to) return null
       return { from, to, kind: e.kind }
     })
@@ -73,8 +73,15 @@ function truncate(s: string, n = 18): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
 
+// Compact id for the node circle: drop the `ADR-` prefix, clip to 8 chars
+// (handles `ADR-0006` → `0006`, a date slug, or a short uuid alike).
+function nodeId(p: Placed): string {
+  const s = p.reference.replace(/^ADR-/, '')
+  return s.length > 8 ? s.slice(0, 8) : s
+}
+
 function open(p: Placed) {
-  if (p.number !== null) router.push(`/adr/${p.number}`)
+  if (p.address !== null) router.push(`/adr/${p.address}`)
 }
 </script>
 
@@ -108,7 +115,7 @@ function open(p: Placed) {
     <g v-for="(p, i) in placed" :key="`n${i}`" class="node" @click="open(p)">
       <circle :cx="p.x" :cy="p.y" r="22" :style="{ fill: statusColor(p.status) }" class="node-circle" />
       <text :x="p.x" :y="p.y" class="node-num">
-        {{ p.number !== null ? String(p.number).padStart(4, '0') : '?' }}
+        {{ nodeId(p) }}
       </text>
       <text :x="p.labelX" :y="p.labelY" :text-anchor="p.anchor" class="node-label">
         {{ truncate(p.title) }}

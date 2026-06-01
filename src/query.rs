@@ -104,7 +104,7 @@ pub fn detail_at(store: &Store, path: &Path) -> Result<AdrDetail, QueryError> {
         store.options().review_overdue_days,
         store.options().naming,
     );
-    let related = related_links(&adr);
+    let related = related_links(&adr, store.options().naming);
     let history: Vec<TimelineEvent> = events.iter().map(timeline_event).collect();
     Ok(AdrDetail {
         summary,
@@ -152,13 +152,19 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
         .collect();
 
     // Age of each still-Proposed ADR (from its git-derived creation), oldest first.
+    let scheme = store.options().naming;
     let mut proposed_age: Vec<ProposedAge> = resolved
         .iter()
         .filter(|r| r.adr.status == Status::Proposed)
-        .map(|r| ProposedAge {
-            number: r.adr.number.map(Number::get),
-            title: r.adr.title.clone(),
-            age_days: Some((now - r.created).whole_days()),
+        .map(|r| {
+            let rf = r.adr.reference();
+            ProposedAge {
+                number: r.adr.number.map(Number::get),
+                reference: scheme.display(&rf),
+                address: rf.addr(),
+                title: r.adr.title.clone(),
+                age_days: Some((now - r.created).whole_days()),
+            }
         })
         .collect();
     proposed_age.sort_by(|a, b| b.age_days.cmp(&a.age_days));
@@ -178,7 +184,6 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
     // ADRs flagged review-due: still Proposed and past their `review_by` date,
     // or aged past the configured staleness threshold.
     let overdue = store.options().review_overdue_days;
-    let scheme = store.options().naming;
     let review_due: Vec<AdrSummary> = resolved
         .iter()
         .map(|r| summary_of(&r.adr, r.created, today, overdue, scheme))
@@ -200,42 +205,57 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
 /// fields and from markdown links to other ADRs found in each body.
 pub fn graph(store: &Store) -> Result<Graph, QueryError> {
     let adrs = store.list()?;
+    let scheme = store.options().naming;
 
     let nodes: Vec<GraphNode> = adrs
         .iter()
-        .map(|a| GraphNode {
-            number: a.number.map(Number::get),
-            title: a.title.clone(),
-            status: a.status,
+        .map(|a| {
+            let r = a.reference();
+            let addressable = a.number.is_some() || a.slug.is_some();
+            GraphNode {
+                reference: scheme.display(&r),
+                address: addressable.then(|| r.addr()),
+                title: a.title.clone(),
+                status: a.status,
+            }
         })
         .collect();
 
     let mut edges: Vec<GraphEdge> = Vec::new();
     for a in &adrs {
-        let Some(from) = a.number.map(Number::get) else {
-            continue;
-        };
+        let from = scheme.display(&a.reference());
         // Supersession from explicit fields. `from supersedes to`.
-        if let Some(to) = a.supersedes.map(Number::get) {
-            push_unique(&mut edges, from, to, EdgeKind::Supersedes);
+        if let Some(r) = &a.supersedes {
+            push_unique(
+                &mut edges,
+                from.clone(),
+                scheme.display(r),
+                EdgeKind::Supersedes,
+            );
         }
         // `superseded_by` means the *other* ADR supersedes this one.
-        if let Some(newer) = a.superseded_by.map(Number::get) {
-            push_unique(&mut edges, newer, from, EdgeKind::Supersedes);
+        if let Some(r) = &a.superseded_by {
+            push_unique(
+                &mut edges,
+                scheme.display(r),
+                from.clone(),
+                EdgeKind::Supersedes,
+            );
         }
         // Markdown links to other ADRs in the body become `Related` edges,
         // unless that pair already has a supersession edge.
-        for to in linked_numbers(&a.body) {
+        for r in linked_refs(&a.body, scheme) {
+            let to = scheme.display(&r);
             if to == from {
                 continue;
             }
             if edges
                 .iter()
-                .any(|e| e.kind == EdgeKind::Supersedes && pair_matches(e, from, to))
+                .any(|e| e.kind == EdgeKind::Supersedes && pair_matches(e, &from, &to))
             {
                 continue;
             }
-            push_unique(&mut edges, from, to, EdgeKind::Related);
+            push_unique(&mut edges, from.clone(), to, EdgeKind::Related);
         }
     }
 
@@ -386,44 +406,61 @@ fn summary_of(
             .map(|n| n.to_string())
             .unwrap_or_else(|| "????".to_string()),
         reference: scheme.display(&adr.reference()),
+        address: adr.reference().addr(),
         title: adr.title.clone(),
         status: adr.status,
         created: created.format(&Rfc3339).ok(),
-        supersedes: adr.supersedes.map(Number::get).into_iter().collect(),
-        superseded_by: adr.superseded_by.map(Number::get),
+        supersedes: adr
+            .supersedes
+            .as_ref()
+            .map(|r| scheme.display(r))
+            .into_iter()
+            .collect(),
+        superseded_by: adr.superseded_by.as_ref().map(|r| scheme.display(r)),
         review_due,
     }
 }
 
 /// Resolve related links for the detail view from fields + body links.
-fn related_links(adr: &Adr) -> Vec<RelatedLink> {
+fn related_links(adr: &Adr, scheme: NamingScheme) -> Vec<RelatedLink> {
     let mut out: Vec<RelatedLink> = Vec::new();
-    if let Some(n) = adr.supersedes.map(Number::get) {
-        push_related(&mut out, n, EdgeKind::Supersedes);
+    if let Some(r) = &adr.supersedes {
+        push_related(&mut out, scheme, r, EdgeKind::Supersedes);
     }
-    if let Some(n) = adr.superseded_by.map(Number::get) {
-        push_related(&mut out, n, EdgeKind::Supersedes);
+    if let Some(r) = &adr.superseded_by {
+        push_related(&mut out, scheme, r, EdgeKind::Supersedes);
     }
-    let self_number = adr.number.map(Number::get);
-    for n in linked_numbers(&adr.body) {
-        if Some(n) == self_number {
+    let self_ref = adr.reference();
+    for r in linked_refs(&adr.body, scheme) {
+        if r == self_ref {
             continue;
         }
+        let address = r.addr();
         if out
             .iter()
-            .any(|r| r.number == n && r.kind == EdgeKind::Supersedes)
+            .any(|x| x.address == address && x.kind == EdgeKind::Supersedes)
         {
             continue;
         }
-        push_related(&mut out, n, EdgeKind::Related);
+        push_related(&mut out, scheme, &r, EdgeKind::Related);
     }
     out
 }
 
-/// Push a [`RelatedLink`], skipping exact duplicates.
-fn push_related(out: &mut Vec<RelatedLink>, number: u32, kind: EdgeKind) {
-    if !out.iter().any(|r| r.number == number && r.kind == kind) {
-        out.push(RelatedLink { number, kind });
+/// Push a [`RelatedLink`], skipping exact duplicates (by addressing token).
+fn push_related(
+    out: &mut Vec<RelatedLink>,
+    scheme: NamingScheme,
+    r: &crate::naming::AdrRef,
+    kind: EdgeKind,
+) {
+    let address = r.addr();
+    if !out.iter().any(|x| x.address == address && x.kind == kind) {
+        out.push(RelatedLink {
+            reference: scheme.display(r),
+            address,
+            kind,
+        });
     }
 }
 
@@ -436,7 +473,7 @@ fn sort_summaries(rows: &mut [AdrSummary], sort: Sort) {
     }
 }
 
-fn push_unique(edges: &mut Vec<GraphEdge>, from: u32, to: u32, kind: EdgeKind) {
+fn push_unique(edges: &mut Vec<GraphEdge>, from: String, to: String, kind: EdgeKind) {
     if !edges
         .iter()
         .any(|e| e.from == from && e.to == to && e.kind == kind)
@@ -445,15 +482,16 @@ fn push_unique(edges: &mut Vec<GraphEdge>, from: u32, to: u32, kind: EdgeKind) {
     }
 }
 
-fn pair_matches(e: &GraphEdge, a: u32, b: u32) -> bool {
+fn pair_matches(e: &GraphEdge, a: &str, b: &str) -> bool {
     (e.from == a && e.to == b) || (e.from == b && e.to == a)
 }
 
-/// Extract ADR numbers referenced by markdown links in `body`, e.g.
-/// `[ADR-0006](../accepted/0006-foo.md)` or `[link](0012-bar.md)`.
-fn linked_numbers(body: &str) -> Vec<u32> {
+/// Extract the ADR references targeted by markdown links in `body`, resolved
+/// through the naming `scheme` (e.g. `[ADR-0006](../accepted/0006-foo.md)` →
+/// `Number(6)`, or `[x](20260601-foo.md)` → `Slug(..)`).
+fn linked_refs(body: &str, scheme: NamingScheme) -> Vec<crate::naming::AdrRef> {
     let mut out = Vec::new();
-    // Scan each "](...)" link target for a leading/embedded ADR number.
+    // Scan each "](...)" link target for an ADR reference.
     let bytes = body.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -463,10 +501,10 @@ fn linked_numbers(body: &str) -> Vec<u32> {
             && let Some(end) = body[i + 2..].find(')')
         {
             let target = &body[i + 2..i + 2 + end];
-            if let Some(n) = crate::links::number_in_target(target)
-                && !out.contains(&n)
+            if let Some(r) = scheme.ref_in_link(target)
+                && !out.contains(&r)
             {
-                out.push(n);
+                out.push(r);
             }
             i = i + 2 + end + 1;
             continue;
@@ -606,7 +644,8 @@ mod tests {
         assert!(d.body_html.is_none());
         // ADR-0003 links to ADR-0001 -> a Related edge.
         assert_eq!(d.related.len(), 1);
-        assert_eq!(d.related[0].number, 1);
+        assert_eq!(d.related[0].reference, "ADR-0001");
+        assert_eq!(d.related[0].address, "1");
         assert_eq!(d.related[0].kind, EdgeKind::Related);
     }
 
@@ -675,8 +714,8 @@ mod tests {
             .filter(|e| e.kind == EdgeKind::Supersedes)
             .collect();
         assert_eq!(supersedes.len(), 1);
-        assert_eq!(supersedes[0].from, 2);
-        assert_eq!(supersedes[0].to, 1);
+        assert_eq!(supersedes[0].from, "ADR-0002");
+        assert_eq!(supersedes[0].to, "ADR-0001");
     }
 
     #[test]
@@ -709,8 +748,8 @@ mod tests {
             .filter(|e| e.kind == EdgeKind::Supersedes)
             .collect();
         assert_eq!(supersedes.len(), 1, "one logical supersession -> one edge");
-        assert_eq!(supersedes[0].from, 6);
-        assert_eq!(supersedes[0].to, 2);
+        assert_eq!(supersedes[0].from, "ADR-0006");
+        assert_eq!(supersedes[0].to, "ADR-0002");
     }
 
     #[test]
@@ -766,17 +805,29 @@ mod tests {
             .filter(|e| e.kind == EdgeKind::Related)
             .collect();
         assert_eq!(related.len(), 1);
-        assert_eq!(related[0].from, 3);
-        assert_eq!(related[0].to, 1);
+        assert_eq!(related[0].from, "ADR-0003");
+        assert_eq!(related[0].to, "ADR-0001");
     }
 
     #[test]
-    fn linked_numbers_parses_forms() {
+    fn linked_refs_parses_forms() {
+        use crate::naming::AdrRef;
         assert_eq!(
-            linked_numbers("see [x](../accepted/0006-foo.md) and [y](ADR-0012)"),
-            vec![6, 12]
+            linked_refs(
+                "see [x](../accepted/0006-foo.md) and [y](0012-bar.md)",
+                NamingScheme::Sequential
+            ),
+            vec![AdrRef::Number(6), AdrRef::Number(12)]
         );
-        assert_eq!(linked_numbers("no links here"), Vec::<u32>::new());
+        assert_eq!(
+            linked_refs("no links here", NamingScheme::Sequential),
+            Vec::<AdrRef>::new()
+        );
+        // Date scheme resolves slug targets.
+        assert_eq!(
+            linked_refs("[x](../accepted/20260601-foo.md)", NamingScheme::Date),
+            vec![AdrRef::Slug("20260601-foo".into())]
+        );
     }
 
     #[test]

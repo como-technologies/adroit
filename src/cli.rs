@@ -103,10 +103,10 @@ pub enum Command {
     },
     /// Mark an older ADR as superseded by a newer one.
     Supersede {
-        /// The new (superseding) ADR number.
-        new: u32,
-        /// The old (superseded) ADR number.
-        old: u32,
+        /// The new (superseding) ADR identifier (number, slug, or uuid prefix).
+        new: String,
+        /// The old (superseded) ADR identifier (number, slug, or uuid prefix).
+        old: String,
     },
     /// Set (or clear) an ADR's review deadline (ISO-8601 `YYYY-MM-DD`).
     ///

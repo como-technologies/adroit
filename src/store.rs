@@ -307,7 +307,7 @@ impl Store {
     pub fn read(&self, path: &Path) -> Result<Adr, StoreError> {
         let content = std::fs::read_to_string(path)?;
         let dir_status = self.dir_status_inner(path);
-        let mut adr = format::deserialize(&content, self.opts.format, dir_status)
+        let mut adr = format::deserialize(&content, self.opts.format, dir_status, self.opts.naming)
             .map_err(|e| StoreError::Parse(e.to_string()))?;
         if let Some(r) = self.opts.naming.parse(path, &content) {
             apply_ref(&mut adr, r);
@@ -677,31 +677,32 @@ impl Store {
         self.set_status_at(path, new_status, None)
     }
 
-    /// Mark `old` as superseded by `new`, moving it to the superseded dir and
-    /// writing a `Superseded by [ADR-<new>](...)` status with a relative link.
-    pub fn supersede(&self, new: Number, old: Number) -> Result<PathBuf, StoreError> {
+    /// Mark `old` as superseded by `new` (both addressed by scheme identity),
+    /// moving it to the superseded dir and writing a `Superseded by
+    /// [<label>](...)` status with a relative link.
+    pub fn supersede(&self, new: &AdrRef, old: &AdrRef) -> Result<PathBuf, StoreError> {
         // Validate the new ADR exists before mutating the old one.
-        self.find_path_by_number(new)?;
-        let link = self.relative_link(new)?;
-        let old_path = self.find_path_by_number(old)?;
-        self.set_status_at(old_path, Status::Superseded, Some((new, link)))
+        let new_path = self.find_path_by_ref(new)?;
+        let link = self.relative_link_to(&new_path);
+        let old_path = self.find_path_by_ref(old)?;
+        self.set_status_at(old_path, Status::Superseded, Some((new.clone(), link)))
     }
 
     /// Core status-change at a known path (shared by the number- and ref-keyed
-    /// public entry points). `supersede` carries the numeric supersession link
-    /// for the markdown/frontmatter `## Status` rewrite.
+    /// public entry points). `supersede` carries the superseding ADR's
+    /// [`AdrRef`] and the relative link to it, for the `## Status` rewrite.
     fn set_status_at(
         &self,
         path: PathBuf,
         new_status: Status,
-        supersede: Option<(Number, String)>,
+        supersede: Option<(AdrRef, String)>,
     ) -> Result<PathBuf, StoreError> {
         match self.opts.format {
             Format::Frontmatter => {
                 let mut adr = self.read(&path)?;
                 adr.status = new_status;
-                if let Some((new, _)) = supersede {
-                    adr.superseded_by = Some(new);
+                if let Some((new, _)) = &supersede {
+                    adr.superseded_by = Some(new.clone());
                 }
                 // Flat layout: rewrite in place. by_status: move then write.
                 let target_dir = self.status_dir(new_status);
@@ -727,7 +728,12 @@ impl Store {
             }
             Format::Markdown => {
                 let original = std::fs::read_to_string(&path)?;
-                let supersede_ref = supersede.as_ref().map(|(n, link)| (*n, link.as_str()));
+                let label = supersede
+                    .as_ref()
+                    .map(|(r, _)| self.opts.naming.link_label(r));
+                let supersede_ref = supersede
+                    .as_ref()
+                    .map(|(_, link)| (label.as_deref().unwrap_or(""), link.as_str()));
                 let rewritten = format::rewrite_status(&original, new_status, supersede_ref);
 
                 let target_dir = self.status_dir(new_status);
@@ -828,11 +834,10 @@ impl Store {
     }
 
     /// Compute the relative markdown link from the superseded dir (where the
-    /// old ADR will live) to `to`'s current file.
-    fn relative_link(&self, to: Number) -> Result<String, StoreError> {
-        let to_path = self.find_path_by_number(to)?;
+    /// old ADR will live) to `to_path` (the superseding ADR's current file).
+    fn relative_link_to(&self, to_path: &Path) -> String {
         let from_dir = self.status_dir(Status::Superseded);
-        Ok(pathdiff(&from_dir, &to_path))
+        pathdiff(&from_dir, to_path)
     }
 }
 
@@ -1156,7 +1161,9 @@ mod tests {
             "# ADR-0002: Old Decision\n\n> State: Accepted\n\n## Status\n\nAccepted\n",
         );
 
-        let new_path = store.supersede(Number::new(6), Number::new(2)).unwrap();
+        let new_path = store
+            .supersede(&AdrRef::Number(6), &AdrRef::Number(2))
+            .unwrap();
         assert!(new_path.starts_with(store.status_dir(Status::Superseded)));
         let content = std::fs::read_to_string(&new_path).unwrap();
         assert!(content.contains("Superseded by [ADR-0006](../accepted/0006-new-decision.md)"));

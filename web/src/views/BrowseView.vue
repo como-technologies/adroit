@@ -201,16 +201,16 @@ const reviewDueCount = computed(() => adrs.value.filter((a) => a.review_due).len
     <!-- ADR list -->
     <div v-else class="card-glass divide-y divide-slate-200/70 overflow-hidden dark:divide-slate-800/70">
       <component
-        :is="a.number !== null ? RouterLink : 'div'"
+        :is="RouterLink"
         v-for="a in adrs"
-        :key="a.number_display"
-        :to="a.number !== null ? `/adr/${a.number}` : undefined"
-        class="group flex items-center gap-4 px-4 py-3.5 transition-colors sm:px-5"
-        :class="a.number !== null ? 'hover:bg-slate-50 dark:hover:bg-slate-800/40' : ''"
+        :key="a.address"
+        :to="`/adr/${a.address}`"
+        class="group flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-slate-50 sm:px-5 dark:hover:bg-slate-800/40"
       >
         <span
-          class="w-14 shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500"
-        >{{ a.number_display }}</span>
+          class="w-14 shrink-0 truncate font-mono text-xs tabular text-slate-400 dark:text-slate-500"
+          :title="a.reference"
+        >{{ a.reference }}</span>
 
         <div class="min-w-0 flex-1">
           <div
@@ -230,16 +230,15 @@ const reviewDueCount = computed(() => adrs.value.filter((a) => a.review_due).len
               <Clock :size="11" /> review due
             </span>
             <span v-if="a.supersedes.length" class="text-slate-400 dark:text-slate-500">
-              supersedes {{ a.supersedes.map((n) => `ADR-${String(n).padStart(4, '0')}`).join(', ') }}
+              supersedes {{ a.supersedes.join(', ') }}
             </span>
           </div>
         </div>
 
         <StatusPill :status="a.status" size="sm" />
         <ArrowRight
-          v-if="a.number !== null"
           :size="15"
-          class="hidden shrink-0 text-slate-300 transition-all group-hover:translate-x-0.5 group-hover:text-brand-500 dark:text-slate-600 sm:block"
+          class="hidden shrink-0 text-slate-300 transition-all group-hover:translate-x-0.5 group-hover:text-brand-500 sm:block dark:text-slate-600"
         />
       </component>
     </div>

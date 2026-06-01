@@ -7,7 +7,7 @@ import { shortDate } from '@/util'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
 
-const props = defineProps<{ number: string }>()
+const props = defineProps<{ id: string }>()
 
 const adr = ref<AdrDetail | null>(null)
 const loading = ref(false)
@@ -17,7 +17,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    adr.value = await getAdr(Number(props.number))
+    adr.value = await getAdr(props.id)
   } catch (e) {
     adr.value = null
     error.value = (e as Error).message
@@ -27,26 +27,22 @@ async function load() {
 }
 
 onMounted(load)
-watch(() => props.number, load)
+watch(() => props.id, load)
 // Re-fetch this ADR when files change on disk.
 useLiveReload(load)
-
-function adrLabel(n: number): string {
-  return `ADR-${String(n).padStart(4, '0')}`
-}
 
 // `kind` only marks an edge as a supersession; the direction relative to *this*
 // ADR comes from its own superseded_by / supersedes fields. So an edge to the
 // ADR that replaced this one reads "Superseded by", not "Supersedes".
 function linkLabel(link: RelatedLink): string {
   if (link.kind === 'supersedes') {
-    return adr.value?.superseded_by === link.number ? 'Superseded by' : 'Supersedes'
+    return adr.value?.superseded_by === link.reference ? 'Superseded by' : 'Supersedes'
   }
   return 'Related'
 }
 
 const relatedSorted = computed(() =>
-  [...(adr.value?.related ?? [])].sort((a, b) => a.number - b.number),
+  [...(adr.value?.related ?? [])].sort((a, b) => a.reference.localeCompare(b.reference)),
 )
 </script>
 
@@ -138,14 +134,14 @@ const relatedSorted = computed(() =>
         </span>
         <RouterLink
           v-for="link in relatedSorted"
-          :key="`${link.kind}-${link.number}`"
-          :to="`/adr/${link.number}`"
+          :key="`${link.kind}-${link.address}`"
+          :to="`/adr/${link.address}`"
           class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-brand-300 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:text-brand-300"
         >
           <GitBranch v-if="link.kind === 'supersedes'" :size="12" class="text-violet-500" />
           <Link2 v-else :size="12" class="text-slate-400" />
           <span>{{ linkLabel(link) }}</span>
-          <span class="font-mono">{{ adrLabel(link.number) }}</span>
+          <span class="font-mono">{{ link.reference }}</span>
         </RouterLink>
       </nav>
 

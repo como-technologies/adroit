@@ -232,10 +232,11 @@ pub struct Adr {
     /// The git commit SHA this ADR was last seen at.
     /// Not persisted to disk — populated at read time from git when available.
     pub git_sha: Option<String>,
-    /// Number of an ADR that this record supersedes (the older decision).
-    pub supersedes: Option<Number>,
-    /// Number of an ADR that supersedes this record (the newer decision).
-    pub superseded_by: Option<Number>,
+    /// Reference to an ADR that this record supersedes (the older decision).
+    /// Scheme-agnostic ([`AdrRef`]) so it works under date/uuid naming too.
+    pub supersedes: Option<crate::naming::AdrRef>,
+    /// Reference to an ADR that supersedes this record (the newer decision).
+    pub superseded_by: Option<crate::naming::AdrRef>,
     /// Optional review deadline. When a still-`Proposed` ADR is past this date
     /// it is flagged as review-due by the query layer.
     pub review_by: Option<ReviewBy>,

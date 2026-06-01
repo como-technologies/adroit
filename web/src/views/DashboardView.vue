@@ -185,16 +185,14 @@ function monthLabel(month: string): string {
               :key="p.title"
               class="flex items-center gap-3 py-2"
             >
-              <span class="w-12 shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500">
-                {{ p.number !== null ? String(p.number).padStart(4, '0') : '—' }}
+              <span class="w-12 shrink-0 truncate font-mono text-xs tabular text-slate-400 dark:text-slate-500" :title="p.reference">
+                {{ p.reference }}
               </span>
               <span class="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">
                 <RouterLink
-                  v-if="p.number !== null"
-                  :to="`/adr/${p.number}`"
+                  :to="`/adr/${p.address}`"
                   class="hover:text-brand-700 dark:hover:text-brand-300"
                 >{{ p.title }}</RouterLink>
-                <span v-else>{{ p.title }}</span>
               </span>
               <span
                 class="shrink-0 text-xs tabular font-medium"
@@ -218,19 +216,17 @@ function monthLabel(month: string): string {
           <ul class="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800/70">
             <li
               v-for="a in stats.review_due"
-              :key="a.number_display"
+              :key="a.address"
               class="flex items-center gap-3 py-2"
             >
-              <span class="w-12 shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500">
-                {{ a.number_display }}
+              <span class="w-12 shrink-0 truncate font-mono text-xs tabular text-slate-400 dark:text-slate-500" :title="a.reference">
+                {{ a.reference }}
               </span>
               <span class="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">
                 <RouterLink
-                  v-if="a.number !== null"
-                  :to="`/adr/${a.number}`"
+                  :to="`/adr/${a.address}`"
                   class="hover:text-brand-700 dark:hover:text-brand-300"
                 >{{ a.title }}</RouterLink>
-                <span v-else>{{ a.title }}</span>
               </span>
               <StatusPill :status="a.status" size="sm" />
             </li>
