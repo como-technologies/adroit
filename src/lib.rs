@@ -6,6 +6,7 @@ pub mod frontmatter;
 pub mod history;
 pub mod index;
 pub mod links;
+pub mod naming;
 pub mod query;
 pub mod store;
 pub mod template;
