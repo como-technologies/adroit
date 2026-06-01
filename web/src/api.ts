@@ -23,11 +23,22 @@ export interface RelatedLink {
   kind: EdgeKind
 }
 
+// One git-derived lifecycle milestone (proposed → accepted/rejected/…).
+export interface TimelineEvent {
+  date: string
+  status: Status
+  label: string
+  commit: string
+  subject: string
+}
+
 // AdrDetail flattens the summary fields at the top level (serde flatten).
 export interface AdrDetail extends AdrSummary {
   body: string
   body_html: string | null
   related: RelatedLink[]
+  history: TimelineEvent[]
+  last_modified: string | null
 }
 
 export interface StatusCount {

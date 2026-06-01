@@ -32,6 +32,7 @@ just run <args>  # run the binary
   `Graph`): the single shared contract for "what a surface can show"
 - `src/query.rs` — the shared read API over `Store`
   (`summaries`/`detail`/`search`/`stats`/`graph`) that builds the view types
+- `src/history.rs` — git-derived ADR dates + lifecycle (shells `git log`)
 - `tests/cli.rs` — integration tests against the compiled binary
 - `docs/` — mdbook user manual source (`book.toml` + `src/`), published to
   GitHub Pages; build output goes to `docs/book/` (gitignored)
@@ -49,6 +50,24 @@ UI-framework-free and derive `Serialize` so the web surface can emit them as
 JSON with no extra mapping. Write logic stays in the `Store` write path (CLI +
 future TUI only); the query layer never writes. Markdown→HTML rendering is
 deliberately deferred to the web surface (`AdrDetail::body_html` stays `None`).
+
+**Dates & lifecycle come from git (`src/history.rs`).** The markdown profile
+persists no creation date and a clone resets mtime, so `query` resolves an
+ADR's `created`, `last_modified`, and status timeline from git instead.
+`history::open(dir)` probes for a work tree once (per query call); then one
+`git log --follow --name-status` per file is parsed (pure `parse_log`,
+unit-tested without git) into an `AdrHistory { created, last_modified, events }`.
+In the by-status layout each status change is a directory rename git records, so
+the timeline (proposed → accepted/rejected/superseded) is reconstructed from
+renames; `status_of` is injected as `Store::dir_status` so custom dir names are
+honored and flat layout yields no milestones. `query::load_resolved` resolves
+`created` for every list/stats row (precedence: git → frontmatter-authored
+`created:` → mtime → parsed `now()`); `query::detail` additionally fills
+`AdrDetail.history` (`Vec<TimelineEvent>`) and `last_modified`. The module only
+*reads* git and degrades gracefully (untracked file / no git → fallback). One
+`git log` per ADR; fine for small ADR repos (a single-pass optimization is noted
+in the module for large trees). Surfaced in `adroit show`, the TUI preview
+header, and the web detail view.
 
 ## Interactive TUI (`tui` feature)
 

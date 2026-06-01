@@ -144,6 +144,35 @@ Optional fields are only written when set, so existing files stay clean.
 - **Deprecated** — no longer recommended but not replaced
 - **Superseded** — replaced by a newer ADR (linked in the status line)
 
+## Dates come from git
+
+adroit derives an ADR's **creation date, last-modified date, and lifecycle
+timeline from git history** — not from the file. This is deliberate:
+
+- The markdown profile persists no creation date (status is a directory, number
+  and title come from the H1), so there's nothing in the file to read.
+- A fresh `git clone` resets every file's modification time to the checkout
+  time, so the filesystem can't tell you when an ADR was written either.
+
+Git can answer both. The first commit that added the file is its creation, and
+in the by-status layout every status change is a directory move (a rename git
+records) — so `proposed/0007-…md` → `accepted/0007-…md` *is* the accepted date.
+`adroit show`, the TUI preview, and the web dashboard's Browse / detail /
+Insights views all read these dates, and the detail views render the full
+timeline (proposed → accepted / rejected / superseded).
+
+Resolution precedence for the creation date, highest first:
+
+1. **git** — the first commit that added the file (when the ADR dir is inside a
+   git work tree and the file is tracked);
+2. the authored `created:` field, in the **frontmatter** profile only;
+3. the file's filesystem modification time;
+4. the value parsed from the file (a fresh "now" for a brand-new, never-committed
+   markdown ADR).
+
+Outside a git repository — or for an ADR you've created but not yet committed —
+adroit falls back to the modification time and omits the lifecycle timeline.
+
 ## Templates
 
 New ADRs are scaffolded from a template. Built-ins are:

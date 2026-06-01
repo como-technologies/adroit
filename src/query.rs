@@ -7,15 +7,18 @@
 //! (`list`, `read`, `find_path_by_number`, …) and does no file I/O of its own.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
 
 use crate::adr::{Adr, Number, Status};
+use crate::format::Format;
+use crate::history::{self, HistoryEvent};
 use crate::store::{Store, StoreError};
 use crate::view::{
     AdrDetail, AdrSummary, CreatedBucket, EdgeKind, Graph, GraphEdge, GraphNode, ProposedAge,
-    RelatedLink, Stats, StatusCount,
+    RelatedLink, Stats, StatusCount, TimelineEvent,
 };
 
 /// Errors from the query layer.
@@ -61,12 +64,12 @@ fn today() -> Date {
 
 /// List ADR summaries, filtered and sorted per `filter`.
 pub fn summaries(store: &Store, filter: &Filter) -> Result<Vec<AdrSummary>, QueryError> {
-    let adrs = store.list()?;
+    let resolved = load_resolved(store)?;
     let today = today();
-    let mut rows: Vec<AdrSummary> = adrs
+    let mut rows: Vec<AdrSummary> = resolved
         .iter()
-        .filter(|a| filter.status.is_none_or(|s| a.status == s))
-        .map(|a| summary_of(a, today))
+        .filter(|r| filter.status.is_none_or(|s| r.adr.status == s))
+        .map(|r| summary_of(&r.adr, r.created, today))
         .collect();
     sort_summaries(&mut rows, filter.sort);
     Ok(rows)
@@ -76,14 +79,23 @@ pub fn summaries(store: &Store, filter: &Filter) -> Result<Vec<AdrSummary>, Quer
 pub fn detail(store: &Store, number: u32) -> Result<AdrDetail, QueryError> {
     let path = store.find_path_by_number(Number::new(number))?;
     let adr = store.read(&path)?;
-    let summary = summary_of(&adr, today());
+    let repo = history::open(store.root());
+    let hist = repo
+        .as_ref()
+        .and_then(|r| r.history(&path, |p| store.dir_status(p)));
+    let (created, last_modified, events) =
+        resolve_dates(&adr, &path, store.format() == Format::Frontmatter, hist);
+    let summary = summary_of(&adr, created, today());
     let related = related_links(&adr);
+    let history: Vec<TimelineEvent> = events.iter().map(timeline_event).collect();
     Ok(AdrDetail {
         summary,
         body: adr.body,
         // TODO(step4): render markdown -> HTML server-side for the web surface.
         body_html: None,
         related,
+        history,
+        last_modified: last_modified.and_then(|d| d.format(&Rfc3339).ok()),
     })
 }
 
@@ -91,22 +103,22 @@ pub fn detail(store: &Store, number: u32) -> Result<AdrDetail, QueryError> {
 /// the default (number-ascending) order.
 pub fn search(store: &Store, term: &str) -> Result<Vec<AdrSummary>, QueryError> {
     let needle = term.to_lowercase();
-    let adrs = store.list()?;
+    let resolved = load_resolved(store)?;
     let today = today();
-    let rows = adrs
+    let rows = resolved
         .iter()
-        .filter(|a| {
-            let haystack = format!("{} {}", a.title, a.body).to_lowercase();
+        .filter(|r| {
+            let haystack = format!("{} {}", r.adr.title, r.adr.body).to_lowercase();
             haystack.contains(&needle)
         })
-        .map(|a| summary_of(a, today))
+        .map(|r| summary_of(&r.adr, r.created, today))
         .collect();
     Ok(rows)
 }
 
 /// Aggregate statistics across all ADRs.
 pub fn stats(store: &Store) -> Result<Stats, QueryError> {
-    let adrs = store.list()?;
+    let resolved = load_resolved(store)?;
     let now = OffsetDateTime::now_utc();
     let today = today();
 
@@ -115,26 +127,26 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
         .into_iter()
         .map(|status| StatusCount {
             status,
-            count: adrs.iter().filter(|a| a.status == status).count(),
+            count: resolved.iter().filter(|r| r.adr.status == status).count(),
         })
         .collect();
 
-    // Age of each still-Proposed ADR, oldest first.
-    let mut proposed_age: Vec<ProposedAge> = adrs
+    // Age of each still-Proposed ADR (from its git-derived creation), oldest first.
+    let mut proposed_age: Vec<ProposedAge> = resolved
         .iter()
-        .filter(|a| a.status == Status::Proposed)
-        .map(|a| ProposedAge {
-            number: a.number.map(Number::get),
-            title: a.title.clone(),
-            age_days: Some((now - a.created.get()).whole_days()),
+        .filter(|r| r.adr.status == Status::Proposed)
+        .map(|r| ProposedAge {
+            number: r.adr.number.map(Number::get),
+            title: r.adr.title.clone(),
+            age_days: Some((now - r.created).whole_days()),
         })
         .collect();
     proposed_age.sort_by(|a, b| b.age_days.cmp(&a.age_days));
 
     // Created-over-time, bucketed by calendar month (YYYY-MM), oldest first.
     let mut months: BTreeMap<String, usize> = BTreeMap::new();
-    for a in &adrs {
-        let d = a.created.get();
+    for r in &resolved {
+        let d = r.created;
         let key = format!("{:04}-{:02}", d.year(), u8::from(d.month()));
         *months.entry(key).or_default() += 1;
     }
@@ -144,14 +156,14 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
         .collect();
 
     // ADRs flagged review-due: still Proposed and past their `review_by` date.
-    let review_due: Vec<AdrSummary> = adrs
+    let review_due: Vec<AdrSummary> = resolved
         .iter()
-        .map(|a| summary_of(a, today))
+        .map(|r| summary_of(&r.adr, r.created, today))
         .filter(|s| s.review_due)
         .collect();
 
     Ok(Stats {
-        total: adrs.len(),
+        total: resolved.len(),
         by_status,
         proposed_age,
         review_due,
@@ -211,12 +223,91 @@ pub fn graph(store: &Store) -> Result<Graph, QueryError> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build an [`AdrSummary`] from a parsed [`Adr`], evaluating review-due against
-/// `today`.
+/// An ADR paired with its resolved creation date, so every list/stats path
+/// reports the same git-derived date. (The full lifecycle/last-modified is only
+/// needed by [`detail`], which resolves a single ADR directly.)
+struct Resolved {
+    adr: Adr,
+    /// Best-available creation timestamp (git first-add, else fallback).
+    created: OffsetDateTime,
+}
+
+/// Load every ADR and resolve its creation date from git (once per call).
+///
+/// The git repository is probed a single time; each file's history is then one
+/// `git log`. Outside a git repo the per-file lookup returns `None` and the date
+/// falls back (see [`resolve_dates`]).
+fn load_resolved(store: &Store) -> Result<Vec<Resolved>, QueryError> {
+    let repo = history::open(store.root());
+    let is_frontmatter = store.format() == Format::Frontmatter;
+    let resolved = store
+        .list_with_paths()?
+        .into_iter()
+        .map(|(path, adr)| {
+            let hist = repo
+                .as_ref()
+                .and_then(|r| r.history(&path, |p| store.dir_status(p)));
+            let (created, _, _) = resolve_dates(&adr, &path, is_frontmatter, hist);
+            Resolved { adr, created }
+        })
+        .collect();
+    Ok(resolved)
+}
+
+/// Resolve an ADR's creation date, last-modified date, and lifecycle from its
+/// git history when available, else from non-git sources.
+///
+/// Precedence for `created`: 1) git first-add date (the real history); 2) for
+/// the frontmatter profile, the authored on-disk `created:`; 3) filesystem
+/// mtime; 4) the parsed `Adr::created` (the `now()` last resort). A markdown
+/// ADR in git therefore always uses git — fixing the "everything shows today"
+/// symptom, since a clone resets mtime and markdown persists no date.
+fn resolve_dates(
+    adr: &Adr,
+    path: &Path,
+    is_frontmatter: bool,
+    hist: Option<history::AdrHistory>,
+) -> (OffsetDateTime, Option<OffsetDateTime>, Vec<HistoryEvent>) {
+    match hist {
+        Some(h) => (h.created, Some(h.last_modified), h.events),
+        None => {
+            let mtime = file_mtime(path);
+            let created = if is_frontmatter {
+                adr.created.get()
+            } else {
+                mtime.unwrap_or_else(|| adr.created.get())
+            };
+            (created, mtime, Vec::new())
+        }
+    }
+}
+
+/// Filesystem modification time of `path`, if readable.
+fn file_mtime(path: &Path) -> Option<OffsetDateTime> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()
+        .map(OffsetDateTime::from)
+}
+
+/// Map a git [`HistoryEvent`] to the serde [`TimelineEvent`] view type.
+fn timeline_event(e: &HistoryEvent) -> TimelineEvent {
+    TimelineEvent {
+        date: e.date.format(&Rfc3339).unwrap_or_default(),
+        status: e.status,
+        label: e.status.to_string(),
+        commit: e.commit.clone(),
+        subject: e.subject.clone(),
+    }
+}
+
+/// Build an [`AdrSummary`] from a parsed [`Adr`] and its resolved creation
+/// date, evaluating review-due against `today`.
 ///
 /// An ADR is review-due when it is still `Proposed`, has a `review_by` deadline,
 /// and that deadline is on or before `today`.
-fn summary_of(adr: &Adr, today: Date) -> AdrSummary {
+fn summary_of(adr: &Adr, created: OffsetDateTime, today: Date) -> AdrSummary {
     let review_due =
         adr.status == Status::Proposed && adr.review_by.is_some_and(|rb| rb.get() <= today);
     AdrSummary {
@@ -227,7 +318,7 @@ fn summary_of(adr: &Adr, today: Date) -> AdrSummary {
             .unwrap_or_else(|| "????".to_string()),
         title: adr.title.clone(),
         status: adr.status,
-        created: adr.created.get().format(&Rfc3339).ok(),
+        created: created.format(&Rfc3339).ok(),
         supersedes: adr.supersedes.map(Number::get).into_iter().collect(),
         superseded_by: adr.superseded_by.map(Number::get),
         review_due,

@@ -206,6 +206,12 @@ fn cmd_show(store: &Store, number: Number) -> Result<()> {
     let s = &detail.summary;
     println!("ADR {number}: {}", s.title);
     println!("Status:  {}", s.status);
+    if let Some(c) = &s.created {
+        println!("Created: {}", ymd(c));
+    }
+    if let Some(lm) = &detail.last_modified {
+        println!("Updated: {}", ymd(lm));
+    }
     for n in &s.supersedes {
         println!("Supersedes: ADR-{n:04}");
     }
@@ -213,11 +219,24 @@ fn cmd_show(store: &Store, number: Number) -> Result<()> {
         println!("Superseded by: ADR-{n:04}");
     }
     println!("Path:    {}", path.display());
+    // Git-derived lifecycle (proposed → accepted/rejected/…). Empty outside git.
+    if !detail.history.is_empty() {
+        println!();
+        println!("History:");
+        for e in &detail.history {
+            println!("  {}  {:<10}  {}", ymd(&e.date), e.label, e.subject);
+        }
+    }
     if !detail.body.is_empty() {
         println!();
         println!("{}", detail.body);
     }
     Ok(())
+}
+
+/// Trim an RFC 3339 timestamp to its `YYYY-MM-DD` date for terse display.
+fn ymd(iso: &str) -> &str {
+    iso.get(..10).unwrap_or(iso)
 }
 
 fn cmd_supersede(store: &Store, new: Number, old: Number) -> Result<()> {

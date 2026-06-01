@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod format;
 pub mod frontmatter;
+pub mod history;
 pub mod index;
 pub mod query;
 pub mod store;

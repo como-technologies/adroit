@@ -55,6 +55,28 @@ pub struct AdrDetail {
     /// Other ADRs this one links to, resolved from supersession fields and
     /// markdown links in the body.
     pub related: Vec<RelatedLink>,
+    /// Git-derived lifecycle milestones (proposed → accepted / rejected /
+    /// superseded …), chronological. Empty outside a git repo or in flat layout.
+    pub history: Vec<TimelineEvent>,
+    /// Most recent commit date touching this ADR, as an RFC 3339 string
+    /// (`None` when the date is unknown — e.g. an untracked file).
+    pub last_modified: Option<String>,
+}
+
+/// One milestone in an ADR's git-derived lifecycle: the ADR reached `status`
+/// on `date` in the commit `commit`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TimelineEvent {
+    /// Commit date as an RFC 3339 string.
+    pub date: String,
+    /// The status reached at this milestone.
+    pub status: Status,
+    /// Human label for the milestone (the status name, e.g. "Accepted").
+    pub label: String,
+    /// Abbreviated commit hash that produced the change.
+    pub commit: String,
+    /// Commit subject line.
+    pub subject: String,
 }
 
 /// A resolved link from one ADR to another.

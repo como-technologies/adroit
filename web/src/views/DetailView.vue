@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowLeft, GitBranch, Link2, Clock, CalendarDays } from 'lucide-vue-next'
+import { ArrowLeft, GitBranch, Link2, Clock, CalendarDays, History } from 'lucide-vue-next'
 import { getAdr, type AdrDetail, type RelatedLink } from '@/api'
 import { shortDate } from '@/util'
 import { useLiveReload } from '@/useLiveReload'
@@ -86,6 +86,13 @@ const relatedSorted = computed(() =>
             <CalendarDays :size="13" class="text-slate-400" /> {{ shortDate(adr.created) }}
           </span>
           <span
+            v-if="adr.last_modified"
+            class="inline-flex items-center gap-1.5 tabular"
+            title="Last commit touching this ADR"
+          >
+            <History :size="13" class="text-slate-400" /> updated {{ shortDate(adr.last_modified) }}
+          </span>
+          <span
             v-if="adr.review_due"
             class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
           >
@@ -93,6 +100,32 @@ const relatedSorted = computed(() =>
           </span>
         </div>
       </header>
+
+      <!-- Lifecycle timeline (git-derived: proposed → accepted/rejected/…) -->
+      <section v-if="adr.history.length" class="card-glass px-6 py-5">
+        <h2
+          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+        >
+          <History :size="13" /> Timeline
+        </h2>
+        <ol class="mt-3 space-y-3">
+          <li
+            v-for="(e, i) in adr.history"
+            :key="`${e.commit}-${i}`"
+            class="flex items-center gap-3"
+          >
+            <span
+              class="w-20 shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500"
+            >{{ shortDate(e.date) }}</span>
+            <StatusPill :status="e.status" size="sm" />
+            <span
+              class="min-w-0 flex-1 truncate text-sm text-slate-600 dark:text-slate-300"
+              :title="e.subject"
+            >{{ e.subject }}</span>
+            <span class="hidden shrink-0 font-mono text-xs text-slate-400 dark:text-slate-500 sm:inline">{{ e.commit }}</span>
+          </li>
+        </ol>
+      </section>
 
       <!-- Cross-links -->
       <nav

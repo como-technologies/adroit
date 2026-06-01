@@ -62,11 +62,20 @@ adroit list --status accepted
 
 ### `adroit show <NUMBER>`
 
-Display a single ADR by its sequential number, including its status, path, and body.
+Display a single ADR by its sequential number: its status, creation and
+last-modified dates, supersession links, path, body, and — when the repo is a
+git repository — a **History** timeline of its lifecycle (proposed → accepted /
+rejected / superseded), with the date and commit subject of each transition.
 
 ```sh
 adroit show 1
 ```
+
+Dates and the timeline are read from **git history**, not the file: the first
+commit that added the ADR is its creation, and each status change is a directory
+move git records. Outside a git repository adroit falls back to the file's
+modification time, and the timeline is omitted. See
+[ADR Format](./adr-format.md#dates-come-from-git).
 
 ### `adroit status <NUMBER> <STATUS>`
 

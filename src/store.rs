@@ -131,6 +131,13 @@ impl Store {
         &self.opts
     }
 
+    /// The on-disk serialization format this store uses. Lets the query layer
+    /// decide date precedence (an authored frontmatter `created:` is meaningful;
+    /// a markdown ADR has none, so git is authoritative there).
+    pub fn format(&self) -> Format {
+        self.opts.format
+    }
+
     /// The directory a given status maps to (absolute path under root).
     pub fn status_dir(&self, status: Status) -> PathBuf {
         match self.opts.layout {
@@ -230,8 +237,23 @@ impl Store {
 
     /// List all ADRs in the store, parsed from disk.
     pub fn list(&self) -> Result<Vec<Adr>, StoreError> {
-        let files = self.list_files()?;
-        files.iter().map(|p| self.read(p)).collect()
+        Ok(self
+            .list_with_paths()?
+            .into_iter()
+            .map(|(_, adr)| adr)
+            .collect())
+    }
+
+    /// List all ADRs paired with their on-disk file path. The query layer needs
+    /// the path to look up each ADR's git history (creation date + lifecycle).
+    pub fn list_with_paths(&self) -> Result<Vec<(PathBuf, Adr)>, StoreError> {
+        self.list_files()?
+            .into_iter()
+            .map(|p| {
+                let adr = self.read(&p)?;
+                Ok((p, adr))
+            })
+            .collect()
     }
 
     /// Change an ADR's status. In `by_status` markdown mode this MOVES the file

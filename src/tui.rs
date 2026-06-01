@@ -1496,18 +1496,32 @@ mod driver {
         into_text_with_renderer(body, &renderer)
     }
 
+    /// Trim an RFC 3339 timestamp to its `YYYY-MM-DD` date for the header.
+    fn ymd(iso: &str) -> &str {
+        iso.get(..10).unwrap_or(iso)
+    }
+
     fn render_preview(f: &mut Frame, state: &TuiState, area: Rect) {
         let header = match state.preview() {
             Some(d) => {
                 let s = &d.summary;
-                let created = s.created.as_deref().unwrap_or("unknown");
+                let created = s.created.as_deref().map(ymd).unwrap_or("unknown");
+                // Git-derived status transitions after the initial proposal.
+                let mut milestones = String::new();
+                for e in d.history.iter().skip(1) {
+                    milestones.push_str(&format!("\n{}: {}", e.label, ymd(&e.date)));
+                }
+                let updated = match &d.last_modified {
+                    Some(lm) => format!("\nUpdated: {}", ymd(lm)),
+                    None => String::new(),
+                };
                 let superseded = match s.superseded_by {
                     Some(n) => format!("\nSuperseded by: ADR-{n:04}"),
                     None => String::new(),
                 };
                 Some((
                     format!(
-                        "ADR {}: {}\nStatus:  {}\nCreated: {created}{superseded}\n\n",
+                        "ADR {}: {}\nStatus:  {}\nCreated: {created}{milestones}{updated}{superseded}\n\n",
                         s.number_display, s.title, s.status,
                     ),
                     d,
@@ -2265,6 +2279,8 @@ mod tests {
                 .join("\n"),
             body_html: None,
             related: Vec::new(),
+            history: Vec::new(),
+            last_modified: None,
         }));
         s.set_rows(vec![summary(1, Status::Proposed, "Long")]);
         s.begin_edit();
