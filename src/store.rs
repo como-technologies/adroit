@@ -63,6 +63,14 @@ impl MigrateReport {
     }
 }
 
+/// Which typed relational link to add/remove via [`Store::set_links_ref`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    RelatesTo,
+    DependsOn,
+    Refines,
+}
+
 /// Outcome of [`Store::renumber`].
 #[derive(Debug, Default)]
 pub struct RenumberReport {
@@ -901,6 +909,44 @@ impl Store {
     ) -> Result<PathBuf, StoreError> {
         let path = self.find_path_by_ref(r)?;
         self.set_review_by_at(path, review_by)
+    }
+
+    /// Add or remove a typed relational link on the ADR addressed by `source`.
+    /// A frontmatter-profile feature (the links are structured fields); errors
+    /// under the markdown profile. Adding validates that `target` exists.
+    pub fn set_links_ref(
+        &self,
+        source: &AdrRef,
+        kind: LinkKind,
+        target: &AdrRef,
+        remove: bool,
+    ) -> Result<PathBuf, StoreError> {
+        if self.opts.format != Format::Frontmatter {
+            return Err(StoreError::Parse(
+                "typed links require the frontmatter format (run `adroit migrate --format \
+                 frontmatter`)"
+                    .into(),
+            ));
+        }
+        if !remove {
+            self.find_path_by_ref(target)?; // refuse linking to a missing ADR
+        }
+        let path = self.find_path_by_ref(source)?;
+        let mut adr = self.read(&path)?;
+        let links = match kind {
+            LinkKind::RelatesTo => &mut adr.relates_to,
+            LinkKind::DependsOn => &mut adr.depends_on,
+            LinkKind::Refines => &mut adr.refines,
+        };
+        if remove {
+            links.retain(|r| r != target);
+        } else if !links.contains(target) {
+            links.push(target.clone());
+        }
+        let content = format::serialize(&adr, self.opts.format)
+            .map_err(|e| StoreError::Parse(e.to_string()))?;
+        std::fs::write(&path, content)?;
+        Ok(path)
     }
 
     fn set_review_by_at(

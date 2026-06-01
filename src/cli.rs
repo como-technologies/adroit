@@ -112,6 +112,27 @@ pub enum Command {
         /// The old (superseded) ADR identifier (number, slug, or uuid prefix).
         old: String,
     },
+    /// Add (or remove with `--remove`) a typed relational link between two ADRs.
+    ///
+    /// Records the link in `<id>`'s frontmatter so it shows in `show` and the
+    /// dashboard's relations graph. Exactly one of `--relates-to` / `--depends-on`
+    /// / `--refines` names the target. Requires the frontmatter format.
+    Link {
+        /// The source ADR identifier (number, slug, or uuid prefix).
+        id: String,
+        /// Link to a related ADR (non-directional).
+        #[arg(long, group = "kind", value_name = "TARGET")]
+        relates_to: Option<String>,
+        /// Link to an ADR this one depends on.
+        #[arg(long, group = "kind", value_name = "TARGET")]
+        depends_on: Option<String>,
+        /// Link to an ADR this one refines / elaborates.
+        #[arg(long, group = "kind", value_name = "TARGET")]
+        refines: Option<String>,
+        /// Remove the link instead of adding it.
+        #[arg(long)]
+        remove: bool,
+    },
     /// Set (or clear) an ADR's review deadline (ISO-8601 `YYYY-MM-DD`).
     ///
     /// A still-`Proposed` ADR whose deadline has passed is flagged review-due

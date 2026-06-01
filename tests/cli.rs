@@ -1172,6 +1172,80 @@ fn per_category_list_shows_composite_ids() {
 }
 
 // ---------------------------------------------------------------------------
+// Typed relational links (`adroit link`, frontmatter profile)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn link_adds_typed_relation_in_frontmatter() {
+    let dir = TempDir::new().unwrap();
+    adroit_flat(&dir)
+        .args(["new", "Base", "--no-edit"])
+        .assert()
+        .success();
+    adroit_flat(&dir)
+        .args(["new", "Dependent", "--no-edit"])
+        .assert()
+        .success();
+
+    adroit_flat(&dir)
+        .args(["link", "2", "--depends-on", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("depends on"));
+
+    let body = fs::read_to_string(dir.path().join("0002-dependent.md")).unwrap();
+    assert!(
+        body.contains("depends_on:"),
+        "frontmatter records the link: {body}"
+    );
+
+    adroit_flat(&dir)
+        .args(["show", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Depends on: ADR-0001"));
+
+    // --remove takes it back out.
+    adroit_flat(&dir)
+        .args(["link", "2", "--depends-on", "1", "--remove"])
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("0002-dependent.md")).unwrap();
+    assert!(!after.contains("depends_on:"));
+}
+
+#[test]
+fn link_to_missing_adr_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit_flat(&dir)
+        .args(["new", "Base", "--no-edit"])
+        .assert()
+        .success();
+    adroit_flat(&dir)
+        .args(["link", "1", "--relates-to", "99"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn link_rejected_under_markdown_profile() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "B", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["link", "2", "--depends-on", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("frontmatter format"));
+}
+
+// ---------------------------------------------------------------------------
 // No subcommand -> interactive TUI (default build)
 // ---------------------------------------------------------------------------
 

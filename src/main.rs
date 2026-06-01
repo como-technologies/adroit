@@ -7,7 +7,7 @@ use adroit::config::{self, Config, Layout};
 use adroit::format::Format;
 use adroit::naming::AdrRef;
 use adroit::query::{self, Filter};
-use adroit::store::{Store, StoreOptions};
+use adroit::store::{LinkKind, Store, StoreOptions};
 use adroit::view::{AdrSummary, EdgeKind};
 
 /// Parse a CLI ADR identifier into an [`AdrRef`] under the configured scheme.
@@ -159,6 +159,15 @@ fn main() -> Result<()> {
                 date.as_deref(),
                 clear,
             )?;
+        }
+        Some(Command::Link {
+            id,
+            relates_to,
+            depends_on,
+            refines,
+            remove,
+        }) => {
+            cmd_link(&store, &cfg, &id, relates_to, depends_on, refines, remove)?;
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check) => cmd_check(&store)?,
@@ -359,6 +368,39 @@ fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
 /// Trim an RFC 3339 timestamp to its `YYYY-MM-DD` date for terse display.
 fn ymd(iso: &str) -> &str {
     iso.get(..10).unwrap_or(iso)
+}
+
+/// Add or remove a typed relational link from `id` to a target ADR.
+fn cmd_link(
+    store: &Store,
+    cfg: &Config,
+    id: &str,
+    relates_to: Option<String>,
+    depends_on: Option<String>,
+    refines: Option<String>,
+    remove: bool,
+) -> Result<()> {
+    let (kind, target) = match (relates_to, depends_on, refines) {
+        (Some(t), None, None) => (LinkKind::RelatesTo, t),
+        (None, Some(t), None) => (LinkKind::DependsOn, t),
+        (None, None, Some(t)) => (LinkKind::Refines, t),
+        _ => anyhow::bail!("exactly one of --relates-to / --depends-on / --refines is required"),
+    };
+    let source = resolve_ref(cfg, id)?;
+    let target = resolve_ref(cfg, &target)?;
+    store.set_links_ref(&source, kind, &target, remove)?;
+    let verb = if remove { "Unlinked" } else { "Linked" };
+    let rel = match kind {
+        LinkKind::RelatesTo => "relates to",
+        LinkKind::DependsOn => "depends on",
+        LinkKind::Refines => "refines",
+    };
+    println!(
+        "{verb} {} {rel} {}",
+        cfg.naming.display(&source),
+        cfg.naming.display(&target)
+    );
+    Ok(())
 }
 
 fn cmd_supersede(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) -> Result<()> {
