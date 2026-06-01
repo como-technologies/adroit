@@ -30,7 +30,9 @@ const placed = computed<Placed[]>(() => {
   const cx = W / 2
   const cy = H / 2
   const n = Math.max(1, nodes.length)
-  const labelR = R + 22
+  // Node radius is 22; offset labels well clear of the circle so they don't
+  // sit on the bubble (R + radius left zero gap and they overlapped).
+  const labelR = R + 40
   return nodes.map((node, i) => {
     const angle = (i / n) * Math.PI * 2 - Math.PI / 2
     const cos = Math.cos(angle)
@@ -134,16 +136,18 @@ function open(p: Placed) {
 .edge {
   stroke-width: 1.75;
 }
+/* Supersedes: solid green (a decision was replaced by a newer one). */
 .edge.supersedes {
-  stroke: var(--ad-text-muted);
+  stroke: #10b981;
 }
+/* Related: dashed, muted grey. */
 .edge.related {
   stroke: var(--ad-text-muted);
   stroke-dasharray: 4 3;
   opacity: 0.45;
 }
 .arrow-head {
-  fill: var(--ad-text-muted);
+  fill: #10b981;
 }
 
 /* Nodes */

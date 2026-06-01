@@ -138,7 +138,7 @@ useLiveReload(load)
 <style scoped>
 /* Legend swatches (mirror RelationsGraph edge styles). */
 .legend-supersedes {
-  stroke: var(--ad-text-muted);
+  stroke: #10b981;
   stroke-width: 2;
 }
 .legend-related {
