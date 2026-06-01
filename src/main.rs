@@ -207,8 +207,10 @@ fn cmd_new(
 ) -> Result<std::path::PathBuf> {
     let mut adr = adroit::adr::Adr::new(title)?;
     adr.status = cfg.default_status;
-    let number = store.next_number()?;
-    adr.number = Some(number);
+    // Assign the identity up front (so the heading renders correctly), via the
+    // configured naming scheme; `store.write` then reuses it.
+    let r = store.next_ref(title, adr.id.uuid())?;
+    adroit::store::apply_ref_pub(&mut adr, &r);
 
     if store.options().format == Format::Markdown {
         let name = template.unwrap_or(&cfg.default_template);
@@ -216,7 +218,7 @@ fn cmd_new(
             .with_context(|| format!("could not resolve template '{name}'"))?;
         let date = adr.created.to_string();
         let date = date.get(..10).unwrap_or(&date);
-        adr.body = adroit::template::render(&text, number, title, cfg.default_status, date);
+        adr.body = adroit::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
     }
 
     Ok(store.write(&mut adr)?)

@@ -1,10 +1,12 @@
 //! ADR scaffolding templates for the markdown profile.
 //!
-//! A template is plain text with `{{number}}`, `{{title}}`, `{{date}}`, and
-//! `{{status}}` placeholders. Built-in templates are MADR and the classic
-//! Nygard layout. Custom templates may be loaded from an explicit file path, a
-//! `templates_dir/<name>.md`, or an `adr-template.md` discovered in the target
-//! repo.
+//! A template is plain text with `{{heading}}`, `{{number}}`, `{{title}}`,
+//! `{{date}}`, and `{{status}}` placeholders. `{{heading}}` is the naming
+//! scheme's H1 (`# ADR-NNNN: Title` for numeric schemes, `# Title` for slug
+//! schemes); `{{number}}` is the bare identifier. Built-in templates are MADR
+//! and the classic Nygard layout. Custom templates may be loaded from an
+//! explicit file path, a `templates_dir/<name>.md`, or an `adr-template.md`
+//! discovered in the target repo.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +15,7 @@ use time::{Date, Weekday};
 use crate::adr::{Number, Status};
 
 /// The built-in MADR template.
-pub const MADR: &str = "# ADR-{{number}}: {{title}}\n\
+pub const MADR: &str = "{{heading}}\n\
 \n\
 > State: {{status}}\n\
 \n\
@@ -56,7 +58,7 @@ Chosen option: **Option A**, because justification.\n\
 Notes on how the decision is being carried out.\n";
 
 /// The built-in Nygard template.
-pub const NYGARD: &str = "# ADR-{{number}}: {{title}}\n\
+pub const NYGARD: &str = "{{heading}}\n\
 \n\
 ## Status\n\
 \n\
@@ -195,10 +197,25 @@ fn read(path: &Path) -> Result<String, TemplateError> {
     })
 }
 
-/// Render a template into a concrete ADR document.
-pub fn render(template: &str, number: Number, title: &str, status: Status, date: &str) -> String {
+/// Render a template into a concrete ADR document under naming `scheme`.
+///
+/// `{{heading}}` is the scheme's H1 (`# ADR-NNNN: Title` or, for slug schemes,
+/// `# Title`); `{{number}}` is the bare identifier (`0009` or the slug).
+pub fn render(
+    template: &str,
+    scheme: crate::naming::NamingScheme,
+    r: &crate::naming::AdrRef,
+    title: &str,
+    status: Status,
+    date: &str,
+) -> String {
+    let bare = match r {
+        crate::naming::AdrRef::Number(n) => format!("{n:04}"),
+        crate::naming::AdrRef::Slug(s) => s.clone(),
+    };
     let rendered = template
-        .replace("{{number}}", &number.to_string())
+        .replace("{{heading}}", &scheme.heading(r, title))
+        .replace("{{number}}", &bare)
         .replace("{{title}}", title)
         .replace("{{status}}", &status.to_string())
         .replace("{{date}}", date);
@@ -331,11 +348,14 @@ pub fn render_kickoff(template: &str, params: &KickoffParams<'_>) -> String {
 mod tests {
     use super::*;
 
+    use crate::naming::{AdrRef, NamingScheme};
+
     #[test]
     fn render_fills_placeholders() {
         let out = render(
             MADR,
-            Number::new(7),
+            NamingScheme::Sequential,
+            &AdrRef::Number(7),
             "Use PostgreSQL",
             Status::Proposed,
             "2026-05-30",
@@ -348,10 +368,31 @@ mod tests {
 
     #[test]
     fn nygard_has_three_sections() {
-        let out = render(NYGARD, Number::new(1), "T", Status::Proposed, "2026-01-01");
+        let out = render(
+            NYGARD,
+            NamingScheme::Sequential,
+            &AdrRef::Number(1),
+            "T",
+            Status::Proposed,
+            "2026-01-01",
+        );
         assert!(out.contains("## Context"));
         assert!(out.contains("## Decision"));
         assert!(out.contains("## Consequences"));
+    }
+
+    #[test]
+    fn render_date_scheme_uses_plain_heading() {
+        let out = render(
+            NYGARD,
+            NamingScheme::Date,
+            &AdrRef::Slug("20260530-use-postgresql".into()),
+            "Use PostgreSQL",
+            Status::Proposed,
+            "2026-05-30",
+        );
+        assert!(out.starts_with("# Use PostgreSQL\n"));
+        assert!(out.contains("## Status"));
     }
 
     #[test]

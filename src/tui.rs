@@ -922,8 +922,8 @@ fn refresh_preview(state: &mut TuiState, store: &Store) -> Result<(), query::Que
 fn create_adr(store: &Store, cfg: &Config, title: &str) -> Result<Adr> {
     let mut adr = Adr::new(title)?;
     adr.status = cfg.default_status;
-    let number = store.next_number()?;
-    adr.number = Some(number);
+    let r = store.next_ref(title, adr.id.uuid())?;
+    crate::store::apply_ref_pub(&mut adr, &r);
 
     if store.options().format == Format::Markdown {
         let name = &cfg.default_template;
@@ -931,7 +931,7 @@ fn create_adr(store: &Store, cfg: &Config, title: &str) -> Result<Adr> {
             .with_context(|| format!("could not resolve template '{name}'"))?;
         let date = adr.created.to_string();
         let date = date.get(..10).unwrap_or(&date);
-        adr.body = crate::template::render(&text, number, title, cfg.default_status, date);
+        adr.body = crate::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
     }
     store.write(&mut adr)?;
     Ok(adr)

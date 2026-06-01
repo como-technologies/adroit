@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::adr::{Adr, Number, Status};
 use crate::config::{DateSource, Layout};
 use crate::format::{self, Format};
-use crate::naming::NamingScheme;
+use crate::naming::{AdrRef, NamingScheme};
 
 /// Errors that can occur during ADR storage operations.
 #[derive(Debug, thiserror::Error)]
@@ -266,30 +266,62 @@ impl Store {
         Ok(Number::new(max + 1))
     }
 
-    /// Write an ADR to disk using its canonical filename and the configured
-    /// format/layout. Assigns a number if the ADR doesn't have one.
+    /// The identifier the next new ADR would be assigned, under the configured
+    /// naming scheme. (`title`/`fresh_uuid` feed the date/uuid schemes.)
+    pub fn next_ref(&self, title: &str, fresh_uuid: uuid::Uuid) -> Result<AdrRef, StoreError> {
+        let existing: Vec<AdrRef> = self
+            .list_with_paths()?
+            .iter()
+            .map(|(_, a)| a.reference())
+            .collect();
+        Ok(self
+            .opts
+            .naming
+            .assign(&existing, title, today_local(), fresh_uuid))
+    }
+
+    /// Write an ADR to disk using the configured naming scheme + format/layout.
+    /// Assigns an identity (via the scheme) if the ADR doesn't have one yet.
     pub fn write(&self, adr: &mut Adr) -> Result<PathBuf, StoreError> {
-        if adr.number.is_none() {
-            adr.number = Some(self.next_number()?);
+        if adr.number.is_none() && adr.slug.is_none() {
+            let r = self.next_ref(&adr.title, adr.id.uuid())?;
+            apply_ref(adr, r);
         }
-        let number = adr.number.expect("number was just assigned above");
+        let r = adr.reference();
         let content = format::serialize(adr, self.opts.format)
             .map_err(|e| StoreError::Parse(e.to_string()))?;
         let dir = self.status_dir(adr.status);
         if !dir.is_dir() {
             std::fs::create_dir_all(&dir)?;
         }
-        let path = dir.join(filename(number, &adr.title));
+        let path = dir.join(self.opts.naming.filename(&r, &adr.title));
         std::fs::write(&path, content)?;
         Ok(path)
     }
 
-    /// Read a single ADR from a file path.
+    /// Read a single ADR from a file path, setting its identity per the scheme.
     pub fn read(&self, path: &Path) -> Result<Adr, StoreError> {
         let content = std::fs::read_to_string(path)?;
         let dir_status = self.dir_status_inner(path);
-        format::deserialize(&content, self.opts.format, dir_status)
-            .map_err(|e| StoreError::Parse(e.to_string()))
+        let mut adr = format::deserialize(&content, self.opts.format, dir_status)
+            .map_err(|e| StoreError::Parse(e.to_string()))?;
+        if let Some(r) = self.opts.naming.parse(path, &content) {
+            apply_ref(&mut adr, r);
+        }
+        Ok(adr)
+    }
+
+    /// Find an ADR's file by its scheme identity (number or slug).
+    pub fn find_path_by_ref(&self, r: &AdrRef) -> Result<PathBuf, StoreError> {
+        self.list_files()?
+            .into_iter()
+            .find(|p| self.opts.naming.parse(p, "").as_ref() == Some(r))
+            .ok_or_else(|| {
+                StoreError::Parse(format!(
+                    "no ADR found with id {}",
+                    self.opts.naming.display(r)
+                ))
+            })
     }
 
     /// Find the file path for an ADR by its sequential number.
@@ -774,6 +806,33 @@ fn adr_files_in(dir: &Path) -> Vec<PathBuf> {
 /// `path` relative to `root` (for display), or `path` itself if not under it.
 fn rel_to(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
+}
+
+/// Apply a scheme-assigned [`AdrRef`] to an ADR's identity (public wrapper for
+/// callers that assign the ref before `write`, e.g. to render the heading).
+pub fn apply_ref_pub(adr: &mut Adr, r: &AdrRef) {
+    apply_ref(adr, r.clone());
+}
+
+/// Apply a scheme-assigned [`AdrRef`] to an ADR's identity fields.
+fn apply_ref(adr: &mut Adr, r: AdrRef) {
+    match r {
+        AdrRef::Number(n) => {
+            adr.number = Some(Number::new(n));
+            adr.slug = None;
+        }
+        AdrRef::Slug(s) => {
+            adr.slug = Some(s);
+            adr.number = None;
+        }
+    }
+}
+
+/// Today's local date (UTC fallback), for the date naming scheme.
+fn today_local() -> time::Date {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .date()
 }
 
 /// Compute a relative path from a directory to a target file using `../`.
