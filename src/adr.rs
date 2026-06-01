@@ -19,6 +19,11 @@ impl AdrId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    /// The underlying UUID (used by the `uuid` naming scheme).
+    pub fn uuid(self) -> Uuid {
+        self.0
+    }
 }
 
 impl Default for AdrId {
@@ -210,8 +215,12 @@ pub enum AdrError {
 pub struct Adr {
     /// Canonical unique identifier (UUID v4).
     pub id: AdrId,
-    /// Cosmetic sequential display number. `None` until assigned by the store on write.
+    /// Cosmetic sequential display number. `None` until assigned by the store on
+    /// write — and always `None` under the slug-based (date/uuid) naming schemes.
     pub number: Option<Number>,
+    /// Slug identity for the date / uuid naming schemes (the filename stem).
+    /// `None` under the numeric (sequential / per-category) schemes.
+    pub slug: Option<String>,
     /// Short title describing the decision.
     pub title: String,
     /// Current lifecycle status.
@@ -243,6 +252,7 @@ impl Adr {
         Ok(Self {
             id: AdrId::default(),
             number: None,
+            slug: None,
             title,
             status: Status::default(),
             created: Created::default(),
@@ -252,6 +262,17 @@ impl Adr {
             superseded_by: None,
             review_by: None,
         })
+    }
+
+    /// This ADR's scheme-agnostic display/reference identity. `Number` when a
+    /// sequential number is set, else the `Slug` (date/uuid). An unassigned ADR
+    /// (neither set, before the store writes it) reports `Number(0)`.
+    pub fn reference(&self) -> crate::naming::AdrRef {
+        match (self.number, &self.slug) {
+            (Some(n), _) => crate::naming::AdrRef::Number(n.get()),
+            (None, Some(s)) => crate::naming::AdrRef::Slug(s.clone()),
+            (None, None) => crate::naming::AdrRef::Number(0),
+        }
     }
 }
 

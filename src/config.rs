@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adr::Status;
 use crate::format::Format;
+use crate::naming::NamingScheme;
 
 /// On-disk directory layout for a store.
 #[derive(
@@ -151,6 +152,10 @@ pub struct Config {
     /// available, else filesystem), `git` (require git; warn if unavailable or
     /// shallow), or `filesystem` (never shell git). Default: `auto`.
     pub date_source: DateSource,
+
+    /// How ADR identifiers / filenames are formed: `sequential` (NNNN, default),
+    /// `date` (YYYYMMDD-title), `uuid`, or `per_category` (per-directory NNNN).
+    pub naming: NamingScheme,
 }
 
 impl Default for Config {
@@ -171,6 +176,7 @@ impl Default for Config {
             review_overdue_days: 30,
             tui_theme: MarkdownTheme::default(),
             date_source: DateSource::default(),
+            naming: NamingScheme::default(),
         }
     }
 }
@@ -201,6 +207,7 @@ impl Config {
             "review_overdue_days" => self.review_overdue_days.to_string(),
             "tui_theme" => self.tui_theme.to_string(),
             "date_source" => self.date_source.to_string(),
+            "naming" => self.naming.to_string(),
             _ => return None,
         })
     }
@@ -234,6 +241,11 @@ impl Config {
                     .parse()
                     .map_err(|_| bad("date source (auto|git|filesystem)"))?
             }
+            "naming" => {
+                self.naming = value
+                    .parse()
+                    .map_err(|_| bad("naming scheme (sequential|date|uuid|per_category)"))?
+            }
             _ => return Err(format!("unknown config key `{key}`")),
         }
         Ok(())
@@ -254,6 +266,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "review_overdue_days",
     "tui_theme",
     "date_source",
+    "naming",
 ];
 
 /// The environment variable that overrides a config key (for `.env` writes and
@@ -267,6 +280,7 @@ pub fn env_var_for(key: &str) -> Option<&'static str> {
         "default_template" => "ADROIT_TEMPLATE",
         "review_overdue_days" => "ADROIT_REVIEW_OVERDUE_DAYS",
         "date_source" => "ADROIT_DATE_SOURCE",
+        "naming" => "ADROIT_NAMING",
         _ => return None,
     })
 }

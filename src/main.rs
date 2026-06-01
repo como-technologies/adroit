@@ -36,6 +36,10 @@ fn main() -> Result<()> {
     if let Some(source) = cli.date_source {
         cfg.date_source = source;
     }
+    // `--naming` / `ADROIT_NAMING` overrides the identifier/filename scheme.
+    if let Some(naming) = cli.naming {
+        cfg.naming = naming;
+    }
 
     // `config` operates on configuration, not ADRs — handle it before resolving
     // a dir or opening a store, so it works even on a profile-mismatched repo.
@@ -191,6 +195,7 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
         status_dir,
         review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
         date_source: cfg.date_source,
+        naming: cfg.naming,
     }
 }
 

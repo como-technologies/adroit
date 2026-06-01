@@ -65,6 +65,7 @@ pub fn deserialize(input: &str) -> anyhow::Result<crate::adr::Adr> {
     Ok(crate::adr::Adr {
         id: fm.id,
         number: Some(fm.number),
+        slug: None,
         title: fm.title,
         status: fm.status,
         created: fm.created,

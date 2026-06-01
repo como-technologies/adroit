@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::adr::{Adr, Number, Status};
 use crate::config::{DateSource, Layout};
 use crate::format::{self, Format};
+use crate::naming::NamingScheme;
 
 /// Errors that can occur during ADR storage operations.
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +87,9 @@ pub struct StoreOptions {
     pub review_overdue_days: Option<u32>,
     /// Where the query layer reads ADR dates/lifecycle from (carried from config).
     pub date_source: DateSource,
+    /// How ADR identifiers / filenames are formed (carried from config). Drives
+    /// `write`/`read` identity + filename via the `naming` seam.
+    pub naming: NamingScheme,
 }
 
 impl StoreOptions {
@@ -97,6 +101,7 @@ impl StoreOptions {
             status_dir: std::collections::BTreeMap::new(),
             review_overdue_days: None,
             date_source: DateSource::Auto,
+            naming: NamingScheme::Sequential,
         }
     }
 
@@ -457,6 +462,7 @@ impl Store {
                 status_dir: self.opts.status_dir.clone(),
                 review_overdue_days: self.opts.review_overdue_days,
                 date_source: self.opts.date_source,
+                naming: self.opts.naming,
             },
         };
         let entries = src.list_with_paths()?;

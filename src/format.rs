@@ -96,8 +96,10 @@ fn serialize_markdown(adr: &Adr) -> anyhow::Result<String> {
 /// Parse the H1 heading into `(number, title)`.
 ///
 /// Accepts `# ADR-0006: Title`, `# ADR 0006: Title`, and `# 0006. Title`
-/// (Nygard-style) to be forgiving of real-world variation.
-fn parse_heading(line: &str) -> Result<(Number, String), FormatError> {
+/// (Nygard-style). Also tolerates a plain `# Title` with no number — used by the
+/// slug-based naming schemes (date/uuid), whose identity is the filename — in
+/// which case `number` is `None` and the whole heading text is the title.
+fn parse_heading(line: &str) -> (Option<Number>, String) {
     let h = line.trim_start_matches('#').trim();
     // Strip an optional "ADR" prefix and separators.
     let rest = h
@@ -106,14 +108,12 @@ fn parse_heading(line: &str) -> Result<(Number, String), FormatError> {
         .or_else(|| h.strip_prefix("ADR"))
         .unwrap_or(h)
         .trim_start();
-    // Number is the leading run of digits.
+    // Number is the leading run of digits, if any.
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return Err(FormatError::BadNumber(line.to_string()));
-    }
-    let n: u32 = digits
-        .parse()
-        .map_err(|_| FormatError::BadNumber(line.to_string()))?;
+    let Ok(n) = digits.parse::<u32>() else {
+        // No leading number → the heading itself is the title (slug scheme).
+        return (None, h.to_string());
+    };
     let after = rest[digits.len()..].trim_start();
     // Title follows a `:` or `.` separator.
     let title = after
@@ -122,7 +122,7 @@ fn parse_heading(line: &str) -> Result<(Number, String), FormatError> {
         .unwrap_or(after)
         .trim()
         .to_string();
-    Ok((Number::new(n), title))
+    (Some(Number::new(n)), title)
 }
 
 fn is_status_heading(line: &str) -> bool {
@@ -237,7 +237,7 @@ pub fn parse_markdown(input: &str, dir_status: Option<Status>) -> anyhow::Result
         .lines()
         .find(|l| l.trim_start().starts_with("# "))
         .ok_or(FormatError::MissingHeading)?;
-    let (number, title) = parse_heading(heading)?;
+    let (number, title) = parse_heading(heading);
 
     let region = parse_status_region(input);
 
@@ -245,7 +245,8 @@ pub fn parse_markdown(input: &str, dir_status: Option<Status>) -> anyhow::Result
 
     Ok(Adr {
         id: crate::adr::AdrId::new(),
-        number: Some(number),
+        number,
+        slug: None,
         title,
         status,
         created: crate::adr::Created::now(),
@@ -432,16 +433,24 @@ We need a consistent way to capture architectural decisions.\n";
 
     #[test]
     fn parse_heading_adr_dash() {
-        let (n, t) = parse_heading("# ADR-0006: Adopt ADRs as Team Decision Process").unwrap();
-        assert_eq!(n, Number::new(6));
+        let (n, t) = parse_heading("# ADR-0006: Adopt ADRs as Team Decision Process");
+        assert_eq!(n, Some(Number::new(6)));
         assert_eq!(t, "Adopt ADRs as Team Decision Process");
     }
 
     #[test]
     fn parse_heading_nygard_dot() {
-        let (n, t) = parse_heading("# 0042. Use PostgreSQL").unwrap();
-        assert_eq!(n, Number::new(42));
+        let (n, t) = parse_heading("# 0042. Use PostgreSQL");
+        assert_eq!(n, Some(Number::new(42)));
         assert_eq!(t, "Use PostgreSQL");
+    }
+
+    #[test]
+    fn parse_heading_plain_title_has_no_number() {
+        // Slug-scheme heading: no ADR-NNNN, the whole heading is the title.
+        let (n, t) = parse_heading("# Adopt Crossplane");
+        assert_eq!(n, None);
+        assert_eq!(t, "Adopt Crossplane");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 use crate::config::{DateSource, Layout, MarkdownTheme};
 use crate::format::Format;
+use crate::naming::NamingScheme;
 
 /// A snappy tool for managing Architecture Decision Records.
 #[derive(Debug, Parser)]
@@ -56,6 +57,13 @@ pub struct Cli {
     /// Also settable via `ADROIT_DATE_SOURCE`.
     #[arg(long, value_enum, global = true, env = "ADROIT_DATE_SOURCE")]
     pub date_source: Option<DateSource>,
+
+    /// How ADR identifiers/filenames are formed: sequential (NNNN, default),
+    /// date (YYYYMMDD-title), uuid, or per_category. Overrides config.
+    ///
+    /// Also settable via `ADROIT_NAMING`.
+    #[arg(long, value_enum, global = true, env = "ADROIT_NAMING")]
+    pub naming: Option<NamingScheme>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
