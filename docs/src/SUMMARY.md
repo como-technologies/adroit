@@ -11,6 +11,7 @@
 
 - [Using adroit with Your Repo](./usage/your-repo.md)
 - [Managing ADRs](./usage/managing-adrs.md)
+- [CI Integration](./usage/ci-integration.md)
 - [Interactive TUI](./usage/tui.md)
 - [Web Dashboard](./usage/web.md)
 

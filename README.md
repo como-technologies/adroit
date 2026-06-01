@@ -7,7 +7,7 @@ A snappy tool for managing Architecture Decision Records — the name hides
 > manage ADRs in-repo. Not published yet; build from source. Expect rough edges.
 
 By default it speaks a **status-by-directory** convention: status is the
-directory (`proposed/ accepted/ rejected/ superseded/ deprecated/`), number and
+directory (`proposed/`, `accepted/`, `rejected/`, `superseded/`, `deprecated/`), number and
 title come from the `# ADR-NNNN: Title` heading, no YAML frontmatter. A
 frontmatter/flat profile is also supported.
 
@@ -55,6 +55,8 @@ adroit supersede 9 4                    # 9 supersedes 4 (moves 4, links both)
 adroit set-review 9 2026-07-15          # review deadline (review-due once past)
 adroit review 9 --output kickoff.md     # generate the MR review-kickoff doc
 adroit index                            # refresh SUMMARY.md, grouped by status
+adroit check                            # CI gate: validate the ADR repo (non-zero on problems)
+adroit index --check                    # CI gate: fail if SUMMARY.md is stale
 ```
 
 ## TUI
@@ -102,6 +104,15 @@ For more templates and examples, the
 [architecture-decision-record](https://github.com/joelparkerhenderson/architecture-decision-record)
 collection is the best reference. Bring your own template with
 `--template <path>` or an `adr-template.md` in your repo.
+
+## Bake it into CI
+
+The ADR process fits a GitHub/GitLab pipeline: propose on `main`, then the
+PR/MR *is* the decision (move proposed → accepted/rejected). `adroit check` and
+`adroit index --check` gate it, and `adroit review` posts the kickoff brief on
+the decision PR/MR. Copy-and-customize templates for both platforms live in
+[`ci-templates/`](ci-templates/); see
+[docs/src/usage/ci-integration.md](docs/src/usage/ci-integration.md).
 
 ## More
 

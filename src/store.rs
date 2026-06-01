@@ -140,7 +140,17 @@ impl Store {
     }
 
     /// Map a file's parent directory name back to a status, if it matches one.
-    fn dir_status(&self, path: &Path) -> Option<Status> {
+    ///
+    /// Returns `None` in `flat` layout (no directory-implied status) or when the
+    /// parent directory doesn't match a known status dir. Exposed for callers
+    /// like `adroit check` that compare the directory-implied status against the
+    /// status declared in a file's `## Status` section.
+    pub fn dir_status(&self, path: &Path) -> Option<Status> {
+        self.dir_status_inner(path)
+    }
+
+    /// Map a file's parent directory name back to a status, if it matches one.
+    fn dir_status_inner(&self, path: &Path) -> Option<Status> {
         if self.opts.layout == Layout::Flat {
             return None;
         }
@@ -205,7 +215,7 @@ impl Store {
     /// Read a single ADR from a file path.
     pub fn read(&self, path: &Path) -> Result<Adr, StoreError> {
         let content = std::fs::read_to_string(path)?;
-        let dir_status = self.dir_status(path);
+        let dir_status = self.dir_status_inner(path);
         format::deserialize(&content, self.opts.format, dir_status)
             .map_err(|e| StoreError::Parse(e.to_string()))
     }

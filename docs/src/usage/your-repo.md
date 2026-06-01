@@ -97,6 +97,23 @@ index` regenerates the ADR section grouped by status, preserving the rest of the
 file. Point it explicitly with `summary_path` in config, or let adroit discover
 a `SUMMARY.md` next to or one level above the ADR directory.
 
+## 5. Gate it in CI
+
+Two commands exit non-zero on a problem, so they drop straight into a CI job to
+keep the ADR repo honest:
+
+```sh
+adroit check          # structural validation: status/dir mismatch, duplicate
+                      # numbers, unparseable files, broken supersession links
+adroit index --check  # fail if SUMMARY.md is stale (run `adroit index` locally)
+```
+
+`check` prints each problem to stderr and a one-line summary on failure; on a
+clean repo it prints `OK: N ADRs, no problems`. `index --check` never writes —
+it just verifies `SUMMARY.md` matches what `adroit index` would produce. Both
+pass cleanly when run in a non-by-status profile where directory checks don't
+apply.
+
 ## A note on safety
 
 adroit's markdown writes are **format-preserving**: status changes rewrite only

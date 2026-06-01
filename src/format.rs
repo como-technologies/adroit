@@ -257,6 +257,26 @@ pub fn parse_markdown(input: &str, dir_status: Option<Status>) -> anyhow::Result
     })
 }
 
+/// The status declared in a markdown ADR's `## Status` section, if one is
+/// stated explicitly (a bare status word or a supersession note). Returns
+/// `None` when the section has no status word — callers (e.g. `adroit check`)
+/// treat that as "directory is the source of truth", not a mismatch.
+///
+/// Unlike [`parse_markdown`], this does NOT consult the directory, so it can be
+/// compared against the directory-implied status to surface disagreements.
+pub fn parse_markdown_section_status(input: &str) -> Option<Status> {
+    parse_status_region(input).status
+}
+
+/// The supersession references declared in a markdown ADR's `## Status` section:
+/// `(supersedes, superseded_by)` ADR numbers, either of which may be `None`.
+///
+/// Exposed for `adroit check` so it can verify the referenced ADRs exist.
+pub fn parse_markdown_section_supersession(input: &str) -> (Option<Number>, Option<Number>) {
+    let region = parse_status_region(input);
+    (region.supersedes, region.superseded_by)
+}
+
 /// Rewrite (in place, minimal-diff) the `## Status` value line and the
 /// `> State:` banner of a markdown ADR.
 ///

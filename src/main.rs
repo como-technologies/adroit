@@ -78,7 +78,8 @@ fn main() -> Result<()> {
             cmd_set_review(&store, Number::new(number), date.as_deref(), clear)?;
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
-        Some(Command::Index) => cmd_index(&store, &cfg)?,
+        Some(Command::Check) => cmd_check(&store)?,
+        Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { number }) => {
             let number = Number::new(number);
             let path = store.find_path_by_number(number)?;
@@ -312,7 +313,7 @@ fn print_summary_row(row: &AdrSummary) {
     println!("{:<8}{:<12}{}", num, row.status, row.title);
 }
 
-fn cmd_index(store: &Store, cfg: &Config) -> Result<()> {
+fn cmd_index(store: &Store, cfg: &Config, check: bool) -> Result<()> {
     // Determine the SUMMARY.md path: config override, else discover next to the
     // ADR root (../SUMMARY.md is the usual mdBook layout).
     let summary = cfg
@@ -326,6 +327,12 @@ fn cmd_index(store: &Store, cfg: &Config) -> Result<()> {
         .and_then(|s| link_prefix_for(s, store.root()))
         .unwrap_or_else(|| "./adrs".to_string());
 
+    if check {
+        // CI gate: never write. Compare what `regenerate` WOULD produce against
+        // the on-disk SUMMARY.md and exit non-zero if they differ.
+        return cmd_index_check(store, summary.as_deref(), &link_prefix);
+    }
+
     match summary {
         Some(path) => {
             let updated = adroit::index::regenerate(store, &path, &link_prefix)?;
@@ -338,6 +345,162 @@ fn cmd_index(store: &Store, cfg: &Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `index --check`: verify SUMMARY.md is up to date without writing.
+///
+/// When no SUMMARY.md is found we print a note and exit 0 — not every repo
+/// publishes one, and failing CI for its absence would be surprising.
+fn cmd_index_check(
+    store: &Store,
+    summary: Option<&std::path::Path>,
+    link_prefix: &str,
+) -> Result<()> {
+    let Some(path) = summary else {
+        println!("No SUMMARY.md found — nothing to check.");
+        return Ok(());
+    };
+    let existing = std::fs::read_to_string(path)
+        .with_context(|| format!("could not read {}", path.display()))?;
+    let block = adroit::index::render_block(store, link_prefix)?;
+    let expected = adroit::index::splice(&existing, &block);
+    if expected == existing {
+        println!("SUMMARY.md is up to date ({})", path.display());
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "SUMMARY.md is out of date — run `adroit index` ({})",
+            path.display()
+        );
+    }
+}
+
+/// `adroit check`: structural CI gate. Collects every problem found across the
+/// store and bails (non-zero exit) with a summary if any exist; otherwise prints
+/// an "OK" line and exits 0.
+///
+/// Checks performed (directory-status checks are skipped in flat/frontmatter
+/// where no directory implies a status):
+/// 1. Status ↔ directory mismatch (by_status only).
+/// 2. Duplicate ADR numbers.
+/// 3. Unparseable / missing-H1 ADR files.
+/// 4. Broken supersession links (referenced ADR number doesn't exist).
+fn cmd_check(store: &Store) -> Result<()> {
+    use std::collections::BTreeMap;
+
+    let files = store.list_files()?;
+    let mut problems: Vec<String> = Vec::new();
+
+    // Track which ADR numbers exist (for supersession-link validation) and
+    // group paths by number (to flag duplicates).
+    let mut by_number: BTreeMap<u32, Vec<std::path::PathBuf>> = BTreeMap::new();
+    let markdown = store.options().format == Format::Markdown;
+
+    for path in &files {
+        let rel = path
+            .strip_prefix(store.root())
+            .unwrap_or(path)
+            .display()
+            .to_string();
+
+        // (3) Unparseable / missing H1.
+        let adr = match store.read(path) {
+            Ok(adr) => adr,
+            Err(e) => {
+                problems.push(format!("{rel}: failed to parse ({e})"));
+                continue;
+            }
+        };
+        if let Some(number) = adr.number {
+            by_number
+                .entry(number.get())
+                .or_default()
+                .push(path.clone());
+        }
+
+        // Markdown-specific checks need the file's raw text and section status.
+        if markdown {
+            let content = std::fs::read_to_string(path)
+                .with_context(|| format!("could not read {}", path.display()))?;
+
+            // (1) Status ↔ directory mismatch (by_status only). A section with
+            // no explicit status word is allowed (directory is source of truth).
+            if let Some(dir_status) = store.dir_status(path)
+                && let Some(section_status) =
+                    adroit::format::parse_markdown_section_status(&content)
+                && dir_status != section_status
+            {
+                let num = adr.number.map(|n| format!("ADR-{n} ")).unwrap_or_default();
+                problems.push(format!(
+                    "{num}({rel}): directory says {dir_status} but ## Status says {section_status}"
+                ));
+            }
+        }
+    }
+
+    // (4) Broken supersession links. Collected after the full number set is
+    // known so forward/backward references in any order resolve.
+    let existing: std::collections::BTreeSet<u32> = by_number.keys().copied().collect();
+    if markdown {
+        for path in &files {
+            let rel = path
+                .strip_prefix(store.root())
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let (supersedes, superseded_by) =
+                adroit::format::parse_markdown_section_supersession(&content);
+            if let Some(n) = supersedes
+                && !existing.contains(&n.get())
+            {
+                problems.push(format!(
+                    "{rel}: ## Status says Supersedes ADR-{n} but no such ADR exists"
+                ));
+            }
+            if let Some(n) = superseded_by
+                && !existing.contains(&n.get())
+            {
+                problems.push(format!(
+                    "{rel}: ## Status says Superseded by ADR-{n} but no such ADR exists"
+                ));
+            }
+        }
+    }
+
+    // (2) Duplicate numbers.
+    for (number, paths) in &by_number {
+        if paths.len() > 1 {
+            let list = paths
+                .iter()
+                .map(|p| {
+                    p.strip_prefix(store.root())
+                        .unwrap_or(p)
+                        .display()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            problems.push(format!("ADR-{number:04}: duplicate number used by {list}"));
+        }
+    }
+
+    if problems.is_empty() {
+        println!("OK: {} ADRs, no problems", files.len());
+        Ok(())
+    } else {
+        problems.sort();
+        for problem in &problems {
+            eprintln!("{problem}");
+        }
+        anyhow::bail!(
+            "{} problem(s) found across {} ADR file(s)",
+            problems.len(),
+            files.len()
+        );
+    }
 }
 
 /// Generate a review-kickoff doc for an ADR. Pure generation — no git ops.

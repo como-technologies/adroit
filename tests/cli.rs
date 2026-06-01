@@ -280,6 +280,203 @@ fn index_regenerates_summary_preserving_header() {
     assert!(out.contains("[ADR-0001: Repo Strategy](./adrs/proposed/0001-repo-strategy.md)"));
 }
 
+// ---------------------------------------------------------------------------
+// `check` — structural CI gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_passes_on_clean_repo() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "First decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Second decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["status", "2", "accepted"])
+        .assert()
+        .success();
+
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK: 2 ADRs, no problems"));
+}
+
+#[test]
+fn check_empty_repo_passes() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK: 0 ADRs"));
+}
+
+#[test]
+fn check_fails_on_status_dir_mismatch() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Mismatched", "--no-edit"])
+        .assert()
+        .success();
+
+    // The file lives in proposed/ but its `## Status` section says Accepted: a
+    // directory <-> section disagreement that `check` must flag. Rewrite the
+    // status value line specifically (the `> State:` banner above it is not part
+    // of the `## Status` region the parser reads).
+    let path = dir.path().join("proposed/0001-mismatched.md");
+    let content = fs::read_to_string(&path).unwrap();
+    let tampered = content.replacen("## Status\n\nProposed", "## Status\n\nAccepted", 1);
+    assert_ne!(
+        content, tampered,
+        "test fixture must change the status word"
+    );
+    fs::write(&path, tampered).unwrap();
+
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("directory says Proposed"))
+        .stderr(predicate::str::contains("## Status says Accepted"));
+}
+
+#[test]
+fn check_fails_on_broken_supersession_link() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Standing decision", "--no-edit"])
+        .assert()
+        .success();
+
+    // Inject a "Superseded by ADR-0099" note pointing at a non-existent ADR.
+    let path = dir.path().join("proposed/0001-standing-decision.md");
+    let content = fs::read_to_string(&path).unwrap();
+    let tampered = content.replacen("## Status", "## Status\n\nSuperseded by ADR-0099", 1);
+    fs::write(&path, tampered).unwrap();
+
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ADR-0099"))
+        .stderr(predicate::str::contains("no such ADR exists"));
+}
+
+#[test]
+fn check_flat_frontmatter_skips_dir_checks() {
+    // In flat/frontmatter there is no directory-implied status; check should
+    // still run and pass on a clean repo.
+    let dir = TempDir::new().unwrap();
+    adroit_flat(&dir)
+        .args(["new", "Flat decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit_flat(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("OK: 1 ADRs"));
+}
+
+// ---------------------------------------------------------------------------
+// `index --check` — SUMMARY.md drift gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn index_check_passes_when_in_sync() {
+    let parent = TempDir::new().unwrap();
+    let adrs = parent.path().join("adrs");
+    fs::create_dir_all(&adrs).unwrap();
+    let summary = parent.path().join("SUMMARY.md");
+    fs::write(
+        &summary,
+        "# Summary\n\n[Introduction](./README.md)\n\n# Architecture Decision Records\n\n- [ADR Process](./adrs/README.md)\n",
+    )
+    .unwrap();
+
+    let new_cmd = || {
+        let mut cmd = Command::cargo_bin("adroit").unwrap();
+        cmd.arg("--dir").arg(&adrs);
+        cmd.env("EDITOR", "true").env("VISUAL", "true");
+        cmd
+    };
+
+    new_cmd()
+        .args(["new", "Repo Strategy", "--no-edit"])
+        .assert()
+        .success();
+    // Write the SUMMARY so it is in sync.
+    new_cmd().arg("index").assert().success();
+
+    new_cmd()
+        .args(["index", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SUMMARY.md is up to date"));
+}
+
+#[test]
+fn index_check_fails_when_out_of_date() {
+    let parent = TempDir::new().unwrap();
+    let adrs = parent.path().join("adrs");
+    fs::create_dir_all(&adrs).unwrap();
+    let summary = parent.path().join("SUMMARY.md");
+    fs::write(
+        &summary,
+        "# Summary\n\n[Introduction](./README.md)\n\n# Architecture Decision Records\n\n- [ADR Process](./adrs/README.md)\n",
+    )
+    .unwrap();
+
+    let new_cmd = || {
+        let mut cmd = Command::cargo_bin("adroit").unwrap();
+        cmd.arg("--dir").arg(&adrs);
+        cmd.env("EDITOR", "true").env("VISUAL", "true");
+        cmd
+    };
+
+    new_cmd()
+        .args(["new", "Repo Strategy", "--no-edit"])
+        .assert()
+        .success();
+    new_cmd().arg("index").assert().success();
+
+    // Change a status without re-indexing: SUMMARY.md is now stale.
+    new_cmd()
+        .args(["status", "1", "accepted"])
+        .assert()
+        .success();
+
+    new_cmd()
+        .args(["index", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("out of date"));
+
+    // Re-indexing brings it back into sync.
+    new_cmd().arg("index").assert().success();
+    new_cmd().args(["index", "--check"]).assert().success();
+}
+
+#[test]
+fn index_check_no_summary_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Lonely", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["index", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No SUMMARY.md found"));
+}
+
 #[test]
 fn next_number_is_max_across_dirs() {
     let dir = TempDir::new().unwrap();

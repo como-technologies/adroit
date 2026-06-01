@@ -1,0 +1,52 @@
+# adroit ADR pipeline (GitLab CI) — copy to your repo root, or `include:` it.
+#
+# Gates the ADR process and generates the review-kickoff brief on decision MRs.
+# See ci-templates/README.md. Two knobs:
+#   1. ADROIT_DIR below — your ADR directory.
+#   2. before_script — how `adroit` is obtained (not on crates.io yet; pin to a
+#      tag / vendor a binary / use a prebuilt image as you prefer).
+
+variables:
+  # Path to your ADR tree (relative to the repo root).
+  ADROIT_DIR: docs/adrs
+
+default:
+  image: rust:latest
+  before_script:
+    - cargo install --git https://gitlab.com/your-org/adroit --locked || true
+    # ^ adjust the source; or `apk add`/`curl` a prebuilt binary into PATH.
+
+stages:
+  - validate
+  - review
+
+# --- Gate every change: structure + index must stay consistent. ------------
+adr:validate:
+  stage: validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - adroit check          # status↔dir, dup numbers, parse, supersession links
+    - adroit index --check  # SUMMARY.md in sync
+
+# --- On a decision MR: post the review-kickoff as the MR description. --------
+# Heuristic: an MR that moves a file into accepted/ or rejected/ is a decision MR.
+adr:review-brief:
+  stage: review
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - |
+      file=$(git diff --name-only "$CI_MERGE_REQUEST_DIFF_BASE_SHA" HEAD -- \
+             "$ADROIT_DIR/accepted" "$ADROIT_DIR/rejected" | head -n1)
+      if [ -z "$file" ]; then echo "Not a decision MR; skipping."; exit 0; fi
+      num=$(basename "$file" | grep -oE '^[0-9]+' | sed 's/^0*//')
+      adroit review "$num" --output kickoff.md
+      # Post kickoff.md as the MR description via the GitLab API.
+      body=$(cat kickoff.md)
+      curl --fail --silent --request PUT \
+        --header "PRIVATE-TOKEN: $ADR_BOT_TOKEN" \
+        --data-urlencode "description=$body" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID"
+  # Requires a project/group token in $ADR_BOT_TOKEN with api scope.

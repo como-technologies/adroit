@@ -113,13 +113,47 @@ Case-insensitive search across ADR titles and bodies (recursive). Prints number,
 adroit search crossplane
 ```
 
-### `adroit index`
+### `adroit check`
+
+Validate the ADR repo and **exit non-zero if any problem is found** — a
+structural CI gate. Problems are listed on stderr; a clean repo prints
+`OK: N ADRs, no problems` and exits 0.
+
+It checks for:
+
+1. **Status ↔ directory mismatch** (by-status only): a file's `## Status`
+   section declares a status that disagrees with the directory it lives in. A
+   section with no explicit status word is fine (the directory is the source of
+   truth).
+2. **Duplicate numbers**: two ADR files sharing the same `NNNN`.
+3. **Unparseable files**: a `.md` ADR with no `# ADR-NNNN: Title` heading.
+4. **Broken supersession links**: a `Supersedes ADR-NNNN` / `Superseded by
+   ADR-NNNN` note referencing a number that doesn't exist in the repo.
+
+In the flat / frontmatter profile there is no directory-implied status, so the
+directory-mismatch check is skipped; the others still apply.
+
+```sh
+adroit check
+```
+
+### `adroit index [--check]`
 
 Regenerate the ADR section of `SUMMARY.md`, grouped by status, preserving the non-ADR parts of the file. If no `summary_path` is configured and no `SUMMARY.md` is found next to or one level above the ADR directory, the generated block is printed to stdout.
 
+With `--check`, adroit does **not** write: it compares what it *would* generate
+against the on-disk `SUMMARY.md` and exits non-zero if they differ (printing
+`SUMMARY.md is out of date — run \`adroit index\``), making it a CI gate for
+documentation drift. If no `SUMMARY.md` is found it prints a note and exits 0.
+
 ```sh
-adroit index
+adroit index           # regenerate SUMMARY.md (or print the block)
+adroit index --check    # verify SUMMARY.md is up to date; non-zero if stale
 ```
+
+| Flag | Description |
+|---|---|
+| `--check` | Verify `SUMMARY.md` is up to date without writing; exit non-zero if stale |
 
 ### `adroit review <NUMBER>`
 

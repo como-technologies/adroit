@@ -96,8 +96,19 @@ pub enum Command {
         /// Term to search for.
         term: String,
     },
+    /// Validate the ADR repo and exit non-zero if any problem is found.
+    ///
+    /// A structural CI gate: checks for status/directory mismatches,
+    /// duplicate numbers, unparseable files, and broken supersession links.
+    Check,
     /// Regenerate the ADR section of SUMMARY.md (or print it to stdout).
-    Index,
+    Index {
+        /// Don't write — just verify SUMMARY.md is up to date (CI gate).
+        ///
+        /// Exits non-zero if SUMMARY.md differs from what `index` would write.
+        #[arg(long)]
+        check: bool,
+    },
     /// Open an ADR in your editor ($EDITOR or $VISUAL).
     Edit {
         /// ADR number to edit.
