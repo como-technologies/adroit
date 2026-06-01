@@ -39,6 +39,8 @@ between these directories.
 `NNNN-kebab-case-title.md`, where `NNNN` is the zero-padded, permanent number.
 Numbers never reset across directories and may legitimately collide (e.g. a
 `0012` in both `proposed/` and `accepted/`) — adroit handles this gracefully.
+This is the default `sequential` scheme; [Naming schemes](#naming-schemes) covers
+the collision-free `date` / `uuid` alternatives.
 
 ### Structure
 
@@ -166,6 +168,50 @@ Optional fields are only written when set, so existing files stay clean.
 - **Deprecated** — no longer recommended but not replaced
 - **Superseded** — replaced by a newer ADR (linked in the status line)
 
+## Naming schemes
+
+How an ADR's **identifier and filename** are formed is configurable
+(`naming` config / `ADROIT_NAMING` / `--naming`). The identity model is
+abstracted behind a single seam, so each scheme is self-contained. Pick **one
+for the repo's lifetime** — adroit does not rename existing ADRs when you change
+the setting.
+
+| Scheme | Filename | Heading | Identity | Collisions |
+|---|---|---|---|---|
+| `sequential` (default) | `NNNN-title.md` | `# ADR-NNNN: Title` | global number | possible across branches |
+| `date` | `YYYYMMDD-title.md` | `# Title` | date slug | collision-free |
+| `uuid` | `<uuid>-title.md` | `# Title` | a UUID | collision-free |
+| `per_category` | `NNNN-title.md` (per dir) | `# ADR-NNNN: Title` | per-directory number | *(not yet wired)* |
+
+**`sequential`** — the classic zero-padded `NNNN`, human-friendly and sortable.
+Its one weakness is **cross-branch collisions**: two branches that each create
+`0009` conflict on merge. CI on the merged state plus serialized merges catches
+this (see [CI integration](../usage/ci-integration.md)), and
+[`adroit renumber`](./cli.md#adroit-renumber-old-new---file-path) resolves a
+collision after the fact.
+
+**`date`** (log4brains-style) — the filename carries `YYYYMMDD-title`, so two
+people creating ADRs the same day on different branches never collide (a same-day
+same-title clash is auto-suffixed `-2`, `-3`). There is no ADR number, so the H1
+is a plain `# Title` and the identity lives in the filename.
+
+**`uuid`** — a persisted UUID guarantees uniqueness with zero coordination, at
+the cost of human-friendliness. adroit displays a short `ADR-<prefix>` and lets
+you address an ADR by any unique leading prefix of the UUID.
+
+**`per_category`** (MADR categories) — per-directory local numbering. The
+identity seam already supports it, but it needs a category *layout* (subdirs as
+areas, status tracked in frontmatter rather than by directory), so it is not yet
+wired end-to-end.
+
+### Addressing and scheme-specific commands
+
+Read/lifecycle commands take an `<ID>` resolved through the active scheme: a
+number for `sequential` (e.g. `9` or `ADR-0009`), the filename slug for `date`,
+or a unique UUID prefix for `uuid`. Because their artifacts are number-shaped,
+`supersede`, `renumber`, and `review` require a **numeric** scheme
+(`sequential`/`per_category`) and error under `date`/`uuid`.
+
 ## Dates come from git
 
 adroit derives an ADR's **creation date, last-modified date, and lifecycle
@@ -214,7 +260,9 @@ New ADRs are scaffolded from a template. Built-ins are:
 
 You can also point at a custom template file or a `templates_dir`, and if the
 target repo contains an `adr-template.md` it is preferred automatically.
-Placeholders: `{{number}}`, `{{title}}`, `{{date}}`, `{{status}}`.
+Placeholders: `{{heading}}` (the scheme's H1 — `# ADR-NNNN: Title` for numeric
+schemes, `# Title` for slug schemes), `{{number}}` (the bare identifier),
+`{{title}}`, `{{date}}`, `{{status}}`.
 
 ## References
 

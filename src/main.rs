@@ -269,9 +269,10 @@ fn cmd_list(store: &Store, status_filter: Option<&str>) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
-    println!("{:<8}{:<12}Title", "#", "Status");
+    let id_w = id_col_width(&rows);
+    println!("{:<id_w$}{:<12}Title", "#", "Status");
     for row in &rows {
-        print_summary_row(row);
+        print_summary_row(row, id_w);
     }
     Ok(())
 }
@@ -396,8 +397,9 @@ fn relative_link(from_file: &std::path::Path, to_file: &std::path::Path) -> Stri
 
 fn cmd_search(store: &Store, term: &str) -> Result<()> {
     let rows = query::search(store, term)?;
+    let id_w = id_col_width(&rows);
     for row in &rows {
-        print_summary_row(row);
+        print_summary_row(row, id_w);
     }
     if rows.is_empty() {
         eprintln!("No ADRs matched '{term}'");
@@ -405,16 +407,28 @@ fn cmd_search(store: &Store, term: &str) -> Result<()> {
     Ok(())
 }
 
-/// Render one `list` / `search` row. Shared so the two read commands stay
-/// byte-identical. Numeric schemes show the zero-padded number (unchanged);
-/// non-numeric schemes (date/uuid) show the scheme's reference identifier.
-fn print_summary_row(row: &AdrSummary) {
-    let id = if row.number.is_some() {
-        row.number_display.clone()
+/// The identifier shown in a `list`/`search` row: the zero-padded number for
+/// numeric schemes (unchanged), the scheme's reference for date/uuid.
+fn row_id(row: &AdrSummary) -> &str {
+    if row.number.is_some() {
+        &row.number_display
     } else {
-        row.reference.clone()
-    };
-    println!("{:<8}{:<12}{}", id, row.status, row.title);
+        &row.reference
+    }
+}
+
+/// Width of the identifier column: at least 8 (so sequential output is
+/// byte-identical — its ids are ≤4 chars), else the longest id + a 2-space gap
+/// so a long slug/uuid never abuts the Status column.
+fn id_col_width(rows: &[AdrSummary]) -> usize {
+    let longest = rows.iter().map(|r| row_id(r).len()).max().unwrap_or(0);
+    (longest + 2).max(8)
+}
+
+/// Render one `list` / `search` row. Shared so the two read commands stay
+/// byte-identical. `id_w` is the (dynamic) identifier column width.
+fn print_summary_row(row: &AdrSummary, id_w: usize) {
+    println!("{:<id_w$}{:<12}{}", row_id(row), row.status, row.title);
 }
 
 fn cmd_index(store: &Store, cfg: &Config, check: bool) -> Result<()> {

@@ -234,8 +234,21 @@ then `relink`. `--file` disambiguates when `old` has two files.
 
 The naming/identity **seam** (`src/naming.rs`) — `AdrRef` + `NamingScheme`
 (`sequential`/`date`/`uuid`/`per_category`) + `Scope` — owns all scheme behavior
-so adding a scheme edits only that module. (Built + unit-tested; wiring the
-~12 consumers through it + the alternate schemes are the in-progress phases.)
+(`assign`/`parse`/`parse_ref`/`filename`/`display`/`heading`/`link_label`/
+`ref_in_link`/`ref_matches`/`scope`), so adding a scheme edits only that module.
+Consumers route through it: `Store::write`/`read` assign+parse identity via the
+scheme and name files with `scheme.filename`; `next_ref`/`find_path_by_ref` and
+the `set_*_ref` mutation methods address ADRs by `AdrRef`; `template::render`
+fills `{{heading}}` from `scheme.heading`; `query::summary_of` fills
+`AdrSummary.reference` from `scheme.display`; the CLI's `show`/`status`/`edit`/
+`set-review` take an `<ID>` parsed by `scheme.parse_ref`; `check`'s duplicate
+detection groups by scheme identity. **Sequential stays byte-identical** — the
+additive identity model (`Adr.number: Option<Number>` + `Adr.slug:
+Option<String>`, `Adr::reference()`) keeps it the no-op path, and the existing
+unit + integration tests are the regression guard. `date` + `uuid` work
+end-to-end (create/list/show/status/set-review/check); `supersede`/`renumber`/
+`review` are numeric-only (the supersession model is numeric) and bail under a
+non-numeric scheme. `per_category` needs a category layout and is not yet wired.
 
 ### Review deadlines (`review_by`)
 

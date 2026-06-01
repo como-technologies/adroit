@@ -11,6 +11,7 @@
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
 | `--date-source <auto\|git\|filesystem>` | `auto` | Where ADR dates/lifecycle come from: `auto` (git when available, else filesystem), `git` (require git; warn if unavailable/shallow), `filesystem` (never shell git) (env: `ADROIT_DATE_SOURCE`; overrides config) |
+| `--naming <sequential\|date\|uuid\|per_category>` | `sequential` | How ADR identifiers/filenames are formed (env: `ADROIT_NAMING`; overrides config). See [Naming schemes](./adr-format.md#naming-schemes) |
 | `--version` | | Print version information |
 | `--help` | | Print help |
 
@@ -19,11 +20,11 @@ All three flags are **global** — they work before *or* after the subcommand
 
 Each also reads from an environment variable, so you don't have to pass it on
 every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
-`ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE`, `ADROIT_DATE_SOURCE` (and, for
-the web dashboard, `ADROIT_HOST` / `ADROIT_PORT`). A `.env` file in the current
-directory (or a parent) is loaded automatically at startup, so you can keep your
-repo location there. Copy the tracked `.env.example` to get started (your local
-`.env` is git-ignored):
+`ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE`, `ADROIT_DATE_SOURCE`,
+`ADROIT_NAMING` (and, for the web dashboard, `ADROIT_HOST` / `ADROIT_PORT`).
+A `.env` file in the current directory (or a parent) is loaded automatically
+at startup, so you can keep your repo location there. Copy the tracked
+`.env.example` to get started (your local `.env` is git-ignored):
 
 ```sh
 cp .env.example .env
@@ -70,15 +71,20 @@ adroit list
 adroit list --status accepted
 ```
 
-### `adroit show <NUMBER>`
+### `adroit show <ID>`
 
-Display a single ADR by its sequential number: its status, creation and
+Display a single ADR: its status, creation and
 last-modified dates, supersession links, path, body, and — when the repo is a
 git repository — a **History** timeline of its lifecycle (proposed → accepted /
 rejected / superseded), with the date and commit subject of each transition.
 
+`<ID>` is resolved through the configured [naming scheme](./adr-format.md#naming-schemes):
+a number (`9` or `ADR-0009`) under `sequential`, the filename slug under `date`,
+or a unique leading prefix of the UUID under `uuid`.
+
 ```sh
-adroit show 1
+adroit show 1                       # sequential
+adroit show 20260601-adopt-postgresql   # date scheme
 ```
 
 Dates and the timeline are read from **git history**, not the file: the first
@@ -87,9 +93,9 @@ move git records. Outside a git repository adroit falls back to the file's
 modification time, and the timeline is omitted. See
 [ADR Format](./adr-format.md#dates-come-from-git).
 
-### `adroit status <NUMBER> <STATUS>`
+### `adroit status <ID> <STATUS>`
 
-Update the lifecycle status of an ADR. Status names are case-insensitive. In by-status markdown mode this **moves the file** to the matching status directory and rewrites the `## Status` section (minimal-diff).
+Update the lifecycle status of an ADR (`<ID>` resolved as in [`show`](#adroit-show-id)). Status names are case-insensitive. In by-status markdown mode this **moves the file** to the matching status directory and rewrites the `## Status` section (minimal-diff).
 
 Valid statuses: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
 
@@ -105,7 +111,11 @@ Mark `<OLD>` as superseded by `<NEW>` in one command: moves the old ADR to `supe
 adroit supersede 6 2   # ADR-0006 supersedes ADR-0002
 ```
 
-### `adroit set-review <NUMBER> <DATE>`
+`supersede` is **numeric-only** — the supersession links it writes carry ADR
+numbers — so it requires a numeric naming scheme (`sequential`/`per_category`)
+and errors under `date`/`uuid`.
+
+### `adroit set-review <ID> <DATE>`
 
 Set (or clear) an ADR's **review deadline** as an ISO-8601 `YYYY-MM-DD` date. A
 still-`Proposed` ADR whose deadline has passed is flagged **review-due** in
@@ -144,7 +154,9 @@ It checks for:
    section declares a status that disagrees with the directory it lives in. A
    section with no explicit status word is fine (the directory is the source of
    truth).
-2. **Duplicate numbers**: two ADR files sharing the same `NNNN`.
+2. **Duplicate identifiers**: two ADR files sharing the same identity under the
+   configured [naming scheme](./adr-format.md#naming-schemes) — the same `NNNN`
+   for `sequential`, or the same slug/uuid for `date`/`uuid`.
 3. **Unparseable files**: a `.md` ADR with no `# ADR-NNNN: Title` heading.
 4. **Broken supersession links**: a `Supersedes ADR-NNNN` / `Superseded by
    ADR-NNNN` note referencing a number that doesn't exist in the repo.
@@ -250,7 +262,9 @@ proposer to fill in.
 
 This is **pure generation** — it performs no git operations and does not modify
 the ADR. The ADR is resolved by number through the store, so it works in
-by-status mode and errors cleanly if the number isn't found.
+by-status mode and errors cleanly if the number isn't found. Because the kickoff
+doc is built around the ADR number, `review` is **numeric-only** (requires a
+`sequential`/`per_category` scheme).
 
 Dates are computed from today using business days (weekends skipped):
 the review period runs from today to today + `--days` business days, and the
@@ -268,9 +282,9 @@ adroit review 1 --output review-kickoff.md   # write to a file
 | `--quorum <N>` | config `review_quorum` (3) | Number of approvals required |
 | `--output <PATH>` | — | Write the doc to a file instead of stdout |
 
-### `adroit edit <NUMBER>`
+### `adroit edit <ID>`
 
-Open an ADR in your editor.
+Open an ADR in your editor (`<ID>` resolved as in [`show`](#adroit-show-id)).
 
 ```sh
 adroit edit 1
