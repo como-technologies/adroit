@@ -2,11 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  forceCenter,
   forceCollide,
   forceLink,
   forceManyBody,
   forceSimulation,
+  forceX,
+  forceY,
   type Simulation,
   type SimulationLinkDatum,
   type SimulationNodeDatum,
@@ -70,6 +71,7 @@ let sim: Simulation<SimNode, SimLink> | null = null
 const frame = ref(0)
 const transform = ref({ x: 0, y: 0, k: 1 })
 const svgRef = ref<SVGSVGElement | null>(null)
+const gRef = ref<SVGGElement | null>(null)
 
 const transformStr = computed(
   () => `translate(${transform.value.x} ${transform.value.y}) scale(${transform.value.k})`,
@@ -107,17 +109,22 @@ function build() {
     .map((e) => ({ source: byRef.get(e.from)!, target: byRef.get(e.to)!, kind: e.kind }))
 
   sim?.stop()
+  // forceX/forceY (toward the center) replace forceCenter so that *every*
+  // component — including isolated nodes and small clusters — is pulled inward,
+  // instead of drifting to the edges (forceCenter only shifts the whole
+  // centroid, which lets disconnected pieces fly apart).
   sim = forceSimulation<SimNode, SimLink>(simNodes)
     .force(
       'link',
       forceLink<SimNode, SimLink>(simLinks)
         .id((d) => d.ref)
-        .distance(90)
-        .strength(0.4),
+        .distance(70)
+        .strength(0.5),
     )
-    .force('charge', forceManyBody().strength(-280))
-    .force('center', forceCenter(W / 2, H / 2))
-    .force('collide', forceCollide(NODE_R + 24))
+    .force('charge', forceManyBody().strength(-260).distanceMax(360))
+    .force('x', forceX(W / 2).strength(0.09))
+    .force('y', forceY(H / 2).strength(0.09))
+    .force('collide', forceCollide(NODE_R + 16))
     .on('tick', () => {
       frame.value++
     })
@@ -127,13 +134,20 @@ function build() {
 let dragging: SimNode | null = null
 let didDrag = false
 
+// Convert a pointer position to the inner <g>'s coordinate system using the
+// element's screen CTM. This accounts for BOTH the viewBox→screen scaling and
+// the current zoom transform, so a dragged node sits exactly under the cursor.
 function nodeAt(e: PointerEvent): { x: number; y: number } {
-  const rect = svgRef.value!.getBoundingClientRect()
-  const t = transform.value
-  return {
-    x: (e.clientX - rect.left - t.x) / t.k,
-    y: (e.clientY - rect.top - t.y) / t.k,
-  }
+  const g = gRef.value
+  const svg = svgRef.value
+  if (!g || !svg) return { x: 0, y: 0 }
+  const ctm = g.getScreenCTM()
+  if (!ctm) return { x: 0, y: 0 }
+  const pt = svg.createSVGPoint()
+  pt.x = e.clientX
+  pt.y = e.clientY
+  const p = pt.matrixTransform(ctm.inverse())
+  return { x: p.x, y: p.y }
 }
 function startDrag(node: SimNode, e: PointerEvent) {
   dragging = node
@@ -217,7 +231,7 @@ watch(
         </marker>
       </defs>
 
-      <g :transform="transformStr">
+      <g ref="gRef" :transform="transformStr">
         <line
           v-for="(e, i) in view.links"
           :key="`e${i}`"
