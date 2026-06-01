@@ -373,10 +373,15 @@ fn cmd_search(store: &Store, term: &str) -> Result<()> {
 }
 
 /// Render one `list` / `search` row. Shared so the two read commands stay
-/// byte-identical. Uses the summary's zero-padded number display.
+/// byte-identical. Numeric schemes show the zero-padded number (unchanged);
+/// non-numeric schemes (date/uuid) show the scheme's reference identifier.
 fn print_summary_row(row: &AdrSummary) {
-    let num = row.number.map(|n| format!("{n:04}")).unwrap_or_default();
-    println!("{:<8}{:<12}{}", num, row.status, row.title);
+    let id = if row.number.is_some() {
+        row.number_display.clone()
+    } else {
+        row.reference.clone()
+    };
+    println!("{:<8}{:<12}{}", id, row.status, row.title);
 }
 
 fn cmd_index(store: &Store, cfg: &Config, check: bool) -> Result<()> {

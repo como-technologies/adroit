@@ -17,6 +17,7 @@ use crate::adr::{Adr, Number, Status};
 use crate::config::DateSource;
 use crate::format::Format;
 use crate::history::{self, HistoryEvent};
+use crate::naming::NamingScheme;
 use crate::store::{Store, StoreError};
 use crate::view::{
     AdrDetail, AdrSummary, CreatedBucket, EdgeKind, Graph, GraphEdge, GraphNode, ProposedAge,
@@ -69,10 +70,11 @@ pub fn summaries(store: &Store, filter: &Filter) -> Result<Vec<AdrSummary>, Quer
     let resolved = load_resolved(store)?;
     let today = today();
     let overdue = store.options().review_overdue_days;
+    let scheme = store.options().naming;
     let mut rows: Vec<AdrSummary> = resolved
         .iter()
         .filter(|r| filter.status.is_none_or(|s| r.adr.status == s))
-        .map(|r| summary_of(&r.adr, r.created, today, overdue))
+        .map(|r| summary_of(&r.adr, r.created, today, overdue, scheme))
         .collect();
     sort_summaries(&mut rows, filter.sort);
     Ok(rows)
@@ -88,7 +90,13 @@ pub fn detail(store: &Store, number: u32) -> Result<AdrDetail, QueryError> {
         .and_then(|r| r.history(&path, |p| store.dir_status(p)));
     let (created, last_modified, events) =
         resolve_dates(&adr, &path, store.format() == Format::Frontmatter, hist);
-    let summary = summary_of(&adr, created, today(), store.options().review_overdue_days);
+    let summary = summary_of(
+        &adr,
+        created,
+        today(),
+        store.options().review_overdue_days,
+        store.options().naming,
+    );
     let related = related_links(&adr);
     let history: Vec<TimelineEvent> = events.iter().map(timeline_event).collect();
     Ok(AdrDetail {
@@ -109,13 +117,14 @@ pub fn search(store: &Store, term: &str) -> Result<Vec<AdrSummary>, QueryError> 
     let resolved = load_resolved(store)?;
     let today = today();
     let overdue = store.options().review_overdue_days;
+    let scheme = store.options().naming;
     let rows = resolved
         .iter()
         .filter(|r| {
             let haystack = format!("{} {}", r.adr.title, r.adr.body).to_lowercase();
             haystack.contains(&needle)
         })
-        .map(|r| summary_of(&r.adr, r.created, today, overdue))
+        .map(|r| summary_of(&r.adr, r.created, today, overdue, scheme))
         .collect();
     Ok(rows)
 }
@@ -162,9 +171,10 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
     // ADRs flagged review-due: still Proposed and past their `review_by` date,
     // or aged past the configured staleness threshold.
     let overdue = store.options().review_overdue_days;
+    let scheme = store.options().naming;
     let review_due: Vec<AdrSummary> = resolved
         .iter()
-        .map(|r| summary_of(&r.adr, r.created, today, overdue))
+        .map(|r| summary_of(&r.adr, r.created, today, overdue, scheme))
         .filter(|s| s.review_due)
         .collect();
 
@@ -355,6 +365,7 @@ fn summary_of(
     created: OffsetDateTime,
     today: Date,
     overdue_days: Option<u32>,
+    scheme: NamingScheme,
 ) -> AdrSummary {
     let proposed = adr.status == Status::Proposed;
     let past_deadline = adr.review_by.is_some_and(|rb| rb.get() <= today);
@@ -367,6 +378,7 @@ fn summary_of(
             .number
             .map(|n| n.to_string())
             .unwrap_or_else(|| "????".to_string()),
+        reference: scheme.display(&adr.reference()),
         title: adr.title.clone(),
         status: adr.status,
         created: created.format(&Rfc3339).ok(),
@@ -778,14 +790,15 @@ mod tests {
             .midnight()
             .assume_utc();
 
+        let seq = NamingScheme::Sequential;
         // Aged past the 30-day threshold -> review-due, no deadline needed.
-        assert!(summary_of(&adr, old, today, Some(30)).review_due);
+        assert!(summary_of(&adr, old, today, Some(30), seq).review_due);
         // Age-based flagging disabled (None) and no deadline -> not due.
-        assert!(!summary_of(&adr, old, today, None).review_due);
+        assert!(!summary_of(&adr, old, today, None, seq).review_due);
         // A recent proposal is not stale.
-        assert!(!summary_of(&adr, recent, today, Some(30)).review_due);
+        assert!(!summary_of(&adr, recent, today, Some(30), seq).review_due);
         // Non-proposed ADRs never count, however old.
         adr.status = Status::Accepted;
-        assert!(!summary_of(&adr, old, today, Some(30)).review_due);
+        assert!(!summary_of(&adr, old, today, Some(30), seq).review_due);
     }
 }

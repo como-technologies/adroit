@@ -15,10 +15,15 @@ use crate::adr::Status;
 /// reading the full body.
 #[derive(Debug, Clone, Serialize)]
 pub struct AdrSummary {
-    /// Numeric ADR number (e.g. `6`). `None` if the ADR has no number yet.
+    /// Numeric ADR number (e.g. `6`). `None` for non-numeric naming schemes
+    /// (date/uuid) or an ADR with no number yet.
     pub number: Option<u32>,
     /// Zero-padded display form of the number (e.g. `"0006"`, or `"????"`).
     pub number_display: String,
+    /// The naming scheme's canonical display identifier — `"ADR-0006"` for the
+    /// sequential scheme, the `YYYYMMDD-slug` for date, `"ADR-<short-uuid>"` for
+    /// uuid. The surface-facing identity that works across all schemes.
+    pub reference: String,
     /// Short title describing the decision.
     pub title: String,
     /// Current lifecycle status.

@@ -1664,6 +1664,7 @@ mod tests {
         AdrSummary {
             number: Some(number),
             number_display: format!("{number:04}"),
+            reference: format!("ADR-{number:04}"),
             title: title.to_string(),
             status,
             created: Some(format!("2024-01-{number:02}T00:00:00Z")),
