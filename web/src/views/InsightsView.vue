@@ -43,16 +43,16 @@ useLiveReload(load)
         Insights
       </div>
       <h1 class="mt-0.5 font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-        Relations &amp; trends
+        Trends &amp; relations
       </h1>
     </div>
 
     <div v-if="loading" class="space-y-4">
-      <div class="h-[480px] animate-pulse rounded-2xl bg-slate-200/60 dark:bg-slate-800/50" />
       <div class="grid gap-4 lg:grid-cols-2">
         <div class="h-56 animate-pulse rounded-2xl bg-slate-200/60 dark:bg-slate-800/50" />
         <div class="h-56 animate-pulse rounded-2xl bg-slate-200/60 dark:bg-slate-800/50" />
       </div>
+      <div class="h-[480px] animate-pulse rounded-2xl bg-slate-200/60 dark:bg-slate-800/50" />
     </div>
 
     <div
@@ -63,37 +63,6 @@ useLiveReload(load)
     </div>
 
     <template v-else>
-      <!-- Headline: relations graph -->
-      <div class="card-glass p-5">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
-            Supersession &amp; relations
-          </h2>
-          <div class="flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
-            <span class="inline-flex items-center gap-2">
-              <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="legend-supersedes" /></svg>
-              supersedes
-            </span>
-            <span class="inline-flex items-center gap-2">
-              <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="legend-related" /></svg>
-              related
-            </span>
-            <span class="text-slate-400 dark:text-slate-500">click a node to open the ADR</span>
-          </div>
-        </div>
-
-        <div
-          v-if="graph && graph.nodes.length === 0"
-          class="flex flex-col items-center gap-2 px-6 py-12 text-center"
-        >
-          <Share2 :size="28" class="text-slate-400" />
-          <p class="text-sm text-slate-500 dark:text-slate-400">No ADRs to graph yet.</p>
-        </div>
-        <div v-else-if="graph" class="mt-3">
-          <RelationsGraph :graph="graph" />
-        </div>
-      </div>
-
       <div class="grid gap-4 lg:grid-cols-2">
         <!-- Status breakdown donut -->
         <div class="card-glass p-5">
@@ -129,6 +98,37 @@ useLiveReload(load)
         </p>
         <div class="mt-3">
           <CohortChart :adrs="adrs" />
+        </div>
+      </div>
+
+      <!-- Supersession & relations graph (last) -->
+      <div class="card-glass p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Supersession &amp; relations
+          </h2>
+          <div class="flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
+            <span class="inline-flex items-center gap-2">
+              <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="legend-supersedes" /></svg>
+              supersedes
+            </span>
+            <span class="inline-flex items-center gap-2">
+              <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="legend-related" /></svg>
+              related
+            </span>
+            <span class="text-slate-400 dark:text-slate-500">click a node to open the ADR</span>
+          </div>
+        </div>
+
+        <div
+          v-if="graph && graph.nodes.length === 0"
+          class="flex flex-col items-center gap-2 px-6 py-12 text-center"
+        >
+          <Share2 :size="28" class="text-slate-400" />
+          <p class="text-sm text-slate-500 dark:text-slate-400">No ADRs to graph yet.</p>
+        </div>
+        <div v-else-if="graph" class="mt-3">
+          <RelationsGraph :graph="graph" />
         </div>
       </div>
     </template>

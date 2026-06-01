@@ -6,6 +6,7 @@ import { listAdrs, search, type AdrSummary, type Status } from '@/api'
 import { highlight, shortDate } from '@/util'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
+import SelectMenu from '@/components/SelectMenu.vue'
 
 const route = useRoute()
 
@@ -109,13 +110,7 @@ const reviewDueCount = computed(() => adrs.value.filter((a) => a.review_due).len
         <span class="mb-1 block font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
           Sort
         </span>
-        <select
-          v-model="sort"
-          :disabled="searching"
-          class="rounded-lg border border-slate-300 bg-white/80 px-3 py-1.5 text-sm text-slate-800 shadow-sm disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-100"
-        >
-          <option v-for="s in SORTS" :key="s.value" :value="s.value">{{ s.label }}</option>
-        </select>
+        <SelectMenu v-model="sort" :options="SORTS" :disabled="searching" aria-label="Sort order" />
       </label>
     </div>
 
