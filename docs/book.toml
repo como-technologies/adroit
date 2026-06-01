@@ -5,8 +5,8 @@ language = "en"
 src = "src"
 
 [build]
-build-dir = "../target/book"
+build-dir = "book"
 
 [output.html]
 git-repository-url = "https://github.com/como-technologies/adroit"
-edit-url-template = "https://github.com/como-technologies/adroit/edit/main/book/{path}"
+edit-url-template = "https://github.com/como-technologies/adroit/edit/main/docs/src/{path}"

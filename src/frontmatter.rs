@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-use crate::adr::{AdrId, Created, Number, Status};
+use crate::adr::{AdrId, Created, Number, ReviewBy, Status};
 
 /// The YAML frontmatter fields persisted to disk.
 ///
 /// Separate from `Adr` because the core model has runtime-only fields
 /// (`git_sha`, `body`) that don't belong in the YAML block.
+///
+/// The supersession and review fields are optional and only serialized when
+/// present (`skip_serializing_if`), so existing files stay clean and legacy
+/// files without them still parse (`#[serde(default)]`).
 #[derive(Debug, Serialize, Deserialize)]
 struct Frontmatter {
     id: AdrId,
@@ -13,6 +17,12 @@ struct Frontmatter {
     title: String,
     status: Status,
     created: Created,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supersedes: Option<Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    superseded_by: Option<Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_by: Option<ReviewBy>,
 }
 
 /// Render an ADR as a frontmatter + body string for writing to disk.
@@ -29,6 +39,9 @@ pub fn serialize(adr: &crate::adr::Adr) -> anyhow::Result<String> {
         title: adr.title.clone(),
         status: adr.status,
         created: adr.created,
+        supersedes: adr.supersedes,
+        superseded_by: adr.superseded_by,
+        review_by: adr.review_by,
     };
 
     let yaml = serde_yaml_ng::to_string(&fm)?;
@@ -57,6 +70,9 @@ pub fn deserialize(input: &str) -> anyhow::Result<crate::adr::Adr> {
         created: fm.created,
         body: body.trim_end().to_owned(),
         git_sha: None,
+        supersedes: fm.supersedes,
+        superseded_by: fm.superseded_by,
+        review_by: fm.review_by,
     })
 }
 
@@ -141,6 +157,7 @@ mod tests {
         for status in [
             Status::Proposed,
             Status::Accepted,
+            Status::Rejected,
             Status::Deprecated,
             Status::Superseded,
         ] {
@@ -159,5 +176,39 @@ mod tests {
         let text = serialize(&adr).unwrap();
         let parsed = deserialize(&text).unwrap();
         assert!(parsed.body.is_empty());
+    }
+
+    #[test]
+    fn supersession_fields_round_trip() {
+        let mut adr = sample_adr();
+        adr.supersedes = Some(Number::new(2));
+        adr.superseded_by = Some(Number::new(9));
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("supersedes:"));
+        assert!(text.contains("superseded_by:"));
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(parsed.supersedes, Some(Number::new(2)));
+        assert_eq!(parsed.superseded_by, Some(Number::new(9)));
+    }
+
+    #[test]
+    fn supersession_fields_absent_when_none() {
+        let adr = sample_adr();
+        let text = serialize(&adr).unwrap();
+        // Clean files: optional fields are not emitted when unset.
+        assert!(!text.contains("supersedes:"));
+        assert!(!text.contains("superseded_by:"));
+        assert!(!text.contains("review_by:"));
+    }
+
+    #[test]
+    fn review_by_round_trips() {
+        use crate::adr::ReviewBy;
+        let mut adr = sample_adr();
+        adr.review_by = Some("2026-07-01".parse::<ReviewBy>().unwrap());
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("review_by: 2026-07-01"));
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(parsed.review_by, adr.review_by);
     }
 }

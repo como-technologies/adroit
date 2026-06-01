@@ -1,21 +1,146 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::adr::Status;
+use crate::format::Format;
+
+/// On-disk directory layout for a store.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum Layout {
+    /// ADRs grouped into per-status subdirectories (status by directory). Default.
+    #[default]
+    ByStatus,
+    /// All ADRs in one flat directory (the original adroit layout).
+    Flat,
+}
+
+/// Color theme for the TUI markdown preview.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum MarkdownTheme {
+    /// 16-color ANSI palette — respects the user's terminal colors. Default.
+    #[default]
+    Default,
+    /// Gruvbox (true-color), matching the house mdBook/doxygen theme.
+    Gruvbox,
+}
+
 /// Application configuration, persisted as YAML.
-#[derive(Debug, Default, Serialize, Deserialize)]
+///
+/// New keys all carry serde defaults so older config files keep loading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// ADR directory path. Supports `~` and `$ENV_VAR` expansion.
     /// Relative paths resolve from the XDG data directory
     /// (typically `~/.local/share/adroit/`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
 
     /// Preferred editor command (e.g. `"vim"`, `"code --wait"`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+
+    /// On-disk serialization profile (default: markdown).
+    pub format: Format,
+
+    /// On-disk directory layout (default: by_status).
+    pub layout: Layout,
+
+    /// Map from status to the directory name used in `by_status` layout.
+    /// Defaults to lowercase status names.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub status_dirs: BTreeMap<Status, String>,
+
+    /// Template used when scaffolding new ADRs (default: `madr`).
+    pub default_template: String,
+
+    /// Directory of custom named templates (`<name>.md`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub templates_dir: Option<PathBuf>,
+
+    /// Status assigned to newly created ADRs (default: Proposed).
+    pub default_status: Status,
+
+    /// Open `$EDITOR` automatically after `new` (default: true).
+    pub open_on_new: bool,
+
+    /// Path to a SUMMARY.md to regenerate on `index` (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_path: Option<PathBuf>,
+
+    /// Default review period length in business days for `review` (default: 3).
+    pub review_days: u32,
+
+    /// Default quorum (approvals required) for `review` (default: 3).
+    pub review_quorum: u32,
+
+    /// Color theme for the TUI markdown preview (default: `default`/ANSI).
+    pub tui_theme: MarkdownTheme,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            editor: None,
+            format: Format::default(),
+            layout: Layout::default(),
+            status_dirs: BTreeMap::new(),
+            default_template: "madr".to_string(),
+            default_status: Status::default(),
+            open_on_new: true,
+            templates_dir: None,
+            summary_path: None,
+            review_days: 3,
+            review_quorum: 3,
+            tui_theme: MarkdownTheme::default(),
+        }
+    }
+}
+
+impl Config {
+    /// Return the directory name for a status, honoring `status_dirs`
+    /// overrides and falling back to the lowercase status name.
+    pub fn dir_for(&self, status: Status) -> String {
+        self.status_dirs
+            .get(&status)
+            .cloned()
+            .unwrap_or_else(|| status.to_string().to_lowercase())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -346,11 +471,52 @@ mod tests {
         let config = Config {
             dir: Some(PathBuf::from("my/adrs")),
             editor: Some("vim".to_string()),
+            ..Config::default()
         };
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let parsed: Config = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(parsed.dir, config.dir);
         assert_eq!(parsed.editor, config.editor);
+        assert_eq!(parsed.format, config.format);
+        assert_eq!(parsed.layout, config.layout);
+    }
+
+    #[test]
+    fn defaults_are_markdown_by_status() {
+        let config = Config::default();
+        assert_eq!(config.format, Format::Markdown);
+        assert_eq!(config.layout, Layout::ByStatus);
+        assert_eq!(config.default_template, "madr");
+        assert_eq!(config.default_status, Status::Proposed);
+        assert!(config.open_on_new);
+    }
+
+    #[test]
+    fn dir_for_status_defaults_to_lowercase() {
+        let config = Config::default();
+        assert_eq!(config.dir_for(Status::Proposed), "proposed");
+        assert_eq!(config.dir_for(Status::Superseded), "superseded");
+        assert_eq!(config.dir_for(Status::Rejected), "rejected");
+    }
+
+    #[test]
+    fn missing_keys_use_defaults() {
+        // A legacy config with only dir/editor must still load.
+        let yaml = "dir: ~/old-adrs\neditor: nano\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(config.format, Format::Markdown);
+        assert_eq!(config.layout, Layout::ByStatus);
+        assert_eq!(config.default_template, "madr");
+        // Review keys absent from a legacy config fall back to defaults.
+        assert_eq!(config.review_days, 3);
+        assert_eq!(config.review_quorum, 3);
+    }
+
+    #[test]
+    fn review_defaults() {
+        let config = Config::default();
+        assert_eq!(config.review_days, 3);
+        assert_eq!(config.review_quorum, 3);
     }
 
     #[test]

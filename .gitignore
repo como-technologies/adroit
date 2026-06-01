@@ -1,2 +1,21 @@
 /target
+
+# mdBook build output (source lives in docs/; build-dir = "book" -> docs/book)
+/docs/book
+
+# Vue web dashboard (feature `web`)
+/web/node_modules
+# `web/dist` is a build artifact embedded by rust-embed at compile time.
+# It is NOT committed; run `just web-build` to (re)generate it before
+# `cargo build --features web`. A placeholder keeps the embed dir present.
+/web/dist/*
+!/web/dist/.gitkeep
+# TypeScript / vue-tsc incremental + emitted artifacts (not committed).
+/web/*.tsbuildinfo
+/web/vite.config.d.ts
+/web/vite.config.js
+
+# Local dev environment file (copy .env.example -> .env). The example IS tracked.
+/.env
+
 .claude/settings.local.json

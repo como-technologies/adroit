@@ -16,4 +16,13 @@ adroit gives you a terminal-native interface for the full ADR lifecycle:
 - **Browse** and search your decision log in a rich, interactive TUI
 - **Update** status as decisions are superseded, deprecated, or accepted
 - **Link** related decisions together to build a navigable decision graph
-- **Export** to Markdown for integration with your existing docs pipeline
+- **Track** review deadlines and keep your `SUMMARY.md` index in sync
+
+## Surfaces
+
+adroit is one core library behind three surfaces: the **CLI** for fast capture
+and scripting, an interactive **TUI** (`tui` feature) for browsing, triage, and
+in-terminal editing, and a read-only **web dashboard** (`adroit serve`, `web`
+feature) that browses/searches the repo, shows stats and a supersession graph,
+and auto live-reloads when ADR files change on disk. See
+[Web Dashboard](./usage/web.md).
