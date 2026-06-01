@@ -21,6 +21,10 @@ stages:
   - review
 
 # --- Gate every change: structure + index must stay consistent. ------------
+# NOTE: to catch ADR-number collisions BETWEEN branches (two MRs each adding the
+# same NNNN), `adroit check` must run on the *merged* result, not the source
+# branch alone. Enable "Merged results pipelines" (and ideally Merge trains) in
+# Settings → Merge requests. The `main` rule below is the post-merge safety net.
 adr:validate:
   stage: validate
   rules:
