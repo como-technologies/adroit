@@ -2,8 +2,14 @@
 
 adroit ships a **read-only** web dashboard for exploring an ADR repo in the
 browser: browse and read ADRs (with cross-links), full-text search, a stats
-dashboard, and a supersession graph. Authoring stays in the CLI and TUI — the
-web surface never writes.
+dashboard, and an interactive **relationship graph**. Authoring stays in the CLI
+and TUI — the web surface never writes.
+
+The **Insights** page renders a force-directed "wiki-graph" of the repo: each
+ADR is a status-colored node, and relationships are colored edges — supersession,
+the typed links (`depends_on` / `refines` / `relates_to`), and plain body links.
+Drag nodes to arrange, scroll to zoom/pan, toggle edge kinds in the legend, and
+click a node to open that ADR.
 
 The dashboard is built behind the `web` Cargo feature.
 
@@ -55,5 +61,5 @@ directly:
 | `GET /api/adrs/:number` | one ADR with rendered HTML body and links |
 | `GET /api/search?q=` | summaries matching a full-text query |
 | `GET /api/stats` | counts by status, ages, review-due, created-over-time |
-| `GET /api/graph` | nodes + edges for the supersession graph |
+| `GET /api/graph` | nodes + typed edges for the relationship graph |
 | `GET /api/events` | SSE stream of live-reload change events |

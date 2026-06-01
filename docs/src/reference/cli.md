@@ -137,6 +137,32 @@ adroit set-review 3 --clear      # remove the deadline
 |---|---|
 | `--clear` | Remove the review deadline instead of setting one |
 
+### `adroit link <ID> <--relates-to|--depends-on|--refines> <TARGET>`
+
+Add (or remove with `--remove`) a **typed relational link** from `<ID>` to
+`<TARGET>` (both addressed as in [`show`](#adroit-show-id)). Exactly one of the
+three kind flags names the target. The link is recorded in `<ID>`'s frontmatter,
+listed by `adroit show`, and drawn as a distinct edge in the dashboard's
+relationship graph. Adding validates that the target exists.
+
+This is a **frontmatter-profile** feature; under the markdown profile it errors
+with a hint to run `adroit migrate --format frontmatter`. See
+[ADR Format → Relationships](./adr-format.md#relationships).
+
+```sh
+adroit link 6 --depends-on 2          # ADR-0006 depends on ADR-0002
+adroit link 6 --relates-to 4
+adroit link 6 --refines 3
+adroit link 6 --depends-on 2 --remove
+```
+
+| Flag | Description |
+|---|---|
+| `--relates-to <TARGET>` | A non-directional related link |
+| `--depends-on <TARGET>` | This ADR depends on the target |
+| `--refines <TARGET>` | This ADR refines / elaborates the target |
+| `--remove` | Remove the link instead of adding it |
+
 ### `adroit search <TERM>`
 
 Case-insensitive search across ADR titles and bodies (recursive). Prints number, status, and title for each match.

@@ -48,6 +48,16 @@ adroit status 1 accepted
 In by-status mode this moves the file to the matching directory and rewrites
 the `## Status` section, leaving the rest of the file byte-identical.
 
+> **Don't want files moving between directories on every status change?** The
+> default `by_status` layout encodes status as the directory. If that churn is
+> noisy for you, use a layout that keeps each ADR put and records status *in the
+> file* instead: `--layout flat` (one directory) or `--layout by_category`
+> (directory = area/category, status in `## Status`). Cross-ADR links survive
+> moves regardless — `adroit relink` (run automatically on a status change)
+> retargets them — and ADRs are addressable by number, slug, uuid, or
+> `category/NNNN`, so references don't go stale. See
+> [Naming schemes](../reference/adr-format.md#naming-schemes).
+
 ## Superseding a decision
 
 ```sh
@@ -56,6 +66,25 @@ adroit supersede 6 2   # ADR-0006 supersedes ADR-0002
 
 Moves the old ADR to `superseded/`, links it forward to the new one, and adds a
 reciprocal note to the new ADR.
+
+## Relating decisions (typed links)
+
+Beyond supersession, ADRs can carry **typed relational links** to other ADRs —
+`relates_to`, `depends_on`, and `refines`:
+
+```sh
+adroit link 6 --depends-on 2     # ADR-0006 depends on ADR-0002
+adroit link 6 --relates-to 4
+adroit link 6 --refines 3
+adroit link 6 --depends-on 2 --remove
+```
+
+The link is recorded in the source ADR's frontmatter, shows in `adroit show`,
+and appears as a distinct, colored edge in the dashboard's
+[relationship graph](./web.md). Typed links are a **frontmatter-profile**
+feature (they're structured fields); under the markdown profile `adroit link`
+asks you to switch with `adroit migrate --format frontmatter`. The targets use
+the same identifiers as everything else (number / slug / uuid / `category/NNNN`).
 
 ## Setting a review deadline
 

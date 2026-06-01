@@ -154,11 +154,16 @@ created: 2026-04-15T10:30:00Z
 | `title` | string | Short title describing the decision |
 | `status` | enum | One of: Proposed, Accepted, Rejected, Deprecated, Superseded |
 | `created` | RFC 3339 | UTC timestamp of creation |
-| `supersedes` | integer | *(optional)* Number of an older ADR this one supersedes |
-| `superseded_by` | integer | *(optional)* Number of the newer ADR that supersedes this one |
+| `supersedes` | ref | *(optional)* An older ADR this one supersedes (a number or a slug) |
+| `superseded_by` | ref | *(optional)* The newer ADR that supersedes this one |
+| `relates_to` | ref list | *(optional)* Typed relational links — see [Relationships](#relationships) |
+| `depends_on` | ref list | *(optional)* |
+| `refines` | ref list | *(optional)* |
 | `review_by` | `YYYY-MM-DD` | *(optional)* Review deadline; flags review-due when past for a Proposed ADR |
 
-Optional fields are only written when set, so existing files stay clean.
+Optional fields are only written when set, so existing files stay clean. A
+*ref* is whatever identifies the target under the active naming scheme — a bare
+number (`2`) for `sequential`, or a slug string (`20260601-adopt-x`) otherwise.
 
 ## Status values
 
@@ -167,6 +172,27 @@ Optional fields are only written when set, so existing files stay clean.
 - **Rejected** — considered but not adopted, kept for historical context
 - **Deprecated** — no longer recommended but not replaced
 - **Superseded** — replaced by a newer ADR (linked in the status line)
+
+## Relationships
+
+ADRs relate to one another in a few ways, all of which feed the dashboard's
+[relationship graph](../usage/web.md) (each relationship is a distinct,
+colored edge) and `adroit show`:
+
+- **Supersession** — `adroit supersede <new> <old>`. Persisted in both profiles
+  (the `## Status` note in markdown; `supersedes` / `superseded_by` in
+  frontmatter). Directed: newer → older.
+- **Typed relational links** — `relates_to`, `depends_on`, `refines`, set with
+  [`adroit link`](./cli.md).
+  A **frontmatter-profile** feature (structured ref-list fields). `depends_on`
+  and `refines` are directed; `relates_to` is non-directional.
+- **Body links** — any relative markdown link from one ADR's body to another
+  (`[…](../accepted/0002-x.md)`) shows as a generic *related* edge. These work in
+  both profiles and are kept canonical by `adroit relink`.
+
+When more than one relationship exists between the same pair, the most specific
+wins (supersession > typed link > plain body link), so the graph shows one edge
+per pair.
 
 ## Naming schemes
 
