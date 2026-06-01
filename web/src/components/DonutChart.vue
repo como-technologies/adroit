@@ -1,21 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Status, StatusCount } from '@/api'
+import { statusColor as fill } from '@/statusColor'
 
 // Theme-aware donut of the status mix, rendered as hand-rolled inline SVG (no
 // chart dependency — matches the relations-graph style). Each slice is an arc
 // path; the center shows the total. A legend lists each status with its count.
+// Slice/legend colors come from the shared status palette (CSS vars).
 const props = defineProps<{ data: StatusCount[] }>()
-
-// Mid-tone status fills — readable on both light and dark surfaces. Matches the
-// relations-graph node palette and the StatusPill / dashboard color language.
-const STATUS_FILL: Record<Status, string> = {
-  Proposed: '#fbbf24',
-  Accepted: '#34d399',
-  Rejected: '#f87171',
-  Deprecated: '#94a3b8',
-  Superseded: '#a78bfa',
-}
 
 const SIZE = 200
 const CENTER = SIZE / 2
@@ -67,7 +59,6 @@ const slices = computed<Slice[]>(() => {
   })
 })
 
-const fill = (status: Status) => STATUS_FILL[status]
 const pct = (count: number) => (total.value ? Math.round((count / total.value) * 100) : 0)
 </script>
 
@@ -79,7 +70,7 @@ const pct = (count: number) => (total.value ? Math.round((count / total.value) *
           v-for="s in slices"
           :key="s.status"
           :d="s.path"
-          :fill="fill(s.status)"
+          :style="{ fill: fill(s.status) }"
           class="slice"
         >
           <title>{{ s.status }}: {{ s.count }} ({{ pct(s.count) }}%)</title>

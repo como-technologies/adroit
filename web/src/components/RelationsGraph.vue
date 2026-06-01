@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import type { Graph, Status } from '@/api'
+import { statusColor } from '@/statusColor'
 
 // Lightweight self-contained SVG graph (circular layout) — no external graph
 // library. Nodes are placed on a circle; edges are drawn as lines/arrows;
@@ -68,15 +69,6 @@ const edges = computed(() =>
     .filter((e): e is { from: Placed; to: Placed; kind: 'supersedes' | 'related' } => e !== null),
 )
 
-// Mid-tone status fills — readable on both light and dark surfaces.
-const statusFill: Record<Status, string> = {
-  Proposed: '#fbbf24',
-  Accepted: '#34d399',
-  Rejected: '#f87171',
-  Deprecated: '#94a3b8',
-  Superseded: '#a78bfa',
-}
-
 function truncate(s: string, n = 18): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
@@ -114,7 +106,7 @@ function open(p: Placed) {
     />
 
     <g v-for="(p, i) in placed" :key="`n${i}`" class="node" @click="open(p)">
-      <circle :cx="p.x" :cy="p.y" r="22" :fill="statusFill[p.status]" class="node-circle" />
+      <circle :cx="p.x" :cy="p.y" r="22" :style="{ fill: statusColor(p.status) }" class="node-circle" />
       <text :x="p.x" :y="p.y" class="node-num">
         {{ p.number !== null ? String(p.number).padStart(4, '0') : '?' }}
       </text>
@@ -138,7 +130,7 @@ function open(p: Placed) {
 }
 /* Supersedes: solid green (a decision was replaced by a newer one). */
 .edge.supersedes {
-  stroke: #10b981;
+  stroke: var(--ad-edge-supersedes);
 }
 /* Related: dashed, muted grey. */
 .edge.related {
@@ -147,7 +139,7 @@ function open(p: Placed) {
   opacity: 0.45;
 }
 .arrow-head {
-  fill: #10b981;
+  fill: var(--ad-edge-supersedes);
 }
 
 /* Nodes */
@@ -168,7 +160,7 @@ function open(p: Placed) {
   dominant-baseline: central;
   font-size: 0.62rem;
   font-weight: 700;
-  fill: #0f172a;
+  fill: var(--ad-status-fg);
   pointer-events: none;
 }
 .node-label {

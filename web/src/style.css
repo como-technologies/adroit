@@ -42,6 +42,19 @@
   /* Hero-gradient stops — a faint indigo→violet brand wash for page headers. */
   --ad-grad-1: #eef2ff;
   --ad-grad-2: #ede9fe;
+
+  /* Status palette — the single source of truth for status hues, shared by the
+     relations graph, donut, and cohort charts. Mid-tone so they read on both
+     light and dark surfaces (hence no `.dark` override). */
+  --ad-status-proposed: #fbbf24; /* amber-400 */
+  --ad-status-accepted: #34d399; /* emerald-400 */
+  --ad-status-rejected: #f87171; /* red-400 */
+  --ad-status-deprecated: #94a3b8; /* slate-400 */
+  --ad-status-superseded: #a78bfa; /* violet-400 */
+  /* Dark text drawn on a status-colored fill (e.g. node numbers on bubbles). */
+  --ad-status-fg: #0f172a; /* slate-900 */
+  /* Relations-graph supersession edge — solid green ("replaced by"). */
+  --ad-edge-supersedes: #10b981; /* emerald-500 */
 }
 
 .dark {

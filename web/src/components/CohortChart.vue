@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AdrSummary, Status } from '@/api'
+import { statusColor as fill } from '@/statusColor'
 
 // Status by cohort: stacked columns, one per created-month, segmented by the
 // ADR's *current* status. Derived client-side from listAdrs() because the API's
@@ -9,15 +10,9 @@ import type { AdrSummary, Status } from '@/api'
 // ADRs with a null `created` are grouped under an "undated" column at the end.
 const props = defineProps<{ adrs: AdrSummary[] }>()
 
-// Stable status order (bottom→top of each column) + matching mid-tone fills.
+// Stable status order (bottom→top of each column); fills come from the shared
+// status palette (CSS vars).
 const ORDER: Status[] = ['Accepted', 'Proposed', 'Superseded', 'Rejected', 'Deprecated']
-const STATUS_FILL: Record<Status, string> = {
-  Proposed: '#fbbf24',
-  Accepted: '#34d399',
-  Rejected: '#f87171',
-  Deprecated: '#94a3b8',
-  Superseded: '#a78bfa',
-}
 
 const UNDATED = 'undated'
 
@@ -100,7 +95,6 @@ const columns = computed(() => {
 })
 
 const baseline = PAD.top + plotH
-const fill = (status: Status) => STATUS_FILL[status]
 const labelEvery = computed(() => Math.max(1, Math.ceil(cohorts.value.length / 9)))
 </script>
 
@@ -124,7 +118,7 @@ const labelEvery = computed(() => Math.max(1, Math.ceil(cohorts.value.length / 9
             :y="seg.y"
             :width="seg.w"
             :height="seg.h"
-            :fill="fill(seg.status)"
+            :style="{ fill: fill(seg.status) }"
             class="seg"
           >
             <title>{{ col.cohort.label }} · {{ seg.status }}: {{ seg.count }}</title>
