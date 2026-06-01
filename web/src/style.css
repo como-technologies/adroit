@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* adroit web — design system.
+   Shares the look-and-feel of the sibling rewards-bridge dashboard: semantic
+   color tokenization, glassmorphic depth, a subtle brand-gradient hero, and
+   a dark-mode-first treatment toggled by the `.dark` class on <html>. */
+
+@theme {
+  /* Brand scale — indigo→violet, the shared house palette. Drives bg-brand-*,
+     text-brand-*, border-brand-*, ring-brand-* utilities. */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Dark mode is class-based (set on <html> by the useTheme composable) rather
+   than the v4 default of prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic tokens — values flip between light and dark themes. */
+:root {
+  --ad-bg: #f8fafc; /* slate-50 */
+  --ad-bg-elevated: rgba(255, 255, 255, 0.85);
+  --ad-bg-elevated-solid: #ffffff;
+  --ad-text: #0f172a; /* slate-900 */
+  --ad-text-muted: #64748b; /* slate-500 */
+  --ad-border: rgba(148, 163, 184, 0.25); /* slate-400 @ 25% */
+  --ad-shadow: 0 8px 32px rgba(15, 23, 42, 0.08);
+  --ad-shadow-strong: 0 12px 40px rgba(15, 23, 42, 0.12);
+
+  /* Hero-gradient stops — a faint indigo→violet brand wash for page headers. */
+  --ad-grad-1: #eef2ff;
+  --ad-grad-2: #ede9fe;
+}
+
+.dark {
+  --ad-bg: #020617; /* slate-950 */
+  --ad-bg-elevated: rgba(15, 23, 42, 0.7);
+  --ad-bg-elevated-solid: #0f172a;
+  --ad-text: #f1f5f9; /* slate-100 */
+  --ad-text-muted: #94a3b8; /* slate-400 */
+  --ad-border: rgba(148, 163, 184, 0.18);
+  --ad-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --ad-shadow-strong: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  --ad-grad-1: #1e1b4b;
+  --ad-grad-2: #4c1d95;
+}
+
+html,
+body,
+#app {
+  min-height: 100vh;
+  background: var(--ad-bg);
+  color: var(--ad-text);
+  transition: background-color 220ms ease, color 220ms ease;
+}
+
+/* Tabular numerals for aligned numeric columns (counts, dates, ages). */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Glassmorphic card — semi-transparent bg + backdrop blur + hairline border +
+   soft shadow. The primary surface for tiles, panels, and list containers. */
+.card-glass {
+  background: var(--ad-bg-elevated);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--ad-border);
+  border-radius: 14px;
+  box-shadow: var(--ad-shadow);
+  transition: box-shadow 200ms ease, transform 200ms ease, border-color 200ms ease;
+}
+
+/* Static brand-tinted wash for page-header strips (calm; no motion). */
+.hero-gradient {
+  background-image: linear-gradient(135deg, var(--ad-grad-1), var(--ad-grad-2));
+}
+
+/* Spring-ish tactile feedback for primary buttons. */
+.btn-spring {
+  transition: transform 120ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 120ms ease;
+}
+.btn-spring:active {
+  transform: scale(0.96);
+}
+
+/* Consistent focus ring across interactive elements (keyboard a11y). */
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Search-hit highlight (used in v-html'd result titles). Global + high-contrast
+   in both themes — explicit text color (never `inherit`) so it can't wash out
+   against the title text or the surface. */
+mark {
+  background-color: var(--color-brand-200);
+  color: var(--color-brand-900);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+.dark mark {
+  background-color: var(--color-brand-400);
+  color: #0b1220;
+}
+
+/* Rendered ADR body links — brand-tinted, no underline until hovered, and only
+   the individually hovered link underlines. (Tailwind's `hover:prose-a:*`
+   attaches the hover to the whole prose block, underlining every link at once.) */
+.prose a {
+  text-decoration: none;
+}
+.prose a:hover {
+  text-decoration: underline;
+}
