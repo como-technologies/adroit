@@ -168,13 +168,15 @@ left stale by file moves done outside adroit (and as a CI fix step). Status
 changes (`status` / `supersede`) already relink automatically, so on a tidy repo
 this is a no-op (`Links already canonical — nothing to relink.`). Idempotent;
 links by external URL, anchor, or to non-ADR files are left untouched; ambiguous
-duplicate numbers are skipped (and flagged by `check`).
+duplicate numbers are skipped (and flagged by `check`). Pass `--dry-run` to list
+the files/links that would change without writing anything.
 
 ```sh
-adroit relink
+adroit relink              # rewrite stale links in place
+adroit relink --dry-run    # show what would change, write nothing
 ```
 
-### `adroit migrate [--yes]`
+### `adroit migrate [--dry-run] [--yes]`
 
 Convert the repo on disk to the **configured** layout/format. The source profile
 is auto-detected; a layout change moves files between flat / by-status dirs
@@ -182,7 +184,9 @@ is auto-detected; a layout change moves files between flat / by-status dirs
 cross-ADR links are fixed afterward (via `relink`). Filenames are kept as-is.
 
 Set the *target* with `--layout` / `--format` (or config / `.env`), then run
-migrate. It prints a **preview** by default; pass `--yes` to apply.
+migrate. It prints a **preview** by default (or with an explicit `--dry-run`);
+pass `--yes` to apply. `--dry-run` overrides `--yes`, so a preview is never
+destructive.
 
 ```sh
 # Convert a by-status repo to flat:

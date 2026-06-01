@@ -783,6 +783,62 @@ fn migrate_markdown_to_frontmatter() {
         .stdout(predicate::str::contains("One"));
 }
 
+#[test]
+fn migrate_dry_run_does_not_apply() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "One", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["--layout", "flat", "migrate", "--dry-run", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+    // --dry-run wins over --yes: nothing moved.
+    assert!(dir.path().join("proposed/0001-one.md").exists());
+    assert!(!dir.path().join("0001-one.md").exists());
+}
+
+#[test]
+fn relink_dry_run_previews_without_writing() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    let accepted = dir.path().join("accepted");
+    fs::create_dir_all(&proposed).unwrap();
+    fs::create_dir_all(&accepted).unwrap();
+    let a = proposed.join("0001-a.md");
+    fs::write(
+        &a,
+        "# ADR-0001: A\n\n## Status\n\nProposed\n\nSee [ADR-0002](../proposed/0002-b.md).\n",
+    )
+    .unwrap();
+    fs::write(
+        accepted.join("0002-b.md"),
+        "# ADR-0002: B\n\n## Status\n\nAccepted\n",
+    )
+    .unwrap();
+    let before = fs::read_to_string(&a).unwrap();
+
+    adroit(&dir)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would relink"));
+    assert_eq!(
+        fs::read_to_string(&a).unwrap(),
+        before,
+        "dry run must not write"
+    );
+
+    adroit(&dir).arg("relink").assert().success();
+    assert!(
+        fs::read_to_string(&a)
+            .unwrap()
+            .contains("../accepted/0002-b.md")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Legacy flat + frontmatter profile (still supported)
 // ---------------------------------------------------------------------------

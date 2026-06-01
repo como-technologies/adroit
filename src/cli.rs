@@ -129,7 +129,11 @@ pub enum Command {
     /// Fixes links left stale by status-change file moves (run by hand or in
     /// CI). Status changes already relink automatically; this repairs a repo
     /// edited outside adroit. Idempotent.
-    Relink,
+    Relink {
+        /// Show which files/links would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Convert the repo on disk to the configured layout/format.
     ///
     /// The source profile is auto-detected; files are moved between
@@ -140,6 +144,9 @@ pub enum Command {
         /// Apply the migration (default: preview only).
         #[arg(long)]
         yes: bool,
+        /// Show what would change without writing (overrides `--yes`).
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Regenerate the ADR section of SUMMARY.md (or print it to stdout).
     Index {

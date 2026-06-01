@@ -103,8 +103,8 @@ fn main() -> Result<()> {
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check) => cmd_check(&store)?,
-        Some(Command::Relink) => cmd_relink(&store)?,
-        Some(Command::Migrate { yes }) => cmd_migrate(&store, yes)?,
+        Some(Command::Relink { dry_run }) => cmd_relink(&store, dry_run)?,
+        Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { number }) => {
             let number = Number::new(number);
@@ -423,8 +423,10 @@ fn cmd_index_check(
 }
 
 /// `adroit migrate`: convert the repo to the configured layout/format. Prints a
-/// preview by default; `--yes` applies it.
-fn cmd_migrate(store: &Store, yes: bool) -> Result<()> {
+/// preview by default (or with `--dry-run`); `--yes` applies it.
+fn cmd_migrate(store: &Store, yes: bool, dry_run: bool) -> Result<()> {
+    // `--dry-run` always wins over `--yes`, so a preview is never destructive.
+    let apply = yes && !dry_run;
     let plan = store.migrate(false)?;
     if plan.is_noop() {
         println!("Already in the configured layout/format — nothing to migrate.");
@@ -440,8 +442,9 @@ fn cmd_migrate(store: &Store, yes: bool) -> Result<()> {
     for (from, to) in &plan.moves {
         println!("  {} -> {}", from.display(), to.display());
     }
-    if !yes {
-        println!("\nPreview only — re-run with `--yes` to apply.");
+    if !apply {
+        let label = if dry_run { "Dry run" } else { "Preview only" };
+        println!("\n{label} — re-run with `--yes` to apply.");
         return Ok(());
     }
     let done = store.migrate(true)?;
@@ -453,26 +456,34 @@ fn cmd_migrate(store: &Store, yes: bool) -> Result<()> {
 }
 
 /// `adroit relink`: rewrite cross-ADR relative links to each ADR's current
-/// location. Repairs links left stale by file moves; idempotent.
-fn cmd_relink(store: &Store) -> Result<()> {
-    let r = store.relink()?;
+/// location. Repairs links left stale by file moves; idempotent. `--dry-run`
+/// reports what would change without writing.
+fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
+    let r = store.relink(!dry_run)?;
     if r.files_changed == 0 {
         println!("Links already canonical — nothing to relink.");
+        return Ok(());
+    }
+    let verb = if dry_run { "Would relink" } else { "Relinked" };
+    let links = if r.links_rewritten == 1 {
+        "link"
     } else {
-        let links = if r.links_rewritten == 1 {
-            "link"
-        } else {
-            "links"
-        };
-        let files = if r.files_changed == 1 {
-            "file"
-        } else {
-            "files"
-        };
-        println!(
-            "Relinked {} {links} across {} {files}.",
-            r.links_rewritten, r.files_changed
-        );
+        "links"
+    };
+    let files = if r.files_changed == 1 {
+        "file"
+    } else {
+        "files"
+    };
+    println!(
+        "{verb} {} {links} across {} {files}:",
+        r.links_rewritten, r.files_changed
+    );
+    for f in &r.changed_files {
+        println!("  {}", f.display());
+    }
+    if dry_run {
+        println!("\nDry run — no files written. Re-run without `--dry-run` to apply.");
     }
     Ok(())
 }

@@ -21,12 +21,14 @@ pub enum StoreError {
 }
 
 /// Outcome of a [`Store::relink`] pass.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RelinkReport {
-    /// Number of files whose content was rewritten.
+    /// Number of files whose content was (or would be) rewritten.
     pub files_changed: usize,
     /// Total cross-ADR links rewritten across those files.
     pub links_rewritten: usize,
+    /// Files (relative to the store root) that changed — for dry-run display.
+    pub changed_files: Vec<PathBuf>,
 }
 
 /// What an ADR directory looks like on disk, inferred from the files present
@@ -312,7 +314,10 @@ impl Store {
     /// byte-identical and not rewritten, so calling this after a status-change
     /// move only touches the links that move actually invalidated. Duplicate
     /// ADR numbers are skipped (ambiguous — surfaced by `adroit check`).
-    pub fn relink(&self) -> Result<RelinkReport, StoreError> {
+    ///
+    /// With `apply == false` nothing is written — the returned report describes
+    /// what *would* change (for `adroit relink --dry-run`).
+    pub fn relink(&self, apply: bool) -> Result<RelinkReport, StoreError> {
         let entries = self.list_with_paths()?;
         // Count numbers so duplicates can be skipped (can't disambiguate them).
         let mut seen: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
@@ -338,9 +343,12 @@ impl Store {
             let (rewritten, changed) =
                 crate::links::rewrite_links(&original, dir, |n| by_number.get(&n).cloned());
             if changed > 0 && rewritten != original {
-                std::fs::write(path, &rewritten)?;
+                if apply {
+                    std::fs::write(path, &rewritten)?;
+                }
                 report.files_changed += 1;
                 report.links_rewritten += changed;
+                report.changed_files.push(rel_to(&self.root, path));
             }
         }
         Ok(report)
@@ -493,7 +501,7 @@ impl Store {
             }
         }
         report.applied = true;
-        report.links_rewritten = self.relink()?.links_rewritten;
+        report.links_rewritten = self.relink(true)?.links_rewritten;
         Ok(report)
     }
 
@@ -544,7 +552,7 @@ impl Store {
                 if new_path != path {
                     std::fs::remove_file(&path)?;
                     // The file moved dirs — fix every relative link to/from it.
-                    self.relink()?;
+                    self.relink(true)?;
                 }
                 Ok(new_path)
             }
@@ -566,7 +574,7 @@ impl Store {
                 if new_path != path {
                     std::fs::remove_file(&path)?;
                     // The file moved dirs — fix every relative link to/from it.
-                    self.relink()?;
+                    self.relink(true)?;
                 }
                 Ok(new_path)
             }
@@ -1060,5 +1068,151 @@ We need a consistent way.\n";
         assert_eq!(new_path, path);
         let after = std::fs::read_to_string(&new_path).unwrap();
         assert_eq!(after, original);
+    }
+
+    // --- profile detection / mismatch / migrate ---
+
+    fn flat_store(root: &Path) -> Store {
+        Store::open_or_create_with(
+            root,
+            StoreOptions {
+                layout: Layout::Flat,
+                ..StoreOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn detect_profile_reads_by_status_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = md_store(tmp.path());
+        write_md(
+            &store,
+            Status::Proposed,
+            1,
+            "X",
+            "# ADR-0001: X\n\n## Status\n\nProposed\n",
+        );
+        let d = store.detect_profile();
+        assert_eq!(d.layout, Some(Layout::ByStatus));
+        assert_eq!(d.format, Some(Format::Markdown));
+        assert!(store.profile_mismatch().is_none());
+    }
+
+    #[test]
+    fn detect_profile_empty_dir_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = md_store(tmp.path());
+        let d = store.detect_profile();
+        assert!(d.layout.is_none() && d.format.is_none());
+        assert!(store.profile_mismatch().is_none());
+    }
+
+    #[test]
+    fn profile_mismatch_flags_flat_config_on_by_status_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let by_status = md_store(tmp.path());
+        write_md(
+            &by_status,
+            Status::Accepted,
+            1,
+            "X",
+            "# ADR-0001: X\n\n## Status\n\nAccepted\n",
+        );
+        let msg = flat_store(tmp.path()).profile_mismatch().unwrap();
+        assert!(
+            msg.contains("by_status") && msg.contains("flat"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn migrate_by_status_to_flat_moves_files_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let by_status = md_store(tmp.path());
+        write_md(
+            &by_status,
+            Status::Proposed,
+            1,
+            "One",
+            "# ADR-0001: One\n\n## Status\n\nProposed\n",
+        );
+        write_md(
+            &by_status,
+            Status::Accepted,
+            2,
+            "Two",
+            "# ADR-0002: Two\n\n## Status\n\nAccepted\n",
+        );
+
+        let flat = flat_store(tmp.path());
+        let report = flat.migrate(true).unwrap();
+        assert!(report.applied);
+        assert_eq!(report.layout_change, Some((Layout::ByStatus, Layout::Flat)));
+        assert!(tmp.path().join("0001-one.md").exists());
+        assert!(tmp.path().join("0002-two.md").exists());
+        assert!(!tmp.path().join("proposed/0001-one.md").exists());
+        // Now that the repo matches, a second run is a no-op.
+        assert!(flat.migrate(false).unwrap().is_noop());
+    }
+
+    #[test]
+    fn migrate_filename_collision_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let by_status = md_store(tmp.path());
+        // Two ADRs share a filename in different status dirs -> one flat path.
+        write_md(
+            &by_status,
+            Status::Proposed,
+            9,
+            "Dup",
+            "# ADR-0009: Dup\n\n## Status\n\nProposed\n",
+        );
+        write_md(
+            &by_status,
+            Status::Accepted,
+            9,
+            "Dup",
+            "# ADR-0009: Dup\n\n## Status\n\nAccepted\n",
+        );
+        assert!(
+            flat_store(tmp.path()).migrate(false).is_err(),
+            "two 0009-dup.md must refuse to collide into one flat path"
+        );
+    }
+
+    #[test]
+    fn relink_dry_run_reports_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = md_store(tmp.path());
+        let p1 = write_md(
+            &store,
+            Status::Proposed,
+            1,
+            "A",
+            "# ADR-0001: A\n\n## Status\n\nProposed\n\nSee [ADR-0002](../proposed/0002-b.md).\n",
+        );
+        write_md(
+            &store,
+            Status::Accepted,
+            2,
+            "B",
+            "# ADR-0002: B\n\n## Status\n\nAccepted\n",
+        );
+        let before = std::fs::read_to_string(&p1).unwrap();
+        let r = store.relink(false).unwrap();
+        assert_eq!(r.files_changed, 1);
+        assert_eq!(
+            std::fs::read_to_string(&p1).unwrap(),
+            before,
+            "dry run must not write"
+        );
+        store.relink(true).unwrap();
+        assert!(
+            std::fs::read_to_string(&p1)
+                .unwrap()
+                .contains("../accepted/0002-b.md")
+        );
     }
 }

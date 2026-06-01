@@ -168,7 +168,8 @@ configured opts, and `main.rs` **bails** (before dispatch) on any mismatch for
 every command except `migrate` — otherwise a wrong `--layout`/`--format` would
 silently hide ADRs (e.g. by_status read as flat lists nothing) or collide
 numbers. `Store::migrate(apply)` is the conversion path (`adroit migrate`,
-preview unless `--yes`): it reads through a detected-source-profile `Store`,
+preview unless `--yes`; `--dry-run` forces preview): it reads through a
+detected-source-profile `Store`,
 moves files verbatim for a layout-only change or re-serializes via
 `format::serialize` for a format change (filenames preserved; target collisions
 refused), then `relink`s. `cmd_migrate` prints the plan / applies.
@@ -208,10 +209,12 @@ filename number resolves to a unique ADR, rewrites it to the canonical relative
 path of that ADR's current file (preserving `#anchors`, keeping `./` for
 same-dir); external URLs / anchors / non-ADR links are left byte-for-byte.
 `Store::relink` runs it over every file, writing only those that changed
-(idempotent → no-op on a canonical repo). `set_status_inner` calls `relink()`
-after any move, so `adroit status`/`supersede` self-heal links; `adroit relink`
-exposes it on demand (repairs repos edited outside adroit); `cmd_check` adds
-check #5 (broken target / stale-vs-canonical). `query.rs` reuses
+(idempotent → no-op on a canonical repo). `relink(apply)` with `apply == false`
+is the dry-run path (`adroit relink --dry-run` reports `changed_files` without
+writing). `set_status_inner` calls `relink(true)` after any move, so `adroit
+status`/`supersede` self-heal links; `adroit relink` exposes it on demand
+(repairs repos edited outside adroit); `cmd_check` adds check #5 (broken target
+/ stale-vs-canonical). `query.rs` reuses
 `links::number_in_target` for its graph link parsing.
 
 ### Review deadlines (`review_by`)
