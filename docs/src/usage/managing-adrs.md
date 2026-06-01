@@ -34,7 +34,7 @@ adroit show 1
 ## Searching
 
 ```sh
-adroit search crossplane
+adroit search postgres
 ```
 
 Case-insensitive search over titles and bodies.

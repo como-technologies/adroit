@@ -10,3 +10,7 @@ build-dir = "book"
 [output.html]
 git-repository-url = "https://github.com/como-technologies/adroit"
 edit-url-template = "https://github.com/como-technologies/adroit/edit/main/docs/src/{path}"
+default-theme = "gruvbox"
+preferred-dark-theme = "gruvbox"
+additional-css = ["gruvbox/css/variables.css", "gruvbox/highlight.css"]
+additional-js = ["gruvbox/gruvbox.js"]

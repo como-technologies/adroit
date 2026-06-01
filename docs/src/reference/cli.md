@@ -119,7 +119,7 @@ adroit set-review 3 --clear      # remove the deadline
 Case-insensitive search across ADR titles and bodies (recursive). Prints number, status, and title for each match.
 
 ```sh
-adroit search crossplane
+adroit search postgres
 ```
 
 ### `adroit check`
@@ -255,6 +255,7 @@ editor: vim
 | `summary_path` | path | discovered | Path to a `SUMMARY.md` to regenerate on `index`. |
 | `review_days` | int | `3` | Default review period (business days) for `review`. |
 | `review_quorum` | int | `3` | Default approvals required for `review`. |
+| `review_overdue_days` | int | `30` | A Proposed ADR older than this many days is flagged review-due even with no `review_by`. `0` disables age-based flagging. |
 | `tui_theme` | `default`\|`gruvbox` | `default` | Color theme for the TUI markdown preview. |
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.

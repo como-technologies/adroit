@@ -151,6 +151,7 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
         format: format.unwrap_or(cfg.format),
         layout: layout.unwrap_or(cfg.layout),
         status_dir,
+        review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
     }
 }
 

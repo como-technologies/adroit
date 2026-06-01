@@ -64,10 +64,10 @@ prefers a repo-local template) or set `templates_dir`/`default_template`.
 
 ```sh
 # Capture a decision (lands in proposed/, opens your editor)
-adroit new "Adopt Crossplane for AWS provisioning"
+adroit new "Use PostgreSQL for the primary datastore"
 
 # Find prior decisions mid-discussion
-adroit search crossplane
+adroit search postgres
 
 # Propose a review deadline; once it passes, the ADR shows as review-due
 adroit set-review 9 2026-07-15
@@ -82,7 +82,7 @@ adroit supersede 9 4
 
 # Keep the published index in sync, then commit
 adroit index
-git add -A && git commit -m "ADR-0009: accept Crossplane"
+git add -A && git commit -m "ADR-0009: accept PostgreSQL"
 ```
 
 Prefer an interactive surface? Run bare `adroit` for the [TUI](./tui.md)

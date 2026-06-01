@@ -47,9 +47,9 @@ flag > env/`.env` > `~/.config/adroit/config.yaml` > default.
 ## CLI cheatsheet
 
 ```sh
-adroit new "Adopt Crossplane for AWS"   # next number, scaffolds proposed/, opens $EDITOR
+adroit new "Use PostgreSQL for the datastore"   # next number, scaffolds proposed/, opens $EDITOR
 adroit list                             # or: --status accepted
-adroit search crossplane
+adroit search postgres
 adroit status 9 accepted                # moves the file + rewrites ## Status
 adroit supersede 9 4                    # 9 supersedes 4 (moves 4, links both)
 adroit set-review 9 2026-07-15          # review deadline (review-due once past)

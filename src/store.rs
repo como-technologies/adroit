@@ -28,6 +28,11 @@ pub struct StoreOptions {
     /// Map from status to directory name (used by `by_status` layout).
     /// Resolved by the caller from config; empty falls back to lowercase names.
     pub status_dir: std::collections::BTreeMap<Status, String>,
+    /// Age (in days) past which a still-`Proposed` ADR is flagged review-due
+    /// even with no explicit `review_by`. `None` disables age-based flagging
+    /// (deadline-only). Carried from config so the shared query layer can apply
+    /// it identically across surfaces.
+    pub review_overdue_days: Option<u32>,
 }
 
 impl StoreOptions {
@@ -37,6 +42,7 @@ impl StoreOptions {
             format: Format::Frontmatter,
             layout: Layout::Flat,
             status_dir: std::collections::BTreeMap::new(),
+            review_overdue_days: None,
         }
     }
 
@@ -437,8 +443,8 @@ mod tests {
     #[test]
     fn filename_strips_punctuation() {
         assert_eq!(
-            filename(Number::new(3), "ACK vs. Crossplane"),
-            "0003-ack-vs-crossplane.md"
+            filename(Number::new(3), "GraphQL vs. REST"),
+            "0003-graphql-vs-rest.md"
         );
     }
 

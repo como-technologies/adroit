@@ -108,6 +108,12 @@ pub struct Config {
     /// Default quorum (approvals required) for `review` (default: 3).
     pub review_quorum: u32,
 
+    /// A still-`Proposed` ADR older than this many days (by its creation date)
+    /// is flagged **review-due** even without an explicit `review_by` deadline,
+    /// so an aging backlog surfaces on its own. `0` disables age-based flagging
+    /// (deadline-only). Default: 30.
+    pub review_overdue_days: u32,
+
     /// Color theme for the TUI markdown preview (default: `default`/ANSI).
     pub tui_theme: MarkdownTheme,
 }
@@ -127,6 +133,7 @@ impl Default for Config {
             summary_path: None,
             review_days: 3,
             review_quorum: 3,
+            review_overdue_days: 30,
             tui_theme: MarkdownTheme::default(),
         }
     }
@@ -517,6 +524,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.review_days, 3);
         assert_eq!(config.review_quorum, 3);
+        assert_eq!(config.review_overdue_days, 30);
     }
 
     #[test]

@@ -839,6 +839,7 @@ fn store_options(cfg: &Config) -> StoreOptions {
         format: cfg.format,
         layout: cfg.layout,
         status_dir,
+        review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
     }
 }
 

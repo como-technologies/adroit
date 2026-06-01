@@ -184,9 +184,13 @@ in both profiles: an optional `review_by` YAML field in frontmatter, and a
 `Review by: YYYY-MM-DD` line inside the `## Status` region in markdown
 (format-preserving — `format::rewrite_review_by` upserts/removes only that line;
 unchanged docs are byte-identical). `query` sets `AdrSummary.review_due = true`
-when an ADR is still `Proposed`, has a `review_by`, and it is on/before today
-(local, via `OffsetDateTime::now_local`), and fills `Stats.review_due` with
-those rows (lighting up the web Stats "Review due" section). Set it from the CLI
+when an ADR is still `Proposed` and either has a `review_by` on/before today
+(local, via `OffsetDateTime::now_local`) **or** has aged past
+`review_overdue_days` (config, default 30; `0`/`None` disables) measured from its
+resolved creation date — so an aging backlog surfaces with no per-ADR deadline.
+The threshold rides on `StoreOptions` (carried from config by each surface's
+`store_options` builder). `Stats.review_due` collects those rows (lighting up the
+web Stats "Review due" tile/panel). Set the deadline from the CLI
 with `adroit set-review <number> <YYYY-MM-DD>` (or `--clear`), wired through
 `Store::set_review_by` (mirrors `set_status`/`set_body`).
 

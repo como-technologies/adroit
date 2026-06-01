@@ -66,10 +66,11 @@ fn today() -> Date {
 pub fn summaries(store: &Store, filter: &Filter) -> Result<Vec<AdrSummary>, QueryError> {
     let resolved = load_resolved(store)?;
     let today = today();
+    let overdue = store.options().review_overdue_days;
     let mut rows: Vec<AdrSummary> = resolved
         .iter()
         .filter(|r| filter.status.is_none_or(|s| r.adr.status == s))
-        .map(|r| summary_of(&r.adr, r.created, today))
+        .map(|r| summary_of(&r.adr, r.created, today, overdue))
         .collect();
     sort_summaries(&mut rows, filter.sort);
     Ok(rows)
@@ -85,7 +86,7 @@ pub fn detail(store: &Store, number: u32) -> Result<AdrDetail, QueryError> {
         .and_then(|r| r.history(&path, |p| store.dir_status(p)));
     let (created, last_modified, events) =
         resolve_dates(&adr, &path, store.format() == Format::Frontmatter, hist);
-    let summary = summary_of(&adr, created, today());
+    let summary = summary_of(&adr, created, today(), store.options().review_overdue_days);
     let related = related_links(&adr);
     let history: Vec<TimelineEvent> = events.iter().map(timeline_event).collect();
     Ok(AdrDetail {
@@ -105,13 +106,14 @@ pub fn search(store: &Store, term: &str) -> Result<Vec<AdrSummary>, QueryError> 
     let needle = term.to_lowercase();
     let resolved = load_resolved(store)?;
     let today = today();
+    let overdue = store.options().review_overdue_days;
     let rows = resolved
         .iter()
         .filter(|r| {
             let haystack = format!("{} {}", r.adr.title, r.adr.body).to_lowercase();
             haystack.contains(&needle)
         })
-        .map(|r| summary_of(&r.adr, r.created, today))
+        .map(|r| summary_of(&r.adr, r.created, today, overdue))
         .collect();
     Ok(rows)
 }
@@ -155,10 +157,12 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
         .map(|(month, count)| CreatedBucket { month, count })
         .collect();
 
-    // ADRs flagged review-due: still Proposed and past their `review_by` date.
+    // ADRs flagged review-due: still Proposed and past their `review_by` date,
+    // or aged past the configured staleness threshold.
+    let overdue = store.options().review_overdue_days;
     let review_due: Vec<AdrSummary> = resolved
         .iter()
-        .map(|r| summary_of(&r.adr, r.created, today))
+        .map(|r| summary_of(&r.adr, r.created, today, overdue))
         .filter(|s| s.review_due)
         .collect();
 
@@ -305,11 +309,21 @@ fn timeline_event(e: &HistoryEvent) -> TimelineEvent {
 /// Build an [`AdrSummary`] from a parsed [`Adr`] and its resolved creation
 /// date, evaluating review-due against `today`.
 ///
-/// An ADR is review-due when it is still `Proposed`, has a `review_by` deadline,
-/// and that deadline is on or before `today`.
-fn summary_of(adr: &Adr, created: OffsetDateTime, today: Date) -> AdrSummary {
-    let review_due =
-        adr.status == Status::Proposed && adr.review_by.is_some_and(|rb| rb.get() <= today);
+/// An ADR is **review-due** when it is still `Proposed` and either: it has a
+/// `review_by` deadline on or before `today`; or `overdue_days` is set and the
+/// ADR has been sitting (since `created`) at least that many days — so an aging
+/// backlog surfaces without anyone stamping each ADR with a deadline.
+fn summary_of(
+    adr: &Adr,
+    created: OffsetDateTime,
+    today: Date,
+    overdue_days: Option<u32>,
+) -> AdrSummary {
+    let proposed = adr.status == Status::Proposed;
+    let past_deadline = adr.review_by.is_some_and(|rb| rb.get() <= today);
+    let stale =
+        overdue_days.is_some_and(|days| (today - created.date()).whole_days() >= i64::from(days));
+    let review_due = proposed && (past_deadline || stale);
     AdrSummary {
         number: adr.number.map(Number::get),
         number_display: adr
@@ -724,5 +738,34 @@ mod tests {
             vec![6, 12]
         );
         assert_eq!(linked_numbers("no links here"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn review_due_flags_stale_proposed_even_without_a_deadline() {
+        use crate::adr::Adr;
+        use time::{Date, Month};
+
+        let mut adr = Adr::new("Aging proposal").unwrap();
+        adr.status = Status::Proposed;
+        let today = Date::from_calendar_date(2026, Month::June, 1).unwrap();
+        // 40 days old, no `review_by`.
+        let old = Date::from_calendar_date(2026, Month::April, 22)
+            .unwrap()
+            .midnight()
+            .assume_utc();
+        let recent = Date::from_calendar_date(2026, Month::May, 28)
+            .unwrap()
+            .midnight()
+            .assume_utc();
+
+        // Aged past the 30-day threshold -> review-due, no deadline needed.
+        assert!(summary_of(&adr, old, today, Some(30)).review_due);
+        // Age-based flagging disabled (None) and no deadline -> not due.
+        assert!(!summary_of(&adr, old, today, None).review_due);
+        // A recent proposal is not stale.
+        assert!(!summary_of(&adr, recent, today, Some(30)).review_due);
+        // Non-proposed ADRs never count, however old.
+        adr.status = Status::Accepted;
+        assert!(!summary_of(&adr, old, today, Some(30)).review_due);
     }
 }

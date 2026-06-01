@@ -15,10 +15,10 @@ frontmatter — the file is plain [MADR](https://adr.github.io/madr/)-style Mark
 
 ```
 adrs/
-  proposed/    0007-remove-audit-mode.md
-  accepted/    0006-adopt-adrs.md
-  rejected/    0016-ack-vs-crossplane.md
-  superseded/  0002-adopt-adrs.md
+  proposed/    0007-adopt-graphql-for-the-public-api.md
+  accepted/    0006-use-postgresql-for-the-datastore.md
+  rejected/    0005-adopt-microservices.md
+  superseded/  0002-use-rest-for-the-public-api.md
   deprecated/
   README.md          # not an ADR — skipped
   adr-template.md    # repo-local template — skipped
@@ -32,12 +32,12 @@ between these directories.
 
 `NNNN-kebab-case-title.md`, where `NNNN` is the zero-padded, permanent number.
 Numbers never reset across directories and may legitimately collide (e.g. a
-`0009` in both `proposed/` and `accepted/`) — adroit handles this gracefully.
+`0012` in both `proposed/` and `accepted/`) — adroit handles this gracefully.
 
 ### Structure
 
 ```markdown
-# ADR-0006: Adopt ADRs as the Team Decision Process
+# ADR-0006: Use PostgreSQL for the primary datastore
 
 > State: Accepted
 
@@ -95,6 +95,11 @@ Review by: 2026-07-15
 Set it with `adroit set-review <NUMBER> <YYYY-MM-DD>` (`--clear` to remove). Once
 the date is on or before today, the ADR is flagged review-due in `stats` and the
 web dashboard. Writing/removing the line is format-preserving.
+
+Even with no explicit deadline, a still-`Proposed` ADR is flagged review-due once
+it has been sitting (since its creation date) longer than `review_overdue_days`
+(config; default 30, `0` disables) — so an aging backlog surfaces on the
+dashboard on its own, without stamping each ADR with a deadline.
 
 ### Format-preserving writes
 

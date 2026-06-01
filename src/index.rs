@@ -5,7 +5,7 @@
 //! ```text
 //! ## Accepted
 //!
-//! - [ADR-0006: Adopt ADRs](./adrs/accepted/0006-adopt-adrs.md)
+//! - [ADR-0006: Use PostgreSQL](./adrs/accepted/0006-use-postgresql.md)
 //! ```
 //!
 //! Only the status-grouped block is regenerated. Everything before the first
