@@ -79,6 +79,17 @@ Both forms accept a `[ADR-NNNN](path)` link or a bare `ADR-NNNN`. The
 supersession graph collapses the two reciprocal notes for one decision into a
 single edge.
 
+### Cross-ADR links stay canonical
+
+Because a status change moves a file between directories, relative links between
+ADRs (`[..](../proposed/0009-x.md)`) would otherwise go stale. adroit keeps them
+correct: every `status` / `supersede` automatically rewrites all relative links
+pointing at the moved ADR (and the moved file's own outbound links) to its new
+location. `adroit relink` does the same on demand across the whole repo (to
+repair links edited outside adroit), and `adroit check` flags any broken or
+stale relative link. External URLs, anchors, and non-ADR links are never
+touched.
+
 ### Review deadlines
 
 A still-`Proposed` ADR may carry an optional review deadline, written as a line

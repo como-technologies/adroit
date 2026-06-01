@@ -5,6 +5,7 @@ pub mod format;
 pub mod frontmatter;
 pub mod history;
 pub mod index;
+pub mod links;
 pub mod query;
 pub mod store;
 pub mod template;

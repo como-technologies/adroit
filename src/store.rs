@@ -20,6 +20,15 @@ pub enum StoreError {
     NumberNotFound(Number),
 }
 
+/// Outcome of a [`Store::relink`] pass.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RelinkReport {
+    /// Number of files whose content was rewritten.
+    pub files_changed: usize,
+    /// Total cross-ADR links rewritten across those files.
+    pub links_rewritten: usize,
+}
+
 /// How a [`Store`] is configured to serialize and lay out ADRs.
 #[derive(Debug, Clone, Default)]
 pub struct StoreOptions {
@@ -262,6 +271,47 @@ impl Store {
             .collect()
     }
 
+    /// Rewrite every cross-ADR relative link across the store so it points at
+    /// the current location of the ADR it references (see [`crate::links`]).
+    ///
+    /// Idempotent: a file whose links are already canonical is left
+    /// byte-identical and not rewritten, so calling this after a status-change
+    /// move only touches the links that move actually invalidated. Duplicate
+    /// ADR numbers are skipped (ambiguous — surfaced by `adroit check`).
+    pub fn relink(&self) -> Result<RelinkReport, StoreError> {
+        let entries = self.list_with_paths()?;
+        // Count numbers so duplicates can be skipped (can't disambiguate them).
+        let mut seen: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        for (_, adr) in &entries {
+            if let Some(n) = adr.number {
+                *seen.entry(n.get()).or_default() += 1;
+            }
+        }
+        let mut by_number: std::collections::HashMap<u32, PathBuf> =
+            std::collections::HashMap::new();
+        for (path, adr) in &entries {
+            if let Some(n) = adr.number
+                && seen.get(&n.get()) == Some(&1)
+            {
+                by_number.insert(n.get(), path.clone());
+            }
+        }
+
+        let mut report = RelinkReport::default();
+        for (path, _) in &entries {
+            let dir = path.parent().unwrap_or_else(|| Path::new(""));
+            let original = std::fs::read_to_string(path)?;
+            let (rewritten, changed) =
+                crate::links::rewrite_links(&original, dir, |n| by_number.get(&n).cloned());
+            if changed > 0 && rewritten != original {
+                std::fs::write(path, &rewritten)?;
+                report.files_changed += 1;
+                report.links_rewritten += changed;
+            }
+        }
+        Ok(report)
+    }
+
     /// Change an ADR's status. In `by_status` markdown mode this MOVES the file
     /// to the matching status dir and rewrites the `## Status` section
     /// (minimal-diff). Returns the new path.
@@ -308,6 +358,8 @@ impl Store {
                 std::fs::write(&new_path, content)?;
                 if new_path != path {
                     std::fs::remove_file(&path)?;
+                    // The file moved dirs — fix every relative link to/from it.
+                    self.relink()?;
                 }
                 Ok(new_path)
             }
@@ -328,6 +380,8 @@ impl Store {
                 std::fs::write(&new_path, rewritten)?;
                 if new_path != path {
                     std::fs::remove_file(&path)?;
+                    // The file moved dirs — fix every relative link to/from it.
+                    self.relink()?;
                 }
                 Ok(new_path)
             }

@@ -407,7 +407,7 @@ fn linked_numbers(body: &str) -> Vec<u32> {
             && let Some(end) = body[i + 2..].find(')')
         {
             let target = &body[i + 2..i + 2 + end];
-            if let Some(n) = number_in_link(target)
+            if let Some(n) = crate::links::number_in_target(target)
                 && !out.contains(&n)
             {
                 out.push(n);
@@ -418,23 +418,6 @@ fn linked_numbers(body: &str) -> Vec<u32> {
         i += 1;
     }
     out
-}
-
-/// Pull an ADR number out of a link target, accepting `ADR-0006`,
-/// `.../0006-foo.md`, or a bare `0006`.
-fn number_in_link(target: &str) -> Option<u32> {
-    // Prefer the filename component (last path segment).
-    let segment = target.rsplit('/').next().unwrap_or(target);
-    // Strip a leading "ADR-" / "adr-" if present.
-    let segment = segment
-        .strip_prefix("ADR-")
-        .or_else(|| segment.strip_prefix("adr-"))
-        .unwrap_or(segment);
-    let digits: String = segment.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse::<u32>().ok()
 }
 
 #[cfg(test)]

@@ -27,6 +27,11 @@ fn main() -> Result<()> {
     if let Some(days) = cli.review_overdue_days {
         cfg.review_overdue_days = days;
     }
+    // `--default-template` / `ADROIT_TEMPLATE` overrides the config's default
+    // template for `new` (a per-invocation `new --template` still wins).
+    if let Some(template) = cli.default_template {
+        cfg.default_template = template;
+    }
     let dir = config::resolve_dir(cli.dir, &cfg);
 
     let opts = store_options(&cfg, cli.format, cli.layout);
@@ -85,6 +90,7 @@ fn main() -> Result<()> {
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check) => cmd_check(&store)?,
+        Some(Command::Relink) => cmd_relink(&store)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { number }) => {
             let number = Number::new(number);
@@ -401,6 +407,31 @@ fn cmd_index_check(
     }
 }
 
+/// `adroit relink`: rewrite cross-ADR relative links to each ADR's current
+/// location. Repairs links left stale by file moves; idempotent.
+fn cmd_relink(store: &Store) -> Result<()> {
+    let r = store.relink()?;
+    if r.files_changed == 0 {
+        println!("Links already canonical — nothing to relink.");
+    } else {
+        let links = if r.links_rewritten == 1 {
+            "link"
+        } else {
+            "links"
+        };
+        let files = if r.files_changed == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        println!(
+            "Relinked {} {links} across {} {files}.",
+            r.links_rewritten, r.files_changed
+        );
+    }
+    Ok(())
+}
+
 /// `adroit check`: structural CI gate. Collects every problem found across the
 /// store and bails (non-zero exit) with a summary if any exist; otherwise prints
 /// an "OK" line and exits 0.
@@ -411,6 +442,7 @@ fn cmd_index_check(
 /// 2. Duplicate ADR numbers.
 /// 3. Unparseable / missing-H1 ADR files.
 /// 4. Broken supersession links (referenced ADR number doesn't exist).
+/// 5. Broken / stale cross-ADR relative links.
 fn cmd_check(store: &Store) -> Result<()> {
     use std::collections::BTreeMap;
 
@@ -491,6 +523,49 @@ fn cmd_check(store: &Store) -> Result<()> {
             {
                 problems.push(format!(
                     "{rel}: ## Status says Superseded by ADR-{n} but no such ADR exists"
+                ));
+            }
+        }
+    }
+
+    // (5) Cross-ADR relative links: each must resolve to an existing file, and
+    // an ADR-numbered link should point at where that ADR currently lives.
+    let by_number_path: BTreeMap<u32, std::path::PathBuf> = by_number
+        .iter()
+        .filter(|(_, paths)| paths.len() == 1)
+        .map(|(n, paths)| (*n, paths[0].clone()))
+        .collect();
+    for path in &files {
+        let rel = path
+            .strip_prefix(store.root())
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        for target in adroit::links::relative_md_targets(&content) {
+            let pathpart = target.split('#').next().unwrap_or(target);
+            let resolved = dir.join(pathpart);
+            if !resolved.exists() {
+                problems.push(format!(
+                    "{rel}: broken link [{target}] — target file not found"
+                ));
+                continue;
+            }
+            // Stale: resolves, but not to the current home of its ADR number.
+            if let Some(num) = adroit::links::number_in_target(target)
+                && let Some(canon) = by_number_path.get(&num)
+                && let (Ok(rp), Ok(cp)) = (
+                    std::fs::canonicalize(&resolved),
+                    std::fs::canonicalize(canon),
+                )
+                && rp != cp
+            {
+                let want = adroit::links::rel_link(dir, canon);
+                problems.push(format!(
+                    "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
                 ));
             }
         }

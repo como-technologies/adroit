@@ -613,6 +613,87 @@ fn review_missing_adr_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-ADR link integrity (relink on move, `relink`, `check`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn status_change_relinks_inbound_links_and_check_passes() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    fs::create_dir_all(&proposed).unwrap();
+    // ADR-0001 links to ADR-0002 at its current (same-dir, proposed) location.
+    fs::write(
+        proposed.join("0001-use-postgres.md"),
+        "# ADR-0001: Use Postgres\n\n## Status\n\nProposed\n\n## Context\n\nSee [ADR-0002](./0002-use-redis.md).\n",
+    )
+    .unwrap();
+    fs::write(
+        proposed.join("0002-use-redis.md"),
+        "# ADR-0002: Use Redis\n\n## Status\n\nProposed\n\n## Context\n\nA cache.\n",
+    )
+    .unwrap();
+
+    // Accepting ADR-0002 moves it to accepted/ AND rewrites ADR-0001's link.
+    adroit(&dir)
+        .args(["status", "2", "accepted"])
+        .assert()
+        .success();
+
+    assert!(dir.path().join("accepted/0002-use-redis.md").exists());
+    let one = fs::read_to_string(proposed.join("0001-use-postgres.md")).unwrap();
+    assert!(
+        one.contains("[ADR-0002](../accepted/0002-use-redis.md)"),
+        "inbound link should be rewritten to the new dir, got:\n{one}"
+    );
+
+    // No broken/stale links remain.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn check_flags_broken_link_and_relink_repairs_it() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    let accepted = dir.path().join("accepted");
+    fs::create_dir_all(&proposed).unwrap();
+    fs::create_dir_all(&accepted).unwrap();
+    // 0002 lives in accepted/, but 0001 still links to a stale proposed/ path
+    // (as if it had been moved outside adroit) — that target doesn't exist.
+    fs::write(
+        proposed.join("0001-a.md"),
+        "# ADR-0001: A\n\n## Status\n\nProposed\n\n## Context\n\nSee [ADR-0002](../proposed/0002-b.md).\n",
+    )
+    .unwrap();
+    fs::write(
+        accepted.join("0002-b.md"),
+        "# ADR-0002: B\n\n## Status\n\nAccepted\n",
+    )
+    .unwrap();
+
+    // check fails: the link target file doesn't exist.
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("broken link"));
+
+    // relink repairs it to the canonical location.
+    adroit(&dir)
+        .arg("relink")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Relinked"));
+    let one = fs::read_to_string(proposed.join("0001-a.md")).unwrap();
+    assert!(
+        one.contains("[ADR-0002](../accepted/0002-b.md)"),
+        "got:\n{one}"
+    );
+
+    // check is now clean.
+    adroit(&dir).arg("check").assert().success();
+}
+
+// ---------------------------------------------------------------------------
 // Legacy flat + frontmatter profile (still supported)
 // ---------------------------------------------------------------------------
 

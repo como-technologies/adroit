@@ -9,6 +9,7 @@
 | `--layout <by_status\|flat>` | `by_status` | Directory layout (env: `ADROIT_LAYOUT`; overrides config) |
 | `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme (env: `ADROIT_THEME`; overrides config) |
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
+| `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
 | `--version` | | Print version information |
 | `--help` | | Print help |
 
@@ -17,7 +18,7 @@ All three flags are **global** — they work before *or* after the subcommand
 
 Each also reads from an environment variable, so you don't have to pass it on
 every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
-`ADROIT_REVIEW_OVERDUE_DAYS` (and, for the web
+`ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE` (and, for the web
 dashboard, `ADROIT_HOST` / `ADROIT_PORT`). A `.env` file in the current
 directory (or a parent) is loaded automatically at startup, so you can keep your
 repo location there. Copy the tracked `.env.example` to get started (your local
@@ -140,12 +141,30 @@ It checks for:
 3. **Unparseable files**: a `.md` ADR with no `# ADR-NNNN: Title` heading.
 4. **Broken supersession links**: a `Supersedes ADR-NNNN` / `Superseded by
    ADR-NNNN` note referencing a number that doesn't exist in the repo.
+5. **Broken / stale cross-ADR links**: a relative `.md` link whose target file
+   doesn't exist (broken), or that resolves to an existing file but not where
+   that ADR number currently lives (stale — `adroit relink` fixes it). External
+   URLs, anchors, and non-ADR links are ignored.
 
 In the flat / frontmatter profile there is no directory-implied status, so the
 directory-mismatch check is skipped; the others still apply.
 
 ```sh
 adroit check
+```
+
+### `adroit relink`
+
+Rewrite every cross-ADR relative link so it points at the ADR's **current**
+location, then write back only the files that changed. Use it to repair links
+left stale by file moves done outside adroit (and as a CI fix step). Status
+changes (`status` / `supersede`) already relink automatically, so on a tidy repo
+this is a no-op (`Links already canonical — nothing to relink.`). Idempotent;
+links by external URL, anchor, or to non-ADR files are left untouched; ambiguous
+duplicate numbers are skipped (and flagged by `check`).
+
+```sh
+adroit relink
 ```
 
 ### `adroit index [--check]`

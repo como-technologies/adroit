@@ -42,6 +42,13 @@ pub struct Cli {
     #[arg(long, global = true, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
     pub review_overdue_days: Option<u32>,
 
+    /// Default template for `new` — a built-in name (`madr`, `nygard`) or a path
+    /// (overrides config). `new --template` still wins per-invocation.
+    ///
+    /// Also settable via `ADROIT_TEMPLATE`.
+    #[arg(long, global = true, env = "ADROIT_TEMPLATE")]
+    pub default_template: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -106,8 +113,15 @@ pub enum Command {
     /// Validate the ADR repo and exit non-zero if any problem is found.
     ///
     /// A structural CI gate: checks for status/directory mismatches,
-    /// duplicate numbers, unparseable files, and broken supersession links.
+    /// duplicate numbers, unparseable files, broken supersession links, and
+    /// broken/stale cross-ADR relative links.
     Check,
+    /// Rewrite cross-ADR relative links to each ADR's current location.
+    ///
+    /// Fixes links left stale by status-change file moves (run by hand or in
+    /// CI). Status changes already relink automatically; this repairs a repo
+    /// edited outside adroit. Idempotent.
+    Relink,
     /// Regenerate the ADR section of SUMMARY.md (or print it to stdout).
     Index {
         /// Don't write — just verify SUMMARY.md is up to date (CI gate).

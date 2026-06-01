@@ -33,6 +33,7 @@ just run <args>  # run the binary
 - `src/query.rs` — the shared read API over `Store`
   (`summaries`/`detail`/`search`/`stats`/`graph`) that builds the view types
 - `src/history.rs` — git-derived ADR dates + lifecycle (shells `git log`)
+- `src/links.rs` — cross-ADR relative-link parsing + rewriting (pure helpers)
 - `tests/cli.rs` — integration tests against the compiled binary
 - `docs/` — mdbook user manual source (`book.toml` + `src/`), published to
   GitHub Pages; build output goes to `docs/book/` (gitignored)
@@ -175,6 +176,22 @@ single `Supersedes` edge (newer → older) via `push_unique`. The `Adr` model
 keeps `supersedes`/`superseded_by` as `Option<Number>` (a markdown ADR carries
 at most one of each note); `AdrSummary.supersedes` stays a `Vec<u32>` for the
 view contract and is filled from that single optional.
+
+### Cross-ADR link integrity (`src/links.rs` + `Store::relink`)
+
+In by-status a status change moves the file between dirs, which would strand
+relative links (`[..](../proposed/0009-x.md)`) in other ADRs and in the moved
+file itself. `links::rewrite_links(content, source_dir, resolve)` is the pure
+engine: it scans `](target)` spans, and for each *relative* `.md` target whose
+filename number resolves to a unique ADR, rewrites it to the canonical relative
+path of that ADR's current file (preserving `#anchors`, keeping `./` for
+same-dir); external URLs / anchors / non-ADR links are left byte-for-byte.
+`Store::relink` runs it over every file, writing only those that changed
+(idempotent → no-op on a canonical repo). `set_status_inner` calls `relink()`
+after any move, so `adroit status`/`supersede` self-heal links; `adroit relink`
+exposes it on demand (repairs repos edited outside adroit); `cmd_check` adds
+check #5 (broken target / stale-vs-canonical). `query.rs` reuses
+`links::number_in_target` for its graph link parsing.
 
 ### Review deadlines (`review_by`)
 
