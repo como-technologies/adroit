@@ -8,11 +8,13 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
 
 use crate::adr::{Adr, Number, Status};
+use crate::config::DateSource;
 use crate::format::Format;
 use crate::history::{self, HistoryEvent};
 use crate::store::{Store, StoreError};
@@ -80,7 +82,7 @@ pub fn summaries(store: &Store, filter: &Filter) -> Result<Vec<AdrSummary>, Quer
 pub fn detail(store: &Store, number: u32) -> Result<AdrDetail, QueryError> {
     let path = store.find_path_by_number(Number::new(number))?;
     let adr = store.read(&path)?;
-    let repo = history::open(store.root());
+    let repo = open_history(store);
     let hist = repo
         .as_ref()
         .and_then(|r| r.history(&path, |p| store.dir_status(p)));
@@ -236,13 +238,48 @@ struct Resolved {
     created: OffsetDateTime,
 }
 
+/// Warn at most once per process when strict `date_source = git` can't deliver.
+static GIT_STRICT_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Open the git repo for date resolution, honoring the configured
+/// [`DateSource`]: `Filesystem` never shells git; `Auto` uses git when present
+/// (silent fallback); `Git` is strict — it warns once (then still falls back)
+/// when git history is unavailable or the clone is shallow, so a CI
+/// misconfiguration is visible rather than silently producing wrong dates.
+fn open_history(store: &Store) -> Option<history::GitRepo> {
+    let source = store.options().date_source;
+    if source == DateSource::Filesystem {
+        return None;
+    }
+    let repo = history::open(store.root());
+    if source == DateSource::Git {
+        let warning = match &repo {
+            None => Some(
+                "date_source=git but this isn't a git work tree (or git isn't \
+                 installed) — falling back to filesystem dates",
+            ),
+            Some(r) if r.is_shallow() => Some(
+                "date_source=git on a shallow clone — ADR creation dates may be \
+                 wrong; fetch full history (e.g. actions/checkout fetch-depth: 0)",
+            ),
+            Some(_) => None,
+        };
+        if let Some(msg) = warning
+            && !GIT_STRICT_WARNED.swap(true, Ordering::Relaxed)
+        {
+            eprintln!("adroit: {msg}");
+        }
+    }
+    repo
+}
+
 /// Load every ADR and resolve its creation date from git (once per call).
 ///
 /// The git repository is probed a single time; each file's history is then one
 /// `git log`. Outside a git repo the per-file lookup returns `None` and the date
 /// falls back (see [`resolve_dates`]).
 fn load_resolved(store: &Store) -> Result<Vec<Resolved>, QueryError> {
-    let repo = history::open(store.root());
+    let repo = open_history(store);
     let is_frontmatter = store.format() == Format::Frontmatter;
     let resolved = store
         .list_with_paths()?

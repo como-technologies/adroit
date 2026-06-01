@@ -189,6 +189,13 @@ Resolution precedence for the creation date, highest first:
 Outside a git repository — or for an ADR you've created but not yet committed —
 adroit falls back to the modification time and omits the lifecycle timeline.
 
+You can control the source with `date_source` (config / `ADROIT_DATE_SOURCE` /
+`--date-source`): `auto` (the adaptive default above), `git` (require git — warns
+if history is unavailable or the clone is **shallow**, a common CI footgun that
+makes creation dates wrong), or `filesystem` (never shell git: mtime/authored
+dates only, no timeline — useful in sandboxes, no-git environments, or when git
+history is misleading after a big rewrite).
+
 ## Templates
 
 New ADRs are scaffolded from a template. Built-ins are:

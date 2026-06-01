@@ -10,6 +10,7 @@
 | `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme (env: `ADROIT_THEME`; overrides config) |
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
+| `--date-source <auto\|git\|filesystem>` | `auto` | Where ADR dates/lifecycle come from: `auto` (git when available, else filesystem), `git` (require git; warn if unavailable/shallow), `filesystem` (never shell git) (env: `ADROIT_DATE_SOURCE`; overrides config) |
 | `--version` | | Print version information |
 | `--help` | | Print help |
 
@@ -18,8 +19,8 @@ All three flags are **global** — they work before *or* after the subcommand
 
 Each also reads from an environment variable, so you don't have to pass it on
 every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
-`ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE` (and, for the web
-dashboard, `ADROIT_HOST` / `ADROIT_PORT`). A `.env` file in the current
+`ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE`, `ADROIT_DATE_SOURCE` (and, for
+the web dashboard, `ADROIT_HOST` / `ADROIT_PORT`). A `.env` file in the current
 directory (or a parent) is loaded automatically at startup, so you can keep your
 repo location there. Copy the tracked `.env.example` to get started (your local
 `.env` is git-ignored):
@@ -278,6 +279,7 @@ editor: vim
 | `review_quorum` | int | `3` | Default approvals required for `review`. |
 | `review_overdue_days` | int | `30` | A Proposed ADR older than this many days is flagged review-due even with no `review_by`. `0` disables age-based flagging. |
 | `tui_theme` | `default`\|`gruvbox` | `default` | Color theme for the TUI markdown preview. |
+| `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::{Layout, MarkdownTheme};
+use crate::config::{DateSource, Layout, MarkdownTheme};
 use crate::format::Format;
 
 /// A snappy tool for managing Architecture Decision Records.
@@ -48,6 +48,14 @@ pub struct Cli {
     /// Also settable via `ADROIT_TEMPLATE`.
     #[arg(long, global = true, env = "ADROIT_TEMPLATE")]
     pub default_template: Option<String>,
+
+    /// Where ADR dates/lifecycle come from: auto (git when available, else
+    /// filesystem), git (require git; warn if unavailable/shallow), or
+    /// filesystem (never shell git). Overrides config.
+    ///
+    /// Also settable via `ADROIT_DATE_SOURCE`.
+    #[arg(long, value_enum, global = true, env = "ADROIT_DATE_SOURCE")]
+    pub date_source: Option<DateSource>,
 
     #[command(subcommand)]
     pub command: Option<Command>,

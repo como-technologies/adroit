@@ -76,6 +76,19 @@ pub fn open(dir: &Path) -> Option<GitRepo> {
 }
 
 impl GitRepo {
+    /// Whether this is a shallow clone (`git clone --depth=…`). On a shallow
+    /// clone `git log --follow` can't see a file's true first commit, so
+    /// creation dates are unreliable — callers in strict `git` mode warn.
+    pub fn is_shallow(&self) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(&self.dir)
+            .args(["rev-parse", "--is-shallow-repository"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+            .unwrap_or(false)
+    }
+
     /// Git-derived history for `file`, or `None` if it is untracked / has no
     /// commits. `status_of` maps a path's directory to a [`Status`]; inject the
     /// store's config-aware mapping (`Store::dir_status`) so custom directory

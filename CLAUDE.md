@@ -70,6 +70,14 @@ honored and flat layout yields no milestones. `query::load_resolved` resolves
 in the module for large trees). Surfaced in `adroit show`, the TUI preview
 header, and the web detail view.
 
+The source is configurable via `config.date_source` / `ADROIT_DATE_SOURCE` /
+`--date-source` (`DateSource` enum on `StoreOptions`): `auto` (default — git when
+available, silent filesystem fallback), `git` (strict — `query::open_history`
+warns once via a process `AtomicBool` when the repo isn't git or is shallow, then
+falls back), `filesystem` (skip git entirely — mtime/authored dates, no
+timeline). `query::open_history` centralizes this; `load_resolved`/`detail` go
+through it.
+
 ## Interactive TUI (`tui` feature)
 
 `src/tui.rs` is a ratatui two-pane app (list + preview) gated behind the `tui`

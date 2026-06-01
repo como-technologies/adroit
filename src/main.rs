@@ -32,6 +32,10 @@ fn main() -> Result<()> {
     if let Some(template) = cli.default_template {
         cfg.default_template = template;
     }
+    // `--date-source` / `ADROIT_DATE_SOURCE` overrides where dates come from.
+    if let Some(source) = cli.date_source {
+        cfg.date_source = source;
+    }
     let dir = config::resolve_dir(cli.dir, &cfg);
 
     let opts = store_options(&cfg, cli.format, cli.layout);
@@ -164,6 +168,7 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
         layout: layout.unwrap_or(cfg.layout),
         status_dir,
         review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
+        date_source: cfg.date_source,
     }
 }
 

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::adr::{Adr, Number, Status};
-use crate::config::Layout;
+use crate::config::{DateSource, Layout};
 use crate::format::{self, Format};
 
 /// Errors that can occur during ADR storage operations.
@@ -42,6 +42,8 @@ pub struct StoreOptions {
     /// (deadline-only). Carried from config so the shared query layer can apply
     /// it identically across surfaces.
     pub review_overdue_days: Option<u32>,
+    /// Where the query layer reads ADR dates/lifecycle from (carried from config).
+    pub date_source: DateSource,
 }
 
 impl StoreOptions {
@@ -52,6 +54,7 @@ impl StoreOptions {
             layout: Layout::Flat,
             status_dir: std::collections::BTreeMap::new(),
             review_overdue_days: None,
+            date_source: DateSource::Auto,
         }
     }
 

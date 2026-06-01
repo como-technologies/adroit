@@ -58,6 +58,36 @@ pub enum MarkdownTheme {
     Gruvbox,
 }
 
+/// Where adroit reads ADR creation / lifecycle dates from.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum DateSource {
+    /// Git history when the ADR dir is a git work tree, else the filesystem.
+    /// Adaptive and silent — the default.
+    #[default]
+    Auto,
+    /// Require git history: warn once (then fall back) when it's unavailable or
+    /// the clone is shallow, so a CI misconfiguration is loud, not silent.
+    Git,
+    /// Filesystem only — never shell `git` (mtime / authored dates, no
+    /// reconstructed lifecycle timeline). Fast and dependency-free.
+    Filesystem,
+}
+
 /// Application configuration, persisted as YAML.
 ///
 /// New keys all carry serde defaults so older config files keep loading.
@@ -116,6 +146,11 @@ pub struct Config {
 
     /// Color theme for the TUI markdown preview (default: `default`/ANSI).
     pub tui_theme: MarkdownTheme,
+
+    /// Where ADR creation / lifecycle dates come from: `auto` (git when
+    /// available, else filesystem), `git` (require git; warn if unavailable or
+    /// shallow), or `filesystem` (never shell git). Default: `auto`.
+    pub date_source: DateSource,
 }
 
 impl Default for Config {
@@ -135,6 +170,7 @@ impl Default for Config {
             review_quorum: 3,
             review_overdue_days: 30,
             tui_theme: MarkdownTheme::default(),
+            date_source: DateSource::default(),
         }
     }
 }
@@ -525,6 +561,14 @@ mod tests {
         assert_eq!(config.review_days, 3);
         assert_eq!(config.review_quorum, 3);
         assert_eq!(config.review_overdue_days, 30);
+    }
+
+    #[test]
+    fn date_source_defaults_to_auto() {
+        assert_eq!(Config::default().date_source, DateSource::Auto);
+        // Legacy configs without the key still load.
+        let cfg: Config = serde_yaml_ng::from_str("dir: ~/x\n").unwrap();
+        assert_eq!(cfg.date_source, DateSource::Auto);
     }
 
     #[test]
