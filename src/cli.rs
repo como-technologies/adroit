@@ -35,6 +35,13 @@ pub struct Cli {
     #[arg(long, value_enum, global = true, env = "ADROIT_THEME")]
     pub theme: Option<MarkdownTheme>,
 
+    /// Days after which a still-Proposed ADR with no explicit `review_by` is
+    /// flagged review-due (overrides config; `0` disables age-based flagging).
+    ///
+    /// Also settable via `ADROIT_REVIEW_OVERDUE_DAYS`.
+    #[arg(long, global = true, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
+    pub review_overdue_days: Option<u32>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

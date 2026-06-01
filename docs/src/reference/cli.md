@@ -8,6 +8,7 @@
 | `--format <markdown\|frontmatter>` | `markdown` | On-disk format profile (env: `ADROIT_FORMAT`; overrides config) |
 | `--layout <by_status\|flat>` | `by_status` | Directory layout (env: `ADROIT_LAYOUT`; overrides config) |
 | `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme (env: `ADROIT_THEME`; overrides config) |
+| `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--version` | | Print version information |
 | `--help` | | Print help |
 
@@ -15,7 +16,8 @@ All three flags are **global** — they work before *or* after the subcommand
 (`adroit --dir X list` and `adroit list --dir X` are equivalent).
 
 Each also reads from an environment variable, so you don't have to pass it on
-every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME` (and, for the web
+every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
+`ADROIT_REVIEW_OVERDUE_DAYS` (and, for the web
 dashboard, `ADROIT_HOST` / `ADROIT_PORT`). A `.env` file in the current
 directory (or a parent) is loaded automatically at startup, so you can keep your
 repo location there. Copy the tracked `.env.example` to get started (your local

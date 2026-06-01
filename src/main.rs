@@ -21,6 +21,12 @@ fn main() -> Result<()> {
     if let Some(theme) = cli.theme {
         cfg.tui_theme = theme;
     }
+    // `--review-overdue-days` / `ADROIT_REVIEW_OVERDUE_DAYS` overrides the
+    // config's review-due staleness threshold (applies to every surface, since
+    // each builds its store options from this resolved `cfg`).
+    if let Some(days) = cli.review_overdue_days {
+        cfg.review_overdue_days = days;
+    }
     let dir = config::resolve_dir(cli.dir, &cfg);
 
     let opts = store_options(&cfg, cli.format, cli.layout);
