@@ -30,6 +30,11 @@ pub enum Layout {
     /// ADRs grouped into per-status subdirectories (status by directory). Default.
     #[default]
     ByStatus,
+    /// ADRs grouped into per-**category** subdirectories (the directory is the
+    /// area, not the status). Status lives in the `## Status` section / banner,
+    /// and numbering is per-category (pairs with the `per_category` naming
+    /// scheme). Used for MADR-style category folders.
+    ByCategory,
     /// All ADRs in one flat directory (the original adroit layout).
     Flat,
 }

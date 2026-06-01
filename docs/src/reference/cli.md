@@ -6,7 +6,7 @@
 |---|---|---|
 | `--dir <PATH>` / `-d` | `~/.local/share/adroit/` | Path to the ADR directory (env: `ADROIT_DIR`; overrides config) |
 | `--format <markdown\|frontmatter>` | `markdown` | On-disk format profile (env: `ADROIT_FORMAT`; overrides config) |
-| `--layout <by_status\|flat>` | `by_status` | Directory layout (env: `ADROIT_LAYOUT`; overrides config) |
+| `--layout <by_status\|flat\|by_category>` | `by_status` | Directory layout: `by_status` (status by dir), `flat`, or `by_category` (dir = area, with `per_category` naming) (env: `ADROIT_LAYOUT`; overrides config) |
 | `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme (env: `ADROIT_THEME`; overrides config) |
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
@@ -61,6 +61,7 @@ adroit new "Use Redis" --no-edit           # skip opening the editor
 |---|---|
 | `--template <name\|path>` | Template to scaffold from (`madr`, `nygard`, or a file path) |
 | `--no-edit` | Do not open the editor after creating the ADR |
+| `--category <name>` / `-c` | Category subdirectory — **required** under the `by_category` layout, rejected otherwise |
 
 ### `adroit list [--status <STATUS>]`
 
@@ -105,15 +106,17 @@ adroit status 1 accepted
 
 ### `adroit supersede <NEW> <OLD>`
 
-Mark `<OLD>` as superseded by `<NEW>` in one command: moves the old ADR to `superseded/`, writes `Superseded by [ADR-<NEW>](...)` into its status, and adds a reciprocal `Supersedes [ADR-<OLD>](...)` note to the new ADR.
+Mark `<OLD>` as superseded by `<NEW>` in one command (each addressed as in
+[`show`](#adroit-show-id)): moves the old ADR to `superseded/` (or rewrites its
+status in place under `by_category`), writes `Superseded by [<NEW>](...)` into
+its status, and adds a reciprocal `Supersedes [<OLD>](...)` note to the new ADR.
+Works under every naming scheme — the supersession links carry the scheme's
+reference (a number or a slug).
 
 ```sh
-adroit supersede 6 2   # ADR-0006 supersedes ADR-0002
+adroit supersede 6 2                 # sequential
+adroit supersede 20260601-b 20260515-a   # date scheme
 ```
-
-`supersede` is **numeric-only** — the supersession links it writes carry ADR
-numbers — so it requires a numeric naming scheme (`sequential`/`per_category`)
-and errors under `date`/`uuid`.
 
 ### `adroit set-review <ID> <DATE>`
 

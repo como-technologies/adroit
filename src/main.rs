@@ -113,8 +113,15 @@ fn main() -> Result<()> {
             title,
             template,
             no_edit,
+            category,
         }) => {
-            let path = cmd_new(&store, &cfg, &title, template.as_deref())?;
+            let path = cmd_new(
+                &store,
+                &cfg,
+                &title,
+                template.as_deref(),
+                category.as_deref(),
+            )?;
             println!("Created {}", path.display());
             if cfg.open_on_new && !no_edit {
                 open_in_editor(editor, &path)?;
@@ -246,12 +253,26 @@ fn cmd_new(
     cfg: &Config,
     title: &str,
     template: Option<&str>,
+    category: Option<&str>,
 ) -> Result<std::path::PathBuf> {
     let mut adr = adroit::adr::Adr::new(title)?;
     adr.status = cfg.default_status;
     // Assign the identity up front (so the heading renders correctly), via the
-    // configured naming scheme; `store.write` then reuses it.
-    let r = store.next_ref(title, adr.id.uuid())?;
+    // configured naming scheme; `store.write` then reuses it. Under by_category
+    // the directory is the area, so a `--category` is required and the number is
+    // local to it.
+    let r = if store.options().layout == Layout::ByCategory {
+        let category = category.ok_or_else(|| {
+            anyhow::anyhow!("the by_category layout requires `--category <name>`")
+        })?;
+        adr.category = Some(category.to_string());
+        store.next_ref_in_category(category)
+    } else {
+        if category.is_some() {
+            anyhow::bail!("`--category` only applies to the by_category layout");
+        }
+        store.next_ref(title, adr.id.uuid())?
+    };
     adroit::store::apply_ref_pub(&mut adr, &r);
 
     if store.options().format == Format::Markdown {

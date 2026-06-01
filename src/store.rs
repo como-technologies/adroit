@@ -208,10 +208,31 @@ impl Store {
     }
 
     /// The directory a given status maps to (absolute path under root).
+    /// In `by_category` the status doesn't pick the directory (the category
+    /// does), so this falls back to the root — callers that place/move files in
+    /// `by_category` use [`Store::category_dir`] instead.
     pub fn status_dir(&self, status: Status) -> PathBuf {
         match self.opts.layout {
-            Layout::Flat => self.root.clone(),
+            Layout::Flat | Layout::ByCategory => self.root.clone(),
             Layout::ByStatus => self.root.join(self.opts.dir_name(status)),
+        }
+    }
+
+    /// The directory for a category under the `by_category` layout.
+    pub fn category_dir(&self, category: &str) -> PathBuf {
+        self.root.join(category)
+    }
+
+    /// Where a file at `path` should live after a status change. In `by_status`
+    /// this is the new status's directory (a move); in `flat`/`by_category` the
+    /// file stays put (status is content-encoded, the directory is fixed).
+    fn status_target_dir(&self, path: &Path, status: Status) -> PathBuf {
+        match self.opts.layout {
+            Layout::ByStatus => self.status_dir(status),
+            Layout::Flat | Layout::ByCategory => path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.root.clone()),
         }
     }
 
@@ -227,7 +248,9 @@ impl Store {
 
     /// Map a file's parent directory name back to a status, if it matches one.
     fn dir_status_inner(&self, path: &Path) -> Option<Status> {
-        if self.opts.layout == Layout::Flat {
+        // Flat has no directory-implied status; by_category's directory is the
+        // category, so status comes from the `## Status` section, not the dir.
+        if matches!(self.opts.layout, Layout::Flat | Layout::ByCategory) {
             return None;
         }
         let dir = path.parent()?.file_name()?.to_str()?;
@@ -247,6 +270,14 @@ impl Store {
                     if dir.is_dir() {
                         all.extend(read_md_files(&dir)?);
                     }
+                }
+                all
+            }
+            // Every immediate subdirectory is a category; collect ADRs from each.
+            Layout::ByCategory => {
+                let mut all = Vec::new();
+                for dir in immediate_subdirs(&self.root) {
+                    all.extend(read_md_files(&dir)?);
                 }
                 all
             }
@@ -284,17 +315,43 @@ impl Store {
             .assign(&existing, title, today_local(), fresh_uuid))
     }
 
+    /// The identifier the next new ADR in `category` would be assigned, under the
+    /// `by_category` layout (per-directory local numbering): `category/NNNN`.
+    pub fn next_ref_in_category(&self, category: &str) -> AdrRef {
+        let nums = self.numbers_in_category(category);
+        self.opts.naming.assign_in_category(category, &nums)
+    }
+
+    /// The local ADR numbers already used in `category`'s directory.
+    fn numbers_in_category(&self, category: &str) -> Vec<u32> {
+        read_md_files(&self.category_dir(category))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|p| number_from_filename(p).map(|n| n.get()))
+            .collect()
+    }
+
     /// Write an ADR to disk using the configured naming scheme + format/layout.
     /// Assigns an identity (via the scheme) if the ADR doesn't have one yet.
     pub fn write(&self, adr: &mut Adr) -> Result<PathBuf, StoreError> {
         if adr.number.is_none() && adr.slug.is_none() {
-            let r = self.next_ref(&adr.title, adr.id.uuid())?;
+            let r = if self.opts.layout == Layout::ByCategory {
+                let category = adr.category.as_deref().ok_or_else(|| {
+                    StoreError::Parse("by_category layout requires a category".into())
+                })?;
+                self.next_ref_in_category(category)
+            } else {
+                self.next_ref(&adr.title, adr.id.uuid())?
+            };
             apply_ref(adr, r);
         }
         let r = adr.reference();
         let content = format::serialize(adr, self.opts.format)
             .map_err(|e| StoreError::Parse(e.to_string()))?;
-        let dir = self.status_dir(adr.status);
+        let dir = match (self.opts.layout, adr.category.as_deref()) {
+            (Layout::ByCategory, Some(category)) => self.category_dir(category),
+            _ => self.status_dir(adr.status),
+        };
         if !dir.is_dir() {
             std::fs::create_dir_all(&dir)?;
         }
@@ -311,6 +368,14 @@ impl Store {
             .map_err(|e| StoreError::Parse(e.to_string()))?;
         if let Some(r) = self.opts.naming.parse(path, &content) {
             apply_ref(&mut adr, r);
+        }
+        // Under by_category the parent directory is the ADR's category.
+        if self.opts.layout == Layout::ByCategory {
+            adr.category = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(str::to_string);
         }
         Ok(adr)
     }
@@ -417,21 +482,34 @@ impl Store {
     /// independent of how this store is configured.
     pub fn detect_profile(&self) -> Detected {
         let root_adrs = adr_files_in(&self.root);
-        let mut subdir_adrs = Vec::new();
-        for status in Status::ALL {
-            let d = self.root.join(self.opts.dir_name(status));
-            if d.is_dir() {
-                subdir_adrs.extend(adr_files_in(&d));
+        // ADRs under status-named subdirs (⇒ by_status) vs other subdirs (⇒
+        // by_category — the directory is an area, not a status).
+        let mut status_adrs = Vec::new();
+        let mut category_adrs = Vec::new();
+        for d in immediate_subdirs(&self.root) {
+            let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let is_status = Status::ALL
+                .into_iter()
+                .any(|s| self.opts.dir_name(s).eq_ignore_ascii_case(name));
+            if is_status {
+                status_adrs.extend(adr_files_in(&d));
+            } else {
+                category_adrs.extend(adr_files_in(&d));
             }
         }
-        let layout = if !subdir_adrs.is_empty() {
+        let layout = if !status_adrs.is_empty() {
             Some(Layout::ByStatus)
+        } else if !category_adrs.is_empty() {
+            Some(Layout::ByCategory)
         } else if !root_adrs.is_empty() {
             Some(Layout::Flat)
         } else {
             None
         };
-        let sample = subdir_adrs.first().or_else(|| root_adrs.first());
+        let sample = status_adrs
+            .first()
+            .or_else(|| category_adrs.first())
+            .or_else(|| root_adrs.first());
         let format = sample
             .and_then(|p| std::fs::read_to_string(p).ok())
             .map(|c| {
@@ -486,6 +564,20 @@ impl Store {
         let detected = self.detect_profile();
         let src_layout = detected.layout.unwrap_or(self.opts.layout);
         let src_format = detected.format.unwrap_or(self.opts.format);
+
+        // Converting to/from by_category would require (re)assigning categories
+        // and per-category numbers — out of scope for the verbatim file-move
+        // migrator. Refuse cleanly rather than mangle the repo.
+        if Layout::ByCategory == src_layout || Layout::ByCategory == self.opts.layout {
+            if src_layout == self.opts.layout {
+                return Ok(MigrateReport::default()); // same profile → no-op
+            }
+            return Err(StoreError::Parse(
+                "migrating to/from the by_category layout is not supported; \
+                 reorganize categories by hand"
+                    .into(),
+            ));
+        }
 
         let mut report = MigrateReport::default();
         if src_layout != self.opts.layout {
@@ -704,8 +796,8 @@ impl Store {
                 if let Some((new, _)) = &supersede {
                     adr.superseded_by = Some(new.clone());
                 }
-                // Flat layout: rewrite in place. by_status: move then write.
-                let target_dir = self.status_dir(new_status);
+                // Flat / by_category: rewrite in place. by_status: move then write.
+                let target_dir = self.status_target_dir(&path, new_status);
                 if !target_dir.is_dir() {
                     std::fs::create_dir_all(&target_dir)?;
                 }
@@ -736,7 +828,7 @@ impl Store {
                     .map(|(_, link)| (label.as_deref().unwrap_or(""), link.as_str()));
                 let rewritten = format::rewrite_status(&original, new_status, supersede_ref);
 
-                let target_dir = self.status_dir(new_status);
+                let target_dir = self.status_target_dir(&path, new_status);
                 if !target_dir.is_dir() {
                     std::fs::create_dir_all(&target_dir)?;
                 }
@@ -839,6 +931,20 @@ impl Store {
         let from_dir = self.status_dir(Status::Superseded);
         pathdiff(&from_dir, to_path)
     }
+}
+
+/// Immediate subdirectories of `dir` (one level), sorted by name. Used by the
+/// `by_category` layout, where each subdirectory is a category.
+fn immediate_subdirs(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    dirs
 }
 
 /// Read `*.md` ADR files (excluding README.md / adr-template.md) from a dir.

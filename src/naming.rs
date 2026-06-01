@@ -109,10 +109,12 @@ impl NamingScheme {
         }
     }
 
-    /// `true` when this scheme's identity is a (re-assignable) sequential number
-    /// — i.e. `adroit renumber` applies.
+    /// `true` when this scheme's identity is a single global sequential number
+    /// — i.e. `adroit renumber`/`review` apply and the CLI accepts a bare number.
+    /// Per-category is *not* globally numeric: its identity is a `category/NNNN`
+    /// composite (the number is only unique within its category).
     pub fn is_numeric(&self) -> bool {
-        matches!(self, NamingScheme::Sequential | NamingScheme::PerCategory)
+        matches!(self, NamingScheme::Sequential)
     }
 
     /// Assign a fresh identity for a new ADR, given the refs already present in
@@ -126,6 +128,9 @@ impl NamingScheme {
         fresh_uuid: Uuid,
     ) -> AdrRef {
         match self {
+            // Sequential: global max + 1. (Per-category numbering is computed by
+            // the store, which knows the category directory — see
+            // `Store::next_ref` — so `assign` is only the global-number path.)
             NamingScheme::Sequential | NamingScheme::PerCategory => {
                 let max = existing
                     .iter()
@@ -142,15 +147,30 @@ impl NamingScheme {
         }
     }
 
+    /// The per-category composite identity `category/NNNN` for a fresh ADR in
+    /// `category`, given the numbers already present in that category. Only the
+    /// `per_category` scheme uses this (the store supplies the category + scope).
+    pub fn assign_in_category(&self, category: &str, existing_numbers: &[u32]) -> AdrRef {
+        let next = existing_numbers.iter().copied().max().unwrap_or(0) + 1;
+        AdrRef::Slug(percat_id(category, next))
+    }
+
     /// Parse an ADR's identity from its file path + content. `None` if it can't
     /// be determined under this scheme.
     pub fn parse(&self, path: &Path, content: &str) -> Option<AdrRef> {
         match self {
-            NamingScheme::Sequential | NamingScheme::PerCategory => {
+            NamingScheme::Sequential => {
                 // Prefer the `# ADR-NNNN:` heading, else the filename's number.
                 heading_number(content)
                     .or_else(|| leading_number(path))
                     .map(AdrRef::Number)
+            }
+            // Per-category identity is `<parent-dir>/<NNNN>` — the directory is
+            // the category and the number is local to it.
+            NamingScheme::PerCategory => {
+                let n = heading_number(content).or_else(|| leading_number(path))?;
+                let category = parent_dir_name(path)?;
+                Some(AdrRef::Slug(percat_id(&category, n)))
             }
             // Date identity is the whole filename stem (`YYYYMMDD-title`).
             NamingScheme::Date => stem(path).map(AdrRef::Slug),
@@ -179,6 +199,12 @@ impl NamingScheme {
                 .or_else(|| t.strip_prefix("adr-"))
                 .unwrap_or(t);
             leading_digits(digits).map(AdrRef::Number)
+        } else if matches!(self, NamingScheme::PerCategory) {
+            // `category/NNNN` (or `category/N`) — normalize the number to 4 digits
+            // so `infra/1` matches the stored `infra/0001`.
+            let (cat, num) = t.rsplit_once('/')?;
+            let n = leading_digits(num)?;
+            Some(AdrRef::Slug(percat_id(cat, n)))
         } else {
             let stem = t.strip_suffix(".md").unwrap_or(t);
             Some(AdrRef::Slug(stem.to_string()))
@@ -197,11 +223,16 @@ impl NamingScheme {
         }
     }
 
-    /// The on-disk filename for an ADR with this ref and title.
+    /// The on-disk filename for an ADR with this ref and title. (For
+    /// per-category the directory is the category, so the filename is just the
+    /// local `NNNN-title.md`.)
     pub fn filename(&self, r: &AdrRef, title: &str) -> String {
         match (self, r) {
             (NamingScheme::Date, AdrRef::Slug(s)) => format!("{s}.md"),
             (NamingScheme::Uuid, AdrRef::Slug(s)) => format!("{s}-{}.md", slugify(title)),
+            (NamingScheme::PerCategory, AdrRef::Slug(s)) => {
+                format!("{:04}-{}.md", percat_number(s).unwrap_or(0), slugify(title))
+            }
             (_, AdrRef::Number(n)) => format!("{n:04}-{}.md", slugify(title)),
             // Defensive: ref/scheme mismatch — name by the slug.
             (_, AdrRef::Slug(s)) => format!("{s}.md"),
@@ -228,6 +259,10 @@ impl NamingScheme {
     pub fn heading(&self, r: &AdrRef, title: &str) -> String {
         match r {
             AdrRef::Number(n) => format!("# ADR-{n:04}: {title}"),
+            // Per-category carries the local number in the heading.
+            AdrRef::Slug(s) if matches!(self, NamingScheme::PerCategory) => {
+                format!("# ADR-{:04}: {title}", percat_number(s).unwrap_or(0))
+            }
             AdrRef::Slug(_) => format!("# {title}"),
         }
     }
@@ -275,10 +310,35 @@ impl NamingScheme {
         }
         if self.is_numeric() {
             leading_digits(stem).map(AdrRef::Number)
+        } else if matches!(self, NamingScheme::PerCategory) {
+            // The category is the link's immediate parent directory; the number
+            // is the filename's leading digits → `category/NNNN`.
+            let path = file.split('#').next().unwrap_or(file);
+            let category = path
+                .rsplit('/')
+                .nth(1)
+                .filter(|c| !c.is_empty() && *c != "..")?;
+            let n = leading_digits(stem)?;
+            Some(AdrRef::Slug(percat_id(category, n)))
         } else {
             Some(AdrRef::Slug(stem.to_string()))
         }
     }
+}
+
+/// The canonical per-category composite id: `category/NNNN` (number zero-padded).
+fn percat_id(category: &str, number: u32) -> String {
+    format!("{category}/{number:04}")
+}
+
+/// The local number from a `category/NNNN` composite id.
+fn percat_number(id: &str) -> Option<u32> {
+    leading_digits(id.rsplit('/').next()?)
+}
+
+/// The parent directory's name (the category), for a per-category ADR path.
+fn parent_dir_name(path: &Path) -> Option<String> {
+    Some(path.parent()?.file_name()?.to_str()?.to_string())
 }
 
 // --- shared helpers (scheme-agnostic) --------------------------------------
@@ -358,7 +418,9 @@ mod tests {
         assert_eq!(NamingScheme::Date.scope(), Scope::Global);
         assert_eq!(NamingScheme::PerCategory.scope(), Scope::PerDir);
         assert!(NamingScheme::Sequential.is_numeric());
-        assert!(NamingScheme::PerCategory.is_numeric());
+        // Per-category is per-dir scoped and addressed by a `category/NNNN`
+        // composite, so it is NOT a single global number.
+        assert!(!NamingScheme::PerCategory.is_numeric());
         assert!(!NamingScheme::Date.is_numeric());
         assert!(!NamingScheme::Uuid.is_numeric());
     }
@@ -492,18 +554,44 @@ mod tests {
     }
 
     #[test]
-    fn per_category_is_numeric_but_per_dir() {
+    fn per_category_composite_identity() {
         let s = NamingScheme::PerCategory;
         assert_eq!(s.scope(), Scope::PerDir);
-        // Numbering works like sequential within the given scope.
+        assert!(!s.is_numeric());
+
+        // Per-directory numbering → `category/NNNN`.
         assert_eq!(
-            s.assign(
-                &[AdrRef::Number(2)],
-                "x",
-                date(2026, Month::June, 1),
-                uuid()
+            s.assign_in_category("data", &[1, 2]),
+            AdrRef::Slug("data/0003".into())
+        );
+        assert_eq!(
+            s.assign_in_category("infra", &[]),
+            AdrRef::Slug("infra/0001".into())
+        );
+
+        let r = AdrRef::Slug("data/0003".into());
+        // Filename is the local number (the dir is the category).
+        assert_eq!(s.filename(&r, "Use Kafka!"), "0003-use-kafka.md");
+        // Display / heading carry the composite id / local number.
+        assert_eq!(s.display(&r), "data/0003");
+        assert_eq!(s.heading(&r, "Use Kafka"), "# ADR-0003: Use Kafka");
+        // Parse from a path: parent dir = category, filename = number.
+        assert_eq!(
+            s.parse(
+                Path::new("repo/data/0003-use-kafka.md"),
+                "# ADR-0003: Use Kafka\n"
             ),
-            AdrRef::Number(3)
+            Some(AdrRef::Slug("data/0003".into()))
+        );
+        // CLI input accepts `data/3` and normalizes to `data/0003`.
+        assert_eq!(
+            s.parse_ref("data/3"),
+            Some(AdrRef::Slug("data/0003".into()))
+        );
+        // A cross-category link resolves category from the target's parent dir.
+        assert_eq!(
+            s.ref_in_link("../infra/0001-use-terraform.md"),
+            Some(AdrRef::Slug("infra/0001".into()))
         );
     }
 

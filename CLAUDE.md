@@ -159,6 +159,14 @@ convention (status encoded by directory).
   rejected/ superseded/ deprecated/` subdirs; `README.md` and `adr-template.md`
   are skipped; `next_number` is the max across all subdirs + 1; status changes
   move the file. `layout = flat`: one directory (original behaviour).
+  `layout = by_category`: each immediate subdirectory is a **category** (an
+  area, not a status); status lives in the `## Status` section (the dir is the
+  category, so `dir_status` is `None` and a status change rewrites **in place**,
+  no move); numbering is **per category** (`Store::next_ref_in_category`), and
+  ADRs are addressed by the `category/NNNN` composite. Pairs with the
+  `per_category` naming scheme; `new` requires `--category`. `Adr.category` (set
+  from the parent dir on read) carries the area. `migrate` to/from `by_category`
+  is refused (categories/numbers can't be re-derived mechanically).
 
 **Profile-mismatch guard + migrate.** `Store::detect_profile` infers the on-disk
 layout/format from the files present (status-subdirs-with-numbered-`.md` ⇒
@@ -249,9 +257,14 @@ detection groups by scheme identity. **Sequential stays byte-identical** — the
 additive identity model (`Adr.number: Option<Number>` + `Adr.slug:
 Option<String>`, `Adr::reference()`) keeps it the no-op path, and the existing
 unit + integration tests are the regression guard. `date` + `uuid` work
-end-to-end (create/list/show/status/set-review/check); `supersede`/`renumber`/
-`review` are numeric-only (the supersession model is numeric) and bail under a
-non-numeric scheme. `per_category` needs a category layout and is not yet wired.
+end-to-end (create/list/show/status/set-review/supersede/check) — supersession
+is a scheme-agnostic `Option<AdrRef>` (serde-untagged in frontmatter; resolved
+from the markdown link via `ref_in_note`), and the graph/related/view layer
+carries scheme `reference` + `address` strings so the TUI and web SPA route
+every ADR (incl. slug/uuid) by `address`. `renumber`/`review` are numeric-only
+(a single global number — `sequential`) and bail otherwise. `per_category` is
+wired via the `by_category` layout (per-category local numbering, `category/NNNN`
+identity, status in-content).
 
 ### Review deadlines (`review_by`)
 

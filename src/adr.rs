@@ -218,9 +218,12 @@ pub struct Adr {
     /// Cosmetic sequential display number. `None` until assigned by the store on
     /// write — and always `None` under the slug-based (date/uuid) naming schemes.
     pub number: Option<Number>,
-    /// Slug identity for the date / uuid naming schemes (the filename stem).
-    /// `None` under the numeric (sequential / per-category) schemes.
+    /// Slug identity for the date / uuid / per-category naming schemes (the
+    /// filename stem, or `category/NNNN`). `None` under the sequential scheme.
     pub slug: Option<String>,
+    /// Category (the containing subdirectory) under the `by_category` layout.
+    /// `None` under the flat / by-status layouts.
+    pub category: Option<String>,
     /// Short title describing the decision.
     pub title: String,
     /// Current lifecycle status.
@@ -254,6 +257,7 @@ impl Adr {
             id: AdrId::default(),
             number: None,
             slug: None,
+            category: None,
             title,
             status: Status::default(),
             created: Created::default(),

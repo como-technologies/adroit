@@ -255,6 +255,7 @@ pub fn parse_markdown(
         id: crate::adr::AdrId::new(),
         number,
         slug: None,
+        category: None,
         title,
         status,
         created: crate::adr::Created::now(),

@@ -181,7 +181,7 @@ the setting.
 | `sequential` (default) | `NNNN-title.md` | `# ADR-NNNN: Title` | global number | possible across branches |
 | `date` | `YYYYMMDD-title.md` | `# Title` | date slug | collision-free |
 | `uuid` | `<uuid>-title.md` | `# Title` | a UUID | collision-free |
-| `per_category` | `NNNN-title.md` (per dir) | `# ADR-NNNN: Title` | per-directory number | *(not yet wired)* |
+| `per_category` | `<category>/NNNN-title.md` | `# ADR-NNNN: Title` | `category/NNNN` | collision-free across categories |
 
 **`sequential`** — the classic zero-padded `NNNN`, human-friendly and sortable.
 Its one weakness is **cross-branch collisions**: two branches that each create
@@ -199,18 +199,30 @@ is a plain `# Title` and the identity lives in the filename.
 the cost of human-friendliness. adroit displays a short `ADR-<prefix>` and lets
 you address an ADR by any unique leading prefix of the UUID.
 
-**`per_category`** (MADR categories) — per-directory local numbering. The
-identity seam already supports it, but it needs a category *layout* (subdirs as
-areas, status tracked in frontmatter rather than by directory), so it is not yet
-wired end-to-end.
+**`per_category`** (MADR categories) — per-directory local numbering, paired
+with the **`by_category` layout**: each immediate subdirectory is a category
+(an *area*, not a status), and numbering restarts per category (so `data/0001`
+and `infra/0001` coexist). The identity is the composite `category/NNNN`. Status
+is **not** encoded by the directory here (the directory is the category) — it
+lives in the `## Status` section / banner, so a status change rewrites the file
+**in place** rather than moving it. Create with an explicit category:
+
+```sh
+adroit --layout by_category --naming per_category \
+  new "Use Postgres" --category data
+# -> data/0001-use-postgres.md, heading "# ADR-0001: Use Postgres"
+```
 
 ### Addressing and scheme-specific commands
 
-Read/lifecycle commands take an `<ID>` resolved through the active scheme: a
-number for `sequential` (e.g. `9` or `ADR-0009`), the filename slug for `date`,
-or a unique UUID prefix for `uuid`. Because their artifacts are number-shaped,
-`supersede`, `renumber`, and `review` require a **numeric** scheme
-(`sequential`/`per_category`) and error under `date`/`uuid`.
+Read/lifecycle commands — `show`, `status`, `edit`, `set-review`, and
+`supersede` — take an `<ID>` resolved through the active scheme: a number for
+`sequential` (e.g. `9` or `ADR-0009`), the filename slug for `date`, a unique
+UUID prefix for `uuid`, or the `category/NNNN` composite for `per_category`
+(`data/0001`, or the unpadded `data/1`). `renumber` and `review` are
+**numeric-only** (their artifacts are a single global number — `sequential`);
+they error under `date` / `uuid` / `per_category`. (`per_category` migration
+to/from other layouts is not automated — reorganize categories by hand.)
 
 ## Dates come from git
 

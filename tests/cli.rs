@@ -1074,6 +1074,104 @@ fn dir_flag_overrides_default() {
 }
 
 // ---------------------------------------------------------------------------
+// per_category naming + by_category layout (MADR-style category folders)
+// ---------------------------------------------------------------------------
+
+/// A command in the by_category layout + per_category naming scheme.
+fn adroit_category(dir: &TempDir) -> Command {
+    let mut cmd = adroit(dir);
+    cmd.args(["--layout", "by_category", "--naming", "per_category"]);
+    cmd
+}
+
+#[test]
+fn per_category_numbers_locally_per_directory() {
+    let dir = TempDir::new().unwrap();
+    adroit_category(&dir)
+        .args(["new", "Use Postgres", "--category", "data", "--no-edit"])
+        .assert()
+        .success();
+    adroit_category(&dir)
+        .args(["new", "Use Kafka", "--category", "data", "--no-edit"])
+        .assert()
+        .success();
+    adroit_category(&dir)
+        .args(["new", "Use Terraform", "--category", "infra", "--no-edit"])
+        .assert()
+        .success();
+
+    // Numbering is local to each category: data has 0001/0002, infra has 0001.
+    assert!(dir.path().join("data/0001-use-postgres.md").exists());
+    assert!(dir.path().join("data/0002-use-kafka.md").exists());
+    assert!(dir.path().join("infra/0001-use-terraform.md").exists());
+    // The heading carries the local number.
+    let infra = fs::read_to_string(dir.path().join("infra/0001-use-terraform.md")).unwrap();
+    assert!(
+        infra.starts_with("# ADR-0001: Use Terraform\n"),
+        "got: {infra}"
+    );
+}
+
+#[test]
+fn per_category_requires_category_flag() {
+    let dir = TempDir::new().unwrap();
+    adroit_category(&dir)
+        .args(["new", "No category", "--no-edit"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires `--category"));
+}
+
+#[test]
+fn per_category_show_and_status_by_composite_id() {
+    let dir = TempDir::new().unwrap();
+    adroit_category(&dir)
+        .args(["new", "Use Postgres", "--category", "data", "--no-edit"])
+        .assert()
+        .success();
+    adroit_category(&dir)
+        .args(["new", "Use Terraform", "--category", "infra", "--no-edit"])
+        .assert()
+        .success();
+
+    // Address by `category/NNNN` (accepts an unpadded number too).
+    adroit_category(&dir)
+        .args(["show", "data/1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("data/0001: Use Postgres"));
+
+    // A status change stays in the category directory (no move).
+    adroit_category(&dir)
+        .args(["status", "data/0001", "accepted"])
+        .assert()
+        .success();
+    assert!(
+        dir.path().join("data/0001-use-postgres.md").exists(),
+        "file stays in its category dir on a status change"
+    );
+    let body = fs::read_to_string(dir.path().join("data/0001-use-postgres.md")).unwrap();
+    assert!(body.contains("Accepted"));
+
+    adroit_category(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn per_category_list_shows_composite_ids() {
+    let dir = TempDir::new().unwrap();
+    adroit_category(&dir)
+        .args(["new", "Use Postgres", "--category", "data", "--no-edit"])
+        .assert()
+        .success();
+    adroit_category(&dir)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("data/0001"))
+        .stdout(predicate::str::contains("Use Postgres"));
+}
+
+// ---------------------------------------------------------------------------
 // No subcommand -> interactive TUI (default build)
 // ---------------------------------------------------------------------------
 

@@ -81,6 +81,10 @@ pub enum Command {
         /// Do not open the editor after creating the ADR.
         #[arg(long)]
         no_edit: bool,
+        /// Category subdirectory for the new ADR (required by the by_category
+        /// layout; rejected by the others).
+        #[arg(short, long)]
+        category: Option<String>,
     },
     /// List existing ADRs.
     List {
