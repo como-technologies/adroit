@@ -840,6 +840,97 @@ fn relink_dry_run_previews_without_writing() {
 }
 
 // ---------------------------------------------------------------------------
+// `adroit config` (show / get / set)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_show_lists_keys_and_sources() {
+    let dir = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .arg("config")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SOURCE"))
+        .stdout(predicate::str::contains("layout"))
+        .stdout(predicate::str::contains("date_source"));
+}
+
+#[test]
+fn config_get_reflects_flag_and_env() {
+    let dir = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    // A flag override is reflected.
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .args(["--layout", "flat", "config", "get", "layout"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("flat"));
+    // An env override is reflected.
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("ADROIT_DATE_SOURCE", "git")
+        .args(["config", "get", "date_source"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("git"));
+}
+
+#[test]
+fn config_set_writes_config_yaml_and_round_trips() {
+    let dir = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .args(["config", "set", "review_overdue_days", "45"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Set review_overdue_days = 45"));
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .args(["config", "get", "review_overdue_days"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("45"));
+}
+
+#[test]
+fn config_set_local_writes_project_dotenv() {
+    let adr_dir = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    adroit(&adr_dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .current_dir(cwd.path())
+        .args(["config", "set", "layout", "flat", "--local"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADROIT_LAYOUT=flat"));
+    let env = fs::read_to_string(cwd.path().join(".env")).unwrap();
+    assert!(env.contains("ADROIT_LAYOUT=flat"), "got: {env}");
+}
+
+#[test]
+fn config_set_rejects_bad_value_and_unknown_key() {
+    let dir = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .args(["config", "set", "layout", "sideways"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid"));
+    adroit(&dir)
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .args(["config", "set", "bogus", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown config key"));
+}
+
+// ---------------------------------------------------------------------------
 // Legacy flat + frontmatter profile (still supported)
 // ---------------------------------------------------------------------------
 

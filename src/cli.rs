@@ -187,6 +187,38 @@ pub enum Command {
         #[arg(long, default_value_t = 8080, env = "ADROIT_PORT")]
         port: u16,
     },
+    /// Inspect or change configuration.
+    ///
+    /// `adroit config` (or `config show`) lists every setting with its resolved
+    /// value and where it came from. `config get <key>` prints one value;
+    /// `config set <key> <value>` persists to `config.yaml` (or the project
+    /// `.env`, with `--local`).
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+}
+
+/// Subcommands for `adroit config`.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ConfigAction {
+    /// List every setting with its resolved value and source (the default).
+    Show,
+    /// Print one setting's resolved value.
+    Get {
+        /// Config key (e.g. `layout`, `format`, `date_source`).
+        key: String,
+    },
+    /// Set a value — writes `config.yaml`, or the project `.env` with `--local`.
+    Set {
+        /// Config key (e.g. `layout`, `format`, `date_source`).
+        key: String,
+        /// New value (validated against the key's type).
+        value: String,
+        /// Write `KEY=value` to the project `.env` instead of `config.yaml`.
+        #[arg(long)]
+        local: bool,
+    },
 }
 
 #[cfg(test)]

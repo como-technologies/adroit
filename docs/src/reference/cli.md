@@ -289,6 +289,32 @@ TUI against `X`. In a non-interactive context (no TTY) it prints a hint and
 exits instead of seizing the terminal. Built behind the `tui` Cargo feature
 (on by default); without it, a hint points you at the CLI subcommands.
 
+### `adroit config [show | get <key> | set <key> <value> [--local]]`
+
+Inspect or change configuration.
+
+- **`adroit config`** (or `config show`) lists every setting with its **resolved
+  value and source** — `flag`, `env`, `config` (set in `config.yaml`), or
+  `default` — which is the quickest way to answer "why is my layout `flat`?"
+  given the precedence chain (flag > env/`.env` > `config.yaml` > default).
+- **`adroit config get <key>`** prints one resolved value (scriptable).
+- **`adroit config set <key> <value>`** persists to `config.yaml` (validated
+  against the key's type). With **`--local`** it instead upserts `KEY=value` into
+  a `.env` in the current directory (a per-project / per-machine override) — only
+  for keys that have an environment variable.
+
+```sh
+adroit config                         # show all settings + where each came from
+adroit config get layout
+adroit config set date_source git     # -> ~/.config/adroit/config.yaml
+adroit config set layout flat --local # -> ./.env  (ADROIT_LAYOUT=flat)
+```
+
+`config` works even when the repo's on-disk profile doesn't match your config
+(it's about settings, not ADRs), so you can use it to diagnose and fix a
+mismatch. Settable keys are those in the [Configuration](#configuration) table
+below.
+
 ## Configuration
 
 adroit stores configuration in `~/.config/adroit/config.yaml` (XDG on Linux, platform-appropriate elsewhere). The file is created automatically on first run with your detected editor.

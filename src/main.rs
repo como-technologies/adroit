@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use adroit::adr::{Number, ReviewBy, Status};
-use adroit::cli::{Cli, Command};
+use adroit::cli::{Cli, Command, ConfigAction};
 use adroit::config::{self, Config, Layout};
 use adroit::format::Format;
 use adroit::query::{self, Filter};
@@ -29,13 +29,20 @@ fn main() -> Result<()> {
     }
     // `--default-template` / `ADROIT_TEMPLATE` overrides the config's default
     // template for `new` (a per-invocation `new --template` still wins).
-    if let Some(template) = cli.default_template {
-        cfg.default_template = template;
+    if let Some(template) = &cli.default_template {
+        cfg.default_template = template.clone();
     }
     // `--date-source` / `ADROIT_DATE_SOURCE` overrides where dates come from.
     if let Some(source) = cli.date_source {
         cfg.date_source = source;
     }
+
+    // `config` operates on configuration, not ADRs — handle it before resolving
+    // a dir or opening a store, so it works even on a profile-mismatched repo.
+    if let Some(Command::Config { action }) = &cli.command {
+        return cmd_config(action.as_ref(), &cli);
+    }
+
     let dir = config::resolve_dir(cli.dir, &cfg);
 
     let opts = store_options(&cfg, cli.format, cli.layout);
@@ -127,6 +134,8 @@ fn main() -> Result<()> {
             )?;
         }
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
+        // `config` returns before the store is opened (see above).
+        Some(Command::Config { .. }) => unreachable!("config handled before store open"),
         None => run_tui(&cfg, &dir)?,
     }
 
@@ -420,6 +429,117 @@ fn cmd_index_check(
             path.display()
         );
     }
+}
+
+/// `adroit config`: show / get / set configuration.
+fn cmd_config(action: Option<&ConfigAction>, cli: &Cli) -> Result<()> {
+    match action {
+        None | Some(ConfigAction::Show) => config_show(cli),
+        Some(ConfigAction::Get { key }) => config_get(cli, key),
+        Some(ConfigAction::Set { key, value, local }) => config_set(key, value, *local),
+    }
+}
+
+/// The flag/env value clap captured for a config `key` (if that key has one).
+fn config_cli_value(cli: &Cli, key: &str) -> Option<String> {
+    match key {
+        "dir" => cli.dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "format" => cli.format.map(|f| f.to_string()),
+        "layout" => cli.layout.map(|l| l.to_string()),
+        "tui_theme" => cli.theme.map(|t| t.to_string()),
+        "default_template" => cli.default_template.clone(),
+        "review_overdue_days" => cli.review_overdue_days.map(|n| n.to_string()),
+        "date_source" => cli.date_source.map(|d| d.to_string()),
+        _ => None,
+    }
+}
+
+/// Effective value of `key`: a flag/env override wins, then the config file /
+/// built-in default (with `dir` resolved to its computed default).
+fn config_effective(cli: &Cli, cfg: &Config, key: &str) -> String {
+    if let Some(v) = config_cli_value(cli, key) {
+        return v;
+    }
+    if key == "dir" {
+        return config::resolve_dir(None, cfg)
+            .to_string_lossy()
+            .into_owned();
+    }
+    cfg.get_str(key).unwrap_or_else(|| "(unset)".to_string())
+}
+
+/// Where `key`'s effective value came from, by precedence. A flag and an env
+/// var can both be set (a flag wins); we tell them apart by comparing the env
+/// var's value to the value clap actually resolved.
+fn config_source(cli: &Cli, key: &str, in_file: bool) -> &'static str {
+    match config_cli_value(cli, key) {
+        Some(v) => match config::env_var_for(key).and_then(|e| std::env::var(e).ok()) {
+            Some(env_val) if env_val == v => "env",
+            _ => "flag",
+        },
+        None if in_file => "config",
+        None => "default",
+    }
+}
+
+fn config_show(cli: &Cli) -> Result<()> {
+    let cfg = Config::load()?;
+    // Parse the raw YAML to tell a file-set key from a defaulted one.
+    let raw: serde_yaml_ng::Value = config::config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_yaml_ng::from_str(&s).ok())
+        .unwrap_or(serde_yaml_ng::Value::Null);
+
+    println!("{:<21}{:<30} SOURCE", "KEY", "VALUE");
+    for &key in config::CONFIG_KEYS {
+        let value = config_effective(cli, &cfg, key);
+        let source = config_source(cli, key, raw.get(key).is_some());
+        // The literal space guarantees a gap even when `value` exceeds the pad.
+        println!("{key:<21}{value:<30} {source}");
+    }
+    if let Some(p) = config::config_path() {
+        println!("\nconfig file: {}", p.display());
+    }
+    Ok(())
+}
+
+fn config_get(cli: &Cli, key: &str) -> Result<()> {
+    if !config::CONFIG_KEYS.contains(&key) {
+        anyhow::bail!("unknown config key `{key}` — run `adroit config` to list keys");
+    }
+    let cfg = Config::load()?;
+    println!("{}", config_effective(cli, &cfg, key));
+    Ok(())
+}
+
+fn config_set(key: &str, value: &str, local: bool) -> Result<()> {
+    if !config::CONFIG_KEYS.contains(&key) {
+        anyhow::bail!("unknown config key `{key}` — run `adroit config` to list keys");
+    }
+    // Validate the value against the key's type before writing anything.
+    Config::default()
+        .set_str(key, value)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    if local {
+        let env = config::env_var_for(key).ok_or_else(|| {
+            anyhow::anyhow!(
+                "`{key}` has no environment variable — omit --local to write config.yaml"
+            )
+        })?;
+        let path = std::path::PathBuf::from(".env");
+        config::upsert_env_file(&path, env, value)?;
+        println!("Set {env}={value} in {}", path.display());
+    } else {
+        let mut cfg = Config::load()?;
+        cfg.set_str(key, value).map_err(|e| anyhow::anyhow!(e))?;
+        cfg.save()?;
+        let path = config::config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        println!("Set {key} = {value} in {path}");
+    }
+    Ok(())
 }
 
 /// `adroit migrate`: convert the repo to the configured layout/format. Prints a

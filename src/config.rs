@@ -184,6 +184,112 @@ impl Config {
             .cloned()
             .unwrap_or_else(|| status.to_string().to_lowercase())
     }
+
+    /// Current value of a scalar config `key` as a string (for `adroit config`),
+    /// or `None` for an unset optional (`dir`/`editor`) or an unknown key.
+    pub fn get_str(&self, key: &str) -> Option<String> {
+        Some(match key {
+            "dir" => self.dir.as_ref()?.to_string_lossy().into_owned(),
+            "editor" => self.editor.clone()?,
+            "format" => self.format.to_string(),
+            "layout" => self.layout.to_string(),
+            "default_template" => self.default_template.clone(),
+            "default_status" => self.default_status.to_string(),
+            "open_on_new" => self.open_on_new.to_string(),
+            "review_days" => self.review_days.to_string(),
+            "review_quorum" => self.review_quorum.to_string(),
+            "review_overdue_days" => self.review_overdue_days.to_string(),
+            "tui_theme" => self.tui_theme.to_string(),
+            "date_source" => self.date_source.to_string(),
+            _ => return None,
+        })
+    }
+
+    /// Set a scalar config `key` from a string, validating the value. Returns a
+    /// human error for an unknown key or an invalid value.
+    pub fn set_str(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let bad = |what: &str| format!("invalid {what} `{value}`");
+        match key {
+            "dir" => self.dir = Some(PathBuf::from(value)),
+            "editor" => self.editor = Some(value.to_string()),
+            "format" => {
+                self.format = value
+                    .parse()
+                    .map_err(|_| bad("format (markdown|frontmatter)"))?
+            }
+            "layout" => self.layout = value.parse().map_err(|_| bad("layout (by_status|flat)"))?,
+            "default_template" => self.default_template = value.to_string(),
+            "default_status" => self.default_status = value.parse().map_err(|_| bad("status"))?,
+            "open_on_new" => self.open_on_new = value.parse().map_err(|_| bad("boolean"))?,
+            "review_days" => self.review_days = value.parse().map_err(|_| bad("number"))?,
+            "review_quorum" => self.review_quorum = value.parse().map_err(|_| bad("number"))?,
+            "review_overdue_days" => {
+                self.review_overdue_days = value.parse().map_err(|_| bad("number"))?
+            }
+            "tui_theme" => {
+                self.tui_theme = value.parse().map_err(|_| bad("theme (default|gruvbox)"))?
+            }
+            "date_source" => {
+                self.date_source = value
+                    .parse()
+                    .map_err(|_| bad("date source (auto|git|filesystem)"))?
+            }
+            _ => return Err(format!("unknown config key `{key}`")),
+        }
+        Ok(())
+    }
+}
+
+/// The scalar config keys `adroit config` shows / gets / sets, in display order.
+pub const CONFIG_KEYS: &[&str] = &[
+    "dir",
+    "editor",
+    "format",
+    "layout",
+    "default_template",
+    "default_status",
+    "open_on_new",
+    "review_days",
+    "review_quorum",
+    "review_overdue_days",
+    "tui_theme",
+    "date_source",
+];
+
+/// The environment variable that overrides a config key (for `.env` writes and
+/// source reporting), or `None` for keys with no env override.
+pub fn env_var_for(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "dir" => "ADROIT_DIR",
+        "format" => "ADROIT_FORMAT",
+        "layout" => "ADROIT_LAYOUT",
+        "tui_theme" => "ADROIT_THEME",
+        "default_template" => "ADROIT_TEMPLATE",
+        "review_overdue_days" => "ADROIT_REVIEW_OVERDUE_DAYS",
+        "date_source" => "ADROIT_DATE_SOURCE",
+        _ => return None,
+    })
+}
+
+/// Upsert `KEY=value` into a `.env`-style file: replace the first active (un-
+/// commented) `KEY=` line, else append. Other lines (incl. comments) are kept.
+/// Creates the file if missing.
+pub fn upsert_env_file(path: &std::path::Path, key: &str, value: &str) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let prefix = format!("{key}=");
+    let new_line = format!("{key}={value}");
+    if let Some(slot) = lines
+        .iter_mut()
+        .find(|l| l.trim_start().starts_with(&prefix))
+    {
+        *slot = new_line;
+    } else {
+        lines.push(new_line);
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    std::fs::write(path, out)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -604,5 +710,48 @@ mod tests {
         let config = Config::default();
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         assert!(!yaml.contains("editor"));
+    }
+
+    #[test]
+    fn config_get_set_str_round_trip_and_validation() {
+        let mut c = Config::default();
+        assert_eq!(c.get_str("layout").as_deref(), Some("by_status"));
+        assert_eq!(c.get_str("date_source").as_deref(), Some("auto"));
+        c.set_str("layout", "flat").unwrap();
+        c.set_str("review_overdue_days", "45").unwrap();
+        assert_eq!(c.get_str("layout").as_deref(), Some("flat"));
+        assert_eq!(c.get_str("review_overdue_days").as_deref(), Some("45"));
+        // Validation + unknown keys.
+        assert!(c.set_str("layout", "sideways").is_err());
+        assert!(c.set_str("review_days", "lots").is_err());
+        assert!(c.set_str("bogus", "x").is_err());
+        assert_eq!(c.get_str("bogus"), None);
+        // Unset optionals read as None.
+        assert_eq!(c.get_str("editor"), None);
+    }
+
+    #[test]
+    fn env_var_mapping() {
+        assert_eq!(env_var_for("layout"), Some("ADROIT_LAYOUT"));
+        assert_eq!(env_var_for("date_source"), Some("ADROIT_DATE_SOURCE"));
+        assert_eq!(
+            env_var_for("review_overdue_days"),
+            Some("ADROIT_REVIEW_OVERDUE_DAYS")
+        );
+        assert_eq!(env_var_for("editor"), None); // no env override
+    }
+
+    #[test]
+    fn upsert_env_replaces_or_appends_preserving_other_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(".env");
+        std::fs::write(&p, "# keep me\nADROIT_DIR=/x\n").unwrap();
+        upsert_env_file(&p, "ADROIT_LAYOUT", "flat").unwrap(); // append
+        upsert_env_file(&p, "ADROIT_DIR", "/y").unwrap(); // replace
+        let out = std::fs::read_to_string(&p).unwrap();
+        assert!(out.contains("ADROIT_DIR=/y"));
+        assert!(!out.contains("ADROIT_DIR=/x"));
+        assert!(out.contains("ADROIT_LAYOUT=flat"));
+        assert!(out.contains("# keep me"));
     }
 }

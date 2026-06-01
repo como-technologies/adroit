@@ -174,6 +174,15 @@ moves files verbatim for a layout-only change or re-serializes via
 `format::serialize` for a format change (filenames preserved; target collisions
 refused), then `relink`s. `cmd_migrate` prints the plan / applies.
 
+**`adroit config`** (`cmd_config`, handled in `main.rs` *before* the store is
+opened, so it works on a mismatched repo) shows/gets/sets settings.
+`Config::get_str`/`set_str` (in `config.rs`) are the typed key↔string accessors
+(validate on set); `CONFIG_KEYS` is the key list, `env_var_for` maps a key to its
+`ADROIT_*` var, and `upsert_env_file` writes `.env`. `config show` reports each
+key's resolved value + source (flag / env / config / default), telling flag from
+env by comparing the env var's value to what clap resolved. `set` writes
+`config.yaml` (via `Config::save`) or, with `--local`, the project `.env`.
+
 Templates live in `src/template.rs` (built-in `madr` + `nygard`, plus custom
 file/`templates_dir`, with a repo-local `adr-template.md` preferred). SUMMARY.md
 regeneration lives in `src/index.rs`.
