@@ -68,7 +68,7 @@ crate-update:
 
 # Audit dependencies for known vulnerabilities
 crate-audit:
-    cargo audit --ignore RUSTSEC-2026-0097
+    cargo audit
 
 # Upgrade deps, update lockfile, audit, and test
 crate-refresh: crate-upgrade crate-update crate-audit test
