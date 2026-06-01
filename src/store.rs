@@ -113,7 +113,11 @@ impl StoreOptions {
     }
 }
 
-/// Generate the canonical filename for an ADR: `0001-some-title.md`
+/// Generate the canonical sequential filename for an ADR: `0001-some-title.md`.
+/// Production code now routes filename generation through the naming seam
+/// (`NamingScheme::filename`); this is retained as a test-only guard that the
+/// sequential format stays byte-identical.
+#[cfg(test)]
 fn filename(number: Number, title: &str) -> String {
     let slug: String = title
         .to_lowercase()
@@ -311,11 +315,16 @@ impl Store {
         Ok(adr)
     }
 
-    /// Find an ADR's file by its scheme identity (number or slug).
+    /// Find an ADR's file by its scheme identity (number or slug/uuid prefix).
     pub fn find_path_by_ref(&self, r: &AdrRef) -> Result<PathBuf, StoreError> {
         self.list_files()?
             .into_iter()
-            .find(|p| self.opts.naming.parse(p, "").as_ref() == Some(r))
+            .find(|p| {
+                self.opts
+                    .naming
+                    .parse(p, "")
+                    .is_some_and(|stored| self.opts.naming.ref_matches(&stored, r))
+            })
             .ok_or_else(|| {
                 StoreError::Parse(format!(
                     "no ADR found with id {}",
@@ -653,7 +662,15 @@ impl Store {
     /// to the matching status dir and rewrites the `## Status` section
     /// (minimal-diff). Returns the new path.
     pub fn set_status(&self, number: Number, new_status: Status) -> Result<PathBuf, StoreError> {
-        self.set_status_inner(number, new_status, None)
+        let path = self.find_path_by_number(number)?;
+        self.set_status_at(path, new_status, None)
+    }
+
+    /// Like [`set_status`] but addressed by the scheme's [`AdrRef`] (so date/uuid
+    /// ADRs, which have no number, can change status from the CLI).
+    pub fn set_status_ref(&self, r: &AdrRef, new_status: Status) -> Result<PathBuf, StoreError> {
+        let path = self.find_path_by_ref(r)?;
+        self.set_status_at(path, new_status, None)
     }
 
     /// Mark `old` as superseded by `new`, moving it to the superseded dir and
@@ -662,17 +679,19 @@ impl Store {
         // Validate the new ADR exists before mutating the old one.
         self.find_path_by_number(new)?;
         let link = self.relative_link(new)?;
-        self.set_status_inner(old, Status::Superseded, Some((new, link)))
+        let old_path = self.find_path_by_number(old)?;
+        self.set_status_at(old_path, Status::Superseded, Some((new, link)))
     }
 
-    fn set_status_inner(
+    /// Core status-change at a known path (shared by the number- and ref-keyed
+    /// public entry points). `supersede` carries the numeric supersession link
+    /// for the markdown/frontmatter `## Status` rewrite.
+    fn set_status_at(
         &self,
-        number: Number,
+        path: PathBuf,
         new_status: Status,
         supersede: Option<(Number, String)>,
     ) -> Result<PathBuf, StoreError> {
-        let path = self.find_path_by_number(number)?;
-
         match self.opts.format {
             Format::Frontmatter => {
                 let mut adr = self.read(&path)?;
@@ -687,11 +706,13 @@ impl Store {
                 }
                 let content = format::serialize(&adr, self.opts.format)
                     .map_err(|e| StoreError::Parse(e.to_string()))?;
-                let new_path = target_dir.join(
-                    path.file_name()
-                        .map(|n| n.to_owned())
-                        .unwrap_or_else(|| filename(number, &adr.title).into()),
-                );
+                let new_path =
+                    target_dir.join(path.file_name().map(|n| n.to_owned()).unwrap_or_else(|| {
+                        self.opts
+                            .naming
+                            .filename(&adr.reference(), &adr.title)
+                            .into()
+                    }));
                 std::fs::write(&new_path, content)?;
                 if new_path != path {
                     std::fs::remove_file(&path)?;
@@ -736,6 +757,16 @@ impl Store {
     /// path written.
     pub fn set_body(&self, number: Number, new_body: &str) -> Result<PathBuf, StoreError> {
         let path = self.find_path_by_number(number)?;
+        self.set_body_at(path, new_body)
+    }
+
+    /// Like [`set_body`] but addressed by the scheme's [`AdrRef`].
+    pub fn set_body_ref(&self, r: &AdrRef, new_body: &str) -> Result<PathBuf, StoreError> {
+        let path = self.find_path_by_ref(r)?;
+        self.set_body_at(path, new_body)
+    }
+
+    fn set_body_at(&self, path: PathBuf, new_body: &str) -> Result<PathBuf, StoreError> {
         let mut adr = self.read(&path)?;
         adr.body = new_body.to_string();
         let content = format::serialize(&adr, self.opts.format)
@@ -757,6 +788,24 @@ impl Store {
         review_by: Option<crate::adr::ReviewBy>,
     ) -> Result<PathBuf, StoreError> {
         let path = self.find_path_by_number(number)?;
+        self.set_review_by_at(path, review_by)
+    }
+
+    /// Like [`set_review_by`] but addressed by the scheme's [`AdrRef`].
+    pub fn set_review_by_ref(
+        &self,
+        r: &AdrRef,
+        review_by: Option<crate::adr::ReviewBy>,
+    ) -> Result<PathBuf, StoreError> {
+        let path = self.find_path_by_ref(r)?;
+        self.set_review_by_at(path, review_by)
+    }
+
+    fn set_review_by_at(
+        &self,
+        path: PathBuf,
+        review_by: Option<crate::adr::ReviewBy>,
+    ) -> Result<PathBuf, StoreError> {
         match self.opts.format {
             Format::Frontmatter => {
                 let mut adr = self.read(&path)?;

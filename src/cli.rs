@@ -88,15 +88,16 @@ pub enum Command {
         #[arg(short, long)]
         status: Option<String>,
     },
-    /// Show a single ADR by number.
+    /// Show a single ADR by its identifier.
     Show {
-        /// ADR number to display.
-        number: u32,
+        /// ADR identifier: a number (`9`/`ADR-0009`) under the sequential scheme,
+        /// or the slug / uuid prefix under the date / uuid schemes.
+        id: String,
     },
     /// Update the status of an ADR (moves the file in by_status layout).
     Status {
-        /// ADR number to update.
-        number: u32,
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
         /// New status (proposed, accepted, rejected, deprecated, superseded).
         status: String,
     },
@@ -112,8 +113,9 @@ pub enum Command {
     /// A still-`Proposed` ADR whose deadline has passed is flagged review-due
     /// in stats and the dashboard. Pass `--clear` to remove the deadline.
     SetReview {
-        /// ADR number to set the review deadline on.
-        number: u32,
+        /// ADR identifier to set the review deadline on (number, slug, or uuid
+        /// prefix — see `show`).
+        id: String,
         /// Review deadline as `YYYY-MM-DD`. Omit together with `--clear`.
         #[arg(required_unless_present = "clear")]
         date: Option<String>,
@@ -180,8 +182,8 @@ pub enum Command {
     },
     /// Open an ADR in your editor ($EDITOR or $VISUAL).
     Edit {
-        /// ADR number to edit.
-        number: u32,
+        /// ADR identifier to edit (number, slug, or uuid prefix — see `show`).
+        id: String,
     },
     /// Generate a review-kickoff doc for an ADR (prints to stdout by default).
     Review {

@@ -5,9 +5,20 @@ use adroit::adr::{Number, ReviewBy, Status};
 use adroit::cli::{Cli, Command, ConfigAction};
 use adroit::config::{self, Config, Layout};
 use adroit::format::Format;
+use adroit::naming::AdrRef;
 use adroit::query::{self, Filter};
 use adroit::store::{Store, StoreOptions};
 use adroit::view::AdrSummary;
+
+/// Parse a CLI ADR identifier into an [`AdrRef`] under the configured scheme.
+fn resolve_ref(cfg: &Config, id: &str) -> Result<AdrRef> {
+    cfg.naming.parse_ref(id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "'{id}' is not a valid ADR identifier for the {} naming scheme",
+            cfg.naming
+        )
+    })
+}
 
 fn main() -> Result<()> {
     // Load a `.env` file (CWD or a parent) before parsing so `ADROIT_DIR` and
@@ -88,29 +99,32 @@ fn main() -> Result<()> {
             }
         }
         Some(Command::List { status }) => cmd_list(&store, status.as_deref())?,
-        Some(Command::Show { number }) => cmd_show(&store, Number::new(number))?,
-        Some(Command::Status { number, status }) => {
+        Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
+        Some(Command::Status { id, status }) => {
             let new_status: Status = status.parse().map_err(|_| {
                 anyhow::anyhow!(
                     "invalid status '{status}', expected: proposed, accepted, rejected, deprecated, superseded"
                 )
             })?;
-            let number = Number::new(number);
-            let path = store.set_status(number, new_status)?;
+            let r = resolve_ref(&cfg, &id)?;
+            let path = store.set_status_ref(&r, new_status)?;
             println!(
-                "Updated ADR {number} status to {new_status} ({})",
+                "Updated {} status to {new_status} ({})",
+                cfg.naming.display(&r),
                 path.display()
             );
         }
         Some(Command::Supersede { new, old }) => {
             cmd_supersede(&store, Number::new(new), Number::new(old))?;
         }
-        Some(Command::SetReview {
-            number,
-            date,
-            clear,
-        }) => {
-            cmd_set_review(&store, Number::new(number), date.as_deref(), clear)?;
+        Some(Command::SetReview { id, date, clear }) => {
+            cmd_set_review(
+                &store,
+                &cfg,
+                &resolve_ref(&cfg, &id)?,
+                date.as_deref(),
+                clear,
+            )?;
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check) => cmd_check(&store)?,
@@ -120,9 +134,8 @@ fn main() -> Result<()> {
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
-        Some(Command::Edit { number }) => {
-            let number = Number::new(number);
-            let path = store.find_path_by_number(number)?;
+        Some(Command::Edit { id }) => {
+            let path = store.find_path_by_ref(&resolve_ref(&cfg, &id)?)?;
             open_in_editor(editor, &path)?;
         }
         Some(Command::Review {
@@ -247,11 +260,11 @@ fn cmd_list(store: &Store, status_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_show(store: &Store, number: Number) -> Result<()> {
-    let path = store.find_path_by_number(number)?;
-    let detail = query::detail(store, number.get())?;
+fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
     let s = &detail.summary;
-    println!("ADR {number}: {}", s.title);
+    println!("{}: {}", s.reference, s.title);
     println!("Status:  {}", s.status);
     if let Some(c) = &s.created {
         println!("Created: {}", ymd(c));
@@ -298,7 +311,13 @@ fn cmd_supersede(store: &Store, new: Number, old: Number) -> Result<()> {
 }
 
 /// Set or clear an ADR's `review_by` deadline (format-preserving).
-fn cmd_set_review(store: &Store, number: Number, date: Option<&str>, clear: bool) -> Result<()> {
+fn cmd_set_review(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    date: Option<&str>,
+    clear: bool,
+) -> Result<()> {
     let review_by = if clear {
         None
     } else {
@@ -308,13 +327,11 @@ fn cmd_set_review(store: &Store, number: Number, date: Option<&str>, clear: bool
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
         )
     };
-    let path = store.set_review_by(number, review_by)?;
+    let path = store.set_review_by_ref(r, review_by)?;
+    let id = cfg.naming.display(r);
     match review_by {
-        Some(rb) => println!(
-            "Set ADR {number} review deadline to {rb} ({})",
-            path.display()
-        ),
-        None => println!("Cleared ADR {number} review deadline ({})", path.display()),
+        Some(rb) => println!("Set {id} review deadline to {rb} ({})", path.display()),
+        None => println!("Cleared {id} review deadline ({})", path.display()),
     }
     Ok(())
 }
@@ -655,9 +672,12 @@ fn cmd_check(store: &Store) -> Result<()> {
     let files = store.list_files()?;
     let mut problems: Vec<String> = Vec::new();
 
-    // Track which ADR numbers exist (for supersession-link validation) and
-    // group paths by number (to flag duplicates).
+    // Track which ADR numbers exist (for the numeric supersession-link checks)
+    // and group paths by the scheme's identity (to flag duplicates — works for
+    // every naming scheme, not just the numeric ones).
     let mut by_number: BTreeMap<u32, Vec<std::path::PathBuf>> = BTreeMap::new();
+    let mut by_ident: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
+    let scheme = store.options().naming;
     let markdown = store.options().format == Format::Markdown;
 
     for path in &files {
@@ -680,6 +700,24 @@ fn cmd_check(store: &Store) -> Result<()> {
                 .entry(number.get())
                 .or_default()
                 .push(path.clone());
+        }
+        // Group by the scheme's identity for duplicate detection. A numeric ADR
+        // with no number, or a file with no parseable identity, is skipped (same
+        // as before) so stray notes don't register as collisions.
+        match adr.reference() {
+            AdrRef::Number(n) if adr.number.is_some() => {
+                by_ident
+                    .entry(format!("n:{n}"))
+                    .or_default()
+                    .push(path.clone());
+            }
+            AdrRef::Slug(s) => {
+                by_ident
+                    .entry(format!("s:{s}"))
+                    .or_default()
+                    .push(path.clone());
+            }
+            AdrRef::Number(_) => {}
         }
 
         // Markdown-specific checks need the file's raw text and section status.
@@ -777,9 +815,25 @@ fn cmd_check(store: &Store) -> Result<()> {
         }
     }
 
-    // (2) Duplicate numbers.
-    for (number, paths) in &by_number {
+    // (2) Duplicate identifiers (scheme-aware). The wording stays "number" for
+    // numeric schemes (byte-identical message) and "identifier" otherwise.
+    let noun = if scheme.is_numeric() {
+        "number"
+    } else {
+        "identifier"
+    };
+    for (key, paths) in &by_ident {
         if paths.len() > 1 {
+            // Numeric identity → `ADR-NNNN` (from the key, so the message is
+            // byte-identical); slug identity → the scheme's display string.
+            let disp = if let Some(num) = key.strip_prefix("n:") {
+                format!("ADR-{:04}", num.parse::<u32>().unwrap_or(0))
+            } else {
+                scheme
+                    .parse(&paths[0], "")
+                    .map(|r| scheme.display(&r))
+                    .unwrap_or_else(|| key.trim_start_matches("s:").to_string())
+            };
             let list = paths
                 .iter()
                 .map(|p| {
@@ -790,7 +844,7 @@ fn cmd_check(store: &Store) -> Result<()> {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            problems.push(format!("ADR-{number:04}: duplicate number used by {list}"));
+            problems.push(format!("{disp}: duplicate {noun} used by {list}"));
         }
     }
 

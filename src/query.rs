@@ -83,6 +83,13 @@ pub fn summaries(store: &Store, filter: &Filter) -> Result<Vec<AdrSummary>, Quer
 /// Full detail for a single ADR by number.
 pub fn detail(store: &Store, number: u32) -> Result<AdrDetail, QueryError> {
     let path = store.find_path_by_number(Number::new(number))?;
+    detail_at(store, &path)
+}
+
+/// Full detail for a single ADR at a known path — the scheme-agnostic core, so
+/// the CLI can resolve a slug/uuid ADR via the naming seam and still get detail.
+pub fn detail_at(store: &Store, path: &Path) -> Result<AdrDetail, QueryError> {
+    let path = path.to_path_buf();
     let adr = store.read(&path)?;
     let repo = open_history(store);
     let hist = repo

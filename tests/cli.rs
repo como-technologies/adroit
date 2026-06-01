@@ -1140,3 +1140,157 @@ fn adroit_dir_env_var_sets_directory() {
         .success()
         .stdout(predicate::str::contains("Env decision"));
 }
+
+// ---------------------------------------------------------------------------
+// Naming schemes (date / uuid) end-to-end through the naming seam
+// ---------------------------------------------------------------------------
+
+/// A command in the date naming scheme (markdown / by_status profile).
+fn adroit_date(dir: &TempDir) -> Command {
+    let mut cmd = adroit(dir);
+    cmd.args(["--naming", "date"]);
+    cmd
+}
+
+/// The filename stem (no `.md`) of the single ADR in the store.
+fn sole_stem(root: &Path) -> String {
+    let files = adr_files(root);
+    assert_eq!(files.len(), 1, "expected exactly one ADR");
+    files[0]
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .strip_suffix(".md")
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn date_scheme_new_uses_date_slug_and_plain_heading() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 1);
+    let p = &files[0];
+    assert!(p.parent().unwrap().ends_with("proposed"));
+    let name = p.file_name().unwrap().to_str().unwrap();
+    // `YYYYMMDD-<slug>.md` — 8 leading digits then the title slug.
+    assert!(name.ends_with("-adopt-postgresql.md"), "got {name}");
+    let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
+    assert_eq!(digits.len(), 8, "expected an 8-digit date prefix in {name}");
+
+    let content = fs::read_to_string(p).unwrap();
+    // Slug schemes carry identity in the filename, so the heading is plain.
+    assert!(
+        content.starts_with("# Adopt PostgreSQL\n"),
+        "got: {content}"
+    );
+    assert!(!content.contains("# ADR-"));
+}
+
+#[test]
+fn date_scheme_list_show_status_by_slug() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    let slug = sole_stem(dir.path());
+
+    // The list row shows the date slug as the identifier.
+    adroit_date(&dir)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&slug))
+        .stdout(predicate::str::contains("Adopt PostgreSQL"));
+
+    // `show <slug>` resolves through the naming seam.
+    adroit_date(&dir)
+        .args(["show", &slug])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Adopt PostgreSQL"));
+
+    // `status <slug> accepted` moves the file to accepted/ keeping its slug.
+    adroit_date(&dir)
+        .args(["status", &slug, "accepted"])
+        .assert()
+        .success();
+    let moved = &adr_files(dir.path())[0];
+    assert!(moved.parent().unwrap().ends_with("accepted"));
+    assert_eq!(sole_stem(dir.path()), slug);
+}
+
+#[test]
+fn date_scheme_set_review_by_slug() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    let slug = sole_stem(dir.path());
+    let path = adr_files(dir.path())[0].clone();
+
+    adroit_date(&dir)
+        .args(["set-review", &slug, "2026-12-31"])
+        .assert()
+        .success();
+    let content = fs::read_to_string(&path).unwrap();
+    assert!(content.contains("Review by: 2026-12-31"), "got: {content}");
+}
+
+#[test]
+fn date_scheme_check_flags_duplicate_slug() {
+    let dir = TempDir::new().unwrap();
+    adroit_date(&dir)
+        .args(["new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    let p = adr_files(dir.path())[0].clone();
+    let slug = sole_stem(dir.path());
+
+    // Plant a colliding copy with the same date slug in another status dir —
+    // `check` must flag it even though the date scheme has no number.
+    let accepted = dir.path().join("accepted");
+    fs::create_dir_all(&accepted).unwrap();
+    fs::copy(&p, accepted.join(format!("{slug}.md"))).unwrap();
+
+    adroit_date(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("duplicate identifier"))
+        .stderr(predicate::str::contains(&slug));
+}
+
+#[test]
+fn uuid_scheme_new_and_show_by_prefix() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["--naming", "uuid", "new", "Adopt PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+
+    let name_stem = sole_stem(dir.path());
+    // `<32-hex-uuid>-<slug>` — the uuid is the identity, the slug is for humans.
+    let uuid: String = name_stem.chars().take_while(|c| *c != '-').collect();
+    assert_eq!(
+        uuid.len(),
+        32,
+        "expected a 32-char uuid prefix in {name_stem}"
+    );
+
+    // Addressable by a leading prefix of the uuid (what `list`/display shows).
+    let prefix = &uuid[..8];
+    adroit(&dir)
+        .args(["--naming", "uuid", "show", prefix])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Adopt PostgreSQL"));
+}

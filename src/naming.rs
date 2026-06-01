@@ -136,8 +136,48 @@ impl NamingScheme {
                     .or_else(|| leading_number(path))
                     .map(AdrRef::Number)
             }
-            // Date / uuid identity is the filename stem.
-            NamingScheme::Date | NamingScheme::Uuid => stem(path).map(AdrRef::Slug),
+            // Date identity is the whole filename stem (`YYYYMMDD-title`).
+            NamingScheme::Date => stem(path).map(AdrRef::Slug),
+            // Uuid identity is just the leading uuid (the filename appends a
+            // human title slug after it); split it back off so the parsed ref
+            // matches what `assign` produced.
+            NamingScheme::Uuid => stem(path)
+                .map(|s| s.split('-').next().unwrap_or(&s).to_string())
+                .map(AdrRef::Slug),
+        }
+    }
+
+    /// Parse a user-supplied CLI identifier into a ref under this scheme.
+    ///
+    /// Numeric schemes accept `9`, `0009`, or `ADR-0009`; slug schemes accept
+    /// the filename stem (date) or the uuid / its prefix (uuid), with a trailing
+    /// `.md` tolerated. `None` if the input can't be a ref for this scheme.
+    pub fn parse_ref(&self, input: &str) -> Option<AdrRef> {
+        let t = input.trim();
+        if t.is_empty() {
+            return None;
+        }
+        if self.is_numeric() {
+            let digits = t
+                .strip_prefix("ADR-")
+                .or_else(|| t.strip_prefix("adr-"))
+                .unwrap_or(t);
+            leading_digits(digits).map(AdrRef::Number)
+        } else {
+            let stem = t.strip_suffix(".md").unwrap_or(t);
+            Some(AdrRef::Slug(stem.to_string()))
+        }
+    }
+
+    /// Whether a stored ref satisfies a query ref (for `find_path_by_ref`).
+    /// Exact for every scheme except uuid, where a unique leading prefix of the
+    /// uuid is accepted (so the displayed `ADR-<short>` can be typed back).
+    pub fn ref_matches(&self, stored: &AdrRef, query: &AdrRef) -> bool {
+        match (self, stored, query) {
+            (NamingScheme::Uuid, AdrRef::Slug(s), AdrRef::Slug(q)) => {
+                !q.is_empty() && s.starts_with(q.as_str())
+            }
+            _ => stored == query,
         }
     }
 
@@ -340,6 +380,39 @@ mod tests {
             "123456789abcdef0123456789abcdef0-adopt-crossplane.md"
         );
         assert_eq!(s.display(&r), "ADR-12345678"); // short prefix
+        // Parsing the written filename recovers the *bare* uuid (the title slug
+        // after it is dropped), so the parsed ref equals what `assign` produced.
+        assert_eq!(
+            s.parse(
+                Path::new("x/123456789abcdef0123456789abcdef0-adopt-crossplane.md"),
+                ""
+            ),
+            Some(r.clone())
+        );
+        // Addressable by a unique leading prefix of the uuid.
+        assert!(s.ref_matches(&r, &AdrRef::Slug("12345678".into())));
+        assert!(!s.ref_matches(&r, &AdrRef::Slug("ffff".into())));
+    }
+
+    #[test]
+    fn parse_ref_accepts_human_input() {
+        let seq = NamingScheme::Sequential;
+        assert_eq!(seq.parse_ref("9"), Some(AdrRef::Number(9)));
+        assert_eq!(seq.parse_ref("0009"), Some(AdrRef::Number(9)));
+        assert_eq!(seq.parse_ref("ADR-0009"), Some(AdrRef::Number(9)));
+        assert_eq!(seq.parse_ref("  12 "), Some(AdrRef::Number(12)));
+        assert_eq!(seq.parse_ref("nope"), None);
+
+        let date = NamingScheme::Date;
+        assert_eq!(
+            date.parse_ref("20260601-adopt-x"),
+            Some(AdrRef::Slug("20260601-adopt-x".into()))
+        );
+        // A trailing `.md` (e.g. tab-completed) is tolerated.
+        assert_eq!(
+            date.parse_ref("20260601-adopt-x.md"),
+            Some(AdrRef::Slug("20260601-adopt-x".into()))
+        );
     }
 
     #[test]
