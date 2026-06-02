@@ -15,7 +15,7 @@
 | `--version` | | Print version information |
 | `--help` | | Print help |
 
-All three flags are **global** — they work before *or* after the subcommand
+All of these flags are **global** — they work before *or* after the subcommand
 (`adroit --dir X list` and `adroit list --dir X` are equivalent).
 
 Each also reads from an environment variable, so you don't have to pass it on
@@ -328,7 +328,7 @@ adroit finds your editor using this precedence chain:
 
 ### `adroit serve` (requires the `web` feature)
 
-Serve the read-only web dashboard (browse, search, stats, supersession graph)
+Serve the read-only web dashboard (browse, search, stats, relationship graph)
 over a local HTTP server. Built behind the `web` Cargo feature; without it the
 command prints a rebuild hint and exits. See [Web Dashboard](../usage/web.md).
 
@@ -373,8 +373,9 @@ adroit config set layout flat --local # -> ./.env  (ADROIT_LAYOUT=flat)
 
 `config` works even when the repo's on-disk profile doesn't match your config
 (it's about settings, not ADRs), so you can use it to diagnose and fix a
-mismatch. Settable keys are those in the [Configuration](#configuration) table
-below.
+mismatch. `config get`/`set` cover the **scalar** keys in the
+[Configuration](#configuration) table below; `status_dirs`, `templates_dir`, and
+`summary_path` are set by editing `config.yaml` directly.
 
 ## Configuration
 
@@ -389,8 +390,8 @@ editor: vim
 | `dir` | path | XDG data dir | ADR directory. Supports `~` and `$ENV_VAR` expansion. |
 | `editor` | string | auto-detected | Preferred editor command. Include flags if needed (e.g. `code --wait`). |
 | `format` | `markdown`\|`frontmatter` | `markdown` | On-disk serialization profile. |
-| `layout` | `by_status`\|`flat` | `by_status` | Directory layout. |
-| `status_dirs` | map | status name lowercased | Override the directory name for each status. |
+| `layout` | `by_status`\|`flat`\|`by_category` | `by_status` | Directory layout. `by_category` makes each subdirectory an area (status lives in `## Status`); pairs with `per_category` naming. |
+| `status_dirs` | map | status name lowercased | Override the directory name for each status (by-status layout). |
 | `default_template` | string | `madr` | Template used by `new`. |
 | `templates_dir` | path | — | Directory of custom named templates (`<name>.md`). |
 | `default_status` | status | `Proposed` | Status assigned to new ADRs. |
@@ -401,6 +402,7 @@ editor: vim
 | `review_overdue_days` | int | `30` | A Proposed ADR older than this many days is flagged review-due even with no `review_by`. `0` disables age-based flagging. |
 | `tui_theme` | `default`\|`gruvbox` | `default` | Color theme for the TUI markdown preview. |
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
+| `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 

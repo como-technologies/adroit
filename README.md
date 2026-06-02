@@ -44,6 +44,10 @@ cp .env.example .env      # then edit ADROIT_DIR (git-ignored)
 `--dir` / `ADROIT_DIR` work for every command and surface. Precedence:
 flag > env/`.env` > `~/.config/adroit/config.yaml` > default.
 
+`adroit config` shows every setting, its resolved value, and which of those
+layers it came from; `adroit config set <key> <value>` persists a default (add
+`--local` to write the project `.env` instead).
+
 ## CLI cheatsheet
 
 ```sh
@@ -52,12 +56,18 @@ adroit list                             # or: --status accepted
 adroit search postgres
 adroit status 9 accepted                # moves the file + rewrites ## Status
 adroit supersede 9 4                    # 9 supersedes 4 (moves 4, links both)
+adroit link 9 --depends-on 4            # typed relational link (frontmatter profile)
 adroit set-review 9 2026-07-15          # review deadline (review-due once past)
 adroit review 9 --output kickoff.md     # generate the MR review-kickoff doc
 adroit index                            # refresh SUMMARY.md, grouped by status
 adroit check                            # CI gate: validate the ADR repo (non-zero on problems)
 adroit index --check                    # CI gate: fail if SUMMARY.md is stale
+adroit config                           # list every setting and where it came from
 ```
+
+`adroit --help` lists every command (and `adroit <cmd> --help` the per-command
+flags). The full set, beyond the cheatsheet: `link`, `relink`, `renumber`,
+`migrate`, and `config` round out collisions, link hygiene, and profile changes.
 
 ## TUI
 
@@ -118,7 +128,8 @@ the decision PR/MR. Copy-and-customize templates for both platforms live in
 
 - User manual: `just book` (source in `docs/`).
 - ADR format & both profiles: [docs/src/reference/adr-format.md](docs/src/reference/adr-format.md).
-- Every `just` recipe: run `just`.
+- Naming schemes (`sequential` / `date` / `uuid` / `per_category`): [docs/src/reference/adr-format.md#naming-schemes](docs/src/reference/adr-format.md#naming-schemes).
+- Every command: `adroit --help`; every `just` recipe: run `just`.
 
 ## License
 

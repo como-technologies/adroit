@@ -84,8 +84,8 @@ parses both when reading:
 - the **newer** ADR says `Supersedes [ADR-NNNN](...)` → `supersedes`
 
 Both forms accept a `[ADR-NNNN](path)` link or a bare `ADR-NNNN`. The
-supersession graph collapses the two reciprocal notes for one decision into a
-single edge.
+relationship graph collapses the two reciprocal notes for one decision into a
+single `supersedes` edge.
 
 ### Cross-ADR links stay canonical
 

@@ -2,7 +2,7 @@
 
 A read-only Vue 3 SPA for exploring an ADR repo, served by `adroit serve`
 (behind the Rust `web` Cargo feature). It browses/reads ADRs, full-text search,
-a stats dashboard, and a supersession graph, and can switch which ADR directory
+a stats dashboard, and a relationship graph, and can switch which ADR directory
 it views. It never writes to ADRs — authoring stays in the CLI and TUI.
 
 ## Switching ADR directories
@@ -48,7 +48,7 @@ When ADR files change on disk (CLI/TUI/`$EDITOR` edits, or git operations like
   and receives an `event: change` per coalesced change (plus keep-alive
   comments). `EventSource` reconnects automatically if the stream drops.
 - The shared composable `src/useLiveReload.ts` opens the `EventSource`; each
-  view (`BrowseView`, `DetailView`, `SearchView`, `StatsView`, `GraphView`)
+  view (`DashboardView`, `BrowseView`, `DetailView`, `InsightsView`)
   passes a callback that re-fetches just its own data on `change`. A subtle
   "updated" badge and a live/read-only indicator appear in the header.
 
@@ -75,8 +75,7 @@ whenever the SPA changes, then rebuild the binary with `--features web`.
 
 ## Design system
 
-Tailwind CSS v4 (`@tailwindcss/vite`), dark-mode-first, sharing the look-and-feel
-of the sibling `rewards-bridge` dashboard:
+Tailwind CSS v4 (`@tailwindcss/vite`), dark-mode-first:
 
 - `src/style.css` — semantic design tokens (`--ad-*`, light + dark), an
   indigo→violet `brand` scale, and the `.card-glass` / `.hero-gradient` /
@@ -93,7 +92,9 @@ of the sibling `rewards-bridge` dashboard:
 - `src/composables/` — `useTheme` (tri-state theme toggle, persisted),
   `useCountUp` (animated stat tiles), and `useWorkspace` (active ADR directory +
   switch action).
-- `src/components/` — `StatusPill` (theme-aware status badge), `StatTile`, and
+- `src/components/` — `StatusPill` (theme-aware status badge), `StatTile`,
+  `RelationsGraph` (the force-directed wiki-graph), the chart components
+  (`DonutChart` / `GrowthChart` / `CohortChart`), `SelectMenu`, and
   `DirectoryPicker` (the workspace-switch modal).
-- `src/router.ts` — routes for browse / detail / search / stats / graph.
+- `src/router.ts` — routes for dashboard / browse / detail / insights.
 - `src/views/*` — one component per view; each subscribes to live-reload.

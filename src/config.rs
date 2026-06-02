@@ -229,7 +229,11 @@ impl Config {
                     .parse()
                     .map_err(|_| bad("format (markdown|frontmatter)"))?
             }
-            "layout" => self.layout = value.parse().map_err(|_| bad("layout (by_status|flat)"))?,
+            "layout" => {
+                self.layout = value
+                    .parse()
+                    .map_err(|_| bad("layout (by_status|by_category|flat)"))?
+            }
             "default_template" => self.default_template = value.to_string(),
             "default_status" => self.default_status = value.parse().map_err(|_| bad("status"))?,
             "open_on_new" => self.open_on_new = value.parse().map_err(|_| bad("boolean"))?,

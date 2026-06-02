@@ -36,6 +36,26 @@ Options:
 Open the printed `http://127.0.0.1:8080` URL. The store is reopened on each
 request, so every response reflects the current on-disk state.
 
+## Switching ADR directories
+
+The dashboard starts on the directory `adroit serve` was launched with, but you
+can repoint it at another ADR directory **without restarting the server**. The
+header shows the active directory as a chip; click it to open a directory picker
+that lists subfolders (with each folder's ADR count) and an "up" control, then
+switch. Because a browser page can't read your local filesystem, the listing and
+switch are performed by the server (which runs on your own machine):
+
+- `GET /api/workspace` — the active ADR directory.
+- `GET /api/browse?path=` — the subdirectories of `path` (default: the active
+  dir), each with its ADR count.
+- `POST /api/workspace { path }` — switch the active directory. This re-points the
+  live-reload watcher at the new directory and pushes a `change` tick, so every
+  open tab re-fetches the new repo automatically.
+
+This is a local convenience — the tool already has your filesystem access — not a
+hardened remote API. It stays read-only with respect to the ADRs: nothing here
+writes to a decision record.
+
 ## Auto live-reload
 
 You never need to refresh manually. When ADR files change on disk — because you
@@ -58,8 +78,11 @@ directly:
 | Endpoint | Returns |
 |---|---|
 | `GET /api/adrs?status=&sort=` | list of ADR summaries |
-| `GET /api/adrs/:number` | one ADR with rendered HTML body and links |
+| `GET /api/adrs/{id}` | one ADR (addressed by number / slug / uuid prefix / `category/NNNN`) with rendered HTML body and links |
 | `GET /api/search?q=` | summaries matching a full-text query |
 | `GET /api/stats` | counts by status, ages, review-due, created-over-time |
 | `GET /api/graph` | nodes + typed edges for the relationship graph |
+| `GET /api/workspace` | the active ADR directory |
+| `POST /api/workspace` | switch the active ADR directory (body `{ "path": … }`) |
+| `GET /api/browse?path=` | subdirectories of `path` + ADR count (powers the directory picker) |
 | `GET /api/events` | SSE stream of live-reload change events |

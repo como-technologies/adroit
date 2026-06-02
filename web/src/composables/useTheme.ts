@@ -1,6 +1,6 @@
 // Dark-mode composable. Persists the user choice in localStorage, defaults to
 // the system preference, and applies a `.dark` class on <html> for Tailwind's
-// class-based dark: variant. Mirrors the sibling rewards-bridge dashboard.
+// class-based dark: variant.
 
 import { onMounted, ref, watch } from 'vue'
 

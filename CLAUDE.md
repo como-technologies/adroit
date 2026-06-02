@@ -118,11 +118,14 @@ byte-identical. `e` remains the external-`$EDITOR` escape hatch.
 `src/serve/` is a read-only Axum server gated behind the `web` Cargo feature;
 `--no-default-features` and the `tui` feature never depend on axum/tokio/notify.
 `adroit serve [--host --port]` exposes the shared `query` layer as a JSON API
-(`/api/adrs`, `/api/adrs/:n`, `/api/search`, `/api/stats`, `/api/graph`) and
-serves an embedded Vue 3 SPA (`web/dist`, embedded via `rust-embed`). The store
-is reopened per request, so every response reflects current on-disk state.
-Markdown→HTML rendering is server-side (`pulldown-cmark`). It is strictly
-read-only: no write endpoints, and the module imports only the read side.
+(`/api/adrs`, `/api/adrs/{id}`, `/api/search`, `/api/stats`, `/api/graph`, plus
+`/api/workspace` + `/api/browse` for the in-browser directory picker) and serves
+an embedded Vue 3 SPA (`web/dist`, embedded via `rust-embed`). The store is
+reopened per request, so every response reflects current on-disk state.
+Markdown→HTML rendering is server-side (`pulldown-cmark`). No endpoint writes
+ADRs — authoring stays in CLI/TUI; the one mutating route, `POST /api/workspace`,
+only switches which directory the dashboard views (re-pointing the watcher), and
+the ADR side imports only the read path.
 
 - `src/serve/mod.rs` — router, API handlers, SPA serving, `AppState`.
 - `src/serve/watch.rs` — the live-reload watcher (see below).

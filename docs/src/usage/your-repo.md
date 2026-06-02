@@ -39,9 +39,11 @@ cp .env.example .env
 ADROIT_DIR=/path/to/your-repo/src/adrs
 ```
 
-Now plain `adroit list`, `adroit serve`, etc. target that repo. `ADROIT_FORMAT`,
-`ADROIT_LAYOUT`, and the dashboard's `ADROIT_HOST` / `ADROIT_PORT` work the same
-way. A real shell environment variable overrides the `.env` file.
+Now plain `adroit list`, `adroit serve`, etc. target that repo. Every other
+setting has a matching `ADROIT_*` variable that works the same way (`ADROIT_FORMAT`,
+`ADROIT_LAYOUT`, `ADROIT_NAMING`, `ADROIT_DATE_SOURCE`, …, plus the dashboard's
+`ADROIT_HOST` / `ADROIT_PORT`). A real shell environment variable overrides the
+`.env` file.
 
 **Or the user config (global default).** Set `dir` in
 `~/.config/adroit/config.yaml` so plain `adroit` commands target your repo:
@@ -54,8 +56,10 @@ dir: /path/to/your-repo/src/adrs
 adroit's data directory, so use an absolute path (or `~/…`) to point at a repo
 elsewhere on disk. The full set of config keys — `format`, `layout`,
 `status_dirs`, `default_template`, `templates_dir`, `default_status`,
-`open_on_new`, `summary_path`, `review_days`, `review_quorum` — is documented in
-the [CLI Reference](../reference/cli.md#configuration).
+`open_on_new`, `summary_path`, `review_days`, `review_quorum`,
+`review_overdue_days`, `tui_theme`, `date_source`, `naming` — is documented in
+the [CLI Reference](../reference/cli.md#configuration). Run `adroit config` to
+see each one's resolved value and where it came from.
 
 If your repo uses its own ADR template, drop it at `adrs/adr-template.md` (adroit
 prefers a repo-local template) or set `templates_dir`/`default_template`.
@@ -87,7 +91,7 @@ git add -A && git commit -m "ADR-0009: accept PostgreSQL"
 
 Prefer an interactive surface? Run bare `adroit` for the [TUI](./tui.md)
 (browse, triage, and edit in the terminal), or `adroit serve` for the read-only
-[web dashboard](./web.md) (browse, search, stats, and a supersession graph that
+[web dashboard](./web.md) (browse, search, stats, and a relationship graph that
 auto-refreshes as you edit).
 
 ## 4. Keep `SUMMARY.md` in sync
