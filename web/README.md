@@ -2,8 +2,9 @@
 
 A read-only Vue 3 SPA for exploring an ADR repo, served by `adroit serve`
 (behind the Rust `web` Cargo feature). It browses/reads ADRs, full-text search,
-a stats dashboard, and a relationship graph, and can switch which ADR directory
-it views. It never writes to ADRs — authoring stays in the CLI and TUI.
+a stats dashboard, a relationship graph, and a repo-health panel (the same checks
+as `adroit check`, via `GET /api/check`), and can switch which ADR directory it
+views. It never writes to ADRs — authoring stays in the CLI and TUI.
 
 ## Switching ADR directories
 

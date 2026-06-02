@@ -17,11 +17,11 @@ use crate::adr::{Adr, Number, Status};
 use crate::config::DateSource;
 use crate::format::Format;
 use crate::history::{self, HistoryEvent};
-use crate::naming::NamingScheme;
+use crate::naming::{AdrRef, NamingScheme};
 use crate::store::{Store, StoreError};
 use crate::view::{
-    AdrDetail, AdrSummary, CreatedBucket, EdgeKind, Graph, GraphEdge, GraphNode, ProposedAge,
-    RelatedLink, Stats, StatusCount, TimelineEvent,
+    AdrDetail, AdrSummary, CheckReport, CreatedBucket, EdgeKind, Graph, GraphEdge, GraphNode,
+    Problem, ProblemKind, ProposedAge, RelatedLink, Severity, Stats, StatusCount, TimelineEvent,
 };
 
 /// Errors from the query layer.
@@ -29,6 +29,9 @@ use crate::view::{
 pub enum QueryError {
     #[error(transparent)]
     Store(#[from] StoreError),
+
+    #[error("could not read {0}")]
+    Io(String),
 }
 
 /// How to filter and sort a list of [`AdrSummary`].
@@ -153,6 +156,7 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
 
     // Age of each still-Proposed ADR (from its git-derived creation), oldest first.
     let scheme = store.options().naming;
+    let overdue = store.options().review_overdue_days;
     let mut proposed_age: Vec<ProposedAge> = resolved
         .iter()
         .filter(|r| r.adr.status == Status::Proposed)
@@ -164,6 +168,7 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
                 address: rf.addr(),
                 title: r.adr.title.clone(),
                 age_days: Some((now - r.created).whole_days()),
+                review_due: summary_of(&r.adr, r.created, today, overdue, scheme).review_due,
             }
         })
         .collect();
@@ -183,7 +188,6 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
 
     // ADRs flagged review-due: still Proposed and past their `review_by` date,
     // or aged past the configured staleness threshold.
-    let overdue = store.options().review_overdue_days;
     let review_due: Vec<AdrSummary> = resolved
         .iter()
         .map(|r| summary_of(&r.adr, r.created, today, overdue, scheme))
@@ -196,6 +200,242 @@ pub fn stats(store: &Store) -> Result<Stats, QueryError> {
         proposed_age,
         review_due,
         created_over_time,
+    })
+}
+
+/// The duplicate-detection / existence key for an ADR identity, so [`check`]
+/// groups and looks ADRs up uniformly across naming schemes.
+fn ident_key(r: &AdrRef) -> String {
+    match r {
+        AdrRef::Number(n) => format!("n:{n}"),
+        AdrRef::Slug(s) => format!("s:{s}"),
+    }
+}
+
+/// Validate the ADR repo, returning a structured [`CheckReport`].
+///
+/// The shared engine behind `adroit check` and the web dashboard's repo-health
+/// panel. Runs the same five checks the CLI always has:
+///
+/// 1. Status ↔ directory mismatch (by_status, markdown only).
+/// 2. Duplicate ADR identifiers (scheme-aware).
+/// 3. Unparseable / missing-H1 ADR files.
+/// 4. Broken supersession links (referenced ADR doesn't exist).
+/// 5. Broken / stale cross-ADR relative links.
+///
+/// Problems are returned sorted by severity (errors first) then message; the
+/// CLI renders `problem.message` verbatim, so its output is unchanged.
+pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
+    let files = store.list_files()?;
+    let mut problems: Vec<Problem> = Vec::new();
+    let push = |problems: &mut Vec<Problem>, severity, kind, message| {
+        problems.push(Problem {
+            severity,
+            kind,
+            message,
+        });
+    };
+
+    // Track which ADR numbers exist (for the numeric supersession-link checks)
+    // and group paths by the scheme's identity (to flag duplicates — works for
+    // every naming scheme, not just the numeric ones).
+    let mut by_number: BTreeMap<u32, Vec<std::path::PathBuf>> = BTreeMap::new();
+    let mut by_ident: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
+    let scheme = store.options().naming;
+    let markdown = store.options().format == Format::Markdown;
+
+    for path in &files {
+        let rel = path
+            .strip_prefix(store.root())
+            .unwrap_or(path)
+            .display()
+            .to_string();
+
+        // (3) Unparseable / missing H1.
+        let adr = match store.read(path) {
+            Ok(adr) => adr,
+            Err(e) => {
+                push(
+                    &mut problems,
+                    Severity::Error,
+                    ProblemKind::Unparseable,
+                    format!("{rel}: failed to parse ({e})"),
+                );
+                continue;
+            }
+        };
+        if let Some(number) = adr.number {
+            by_number
+                .entry(number.get())
+                .or_default()
+                .push(path.clone());
+        }
+        // Group by the scheme's identity for duplicate detection. A numeric ADR
+        // with no number, or a file with no parseable identity, is skipped so
+        // stray notes don't register as collisions.
+        let r = adr.reference();
+        let track = matches!(r, AdrRef::Slug(_)) || adr.number.is_some();
+        if track {
+            by_ident
+                .entry(ident_key(&r))
+                .or_default()
+                .push(path.clone());
+        }
+
+        // Markdown-specific checks need the file's raw text and section status.
+        if markdown {
+            let content = std::fs::read_to_string(path)
+                .map_err(|_| QueryError::Io(path.display().to_string()))?;
+
+            // (1) Status ↔ directory mismatch (by_status only). A section with
+            // no explicit status word is allowed (directory is source of truth).
+            if let Some(dir_status) = store.dir_status(path)
+                && let Some(section_status) = crate::format::parse_markdown_section_status(&content)
+                && dir_status != section_status
+            {
+                let num = adr.number.map(|n| format!("ADR-{n} ")).unwrap_or_default();
+                push(
+                    &mut problems,
+                    Severity::Error,
+                    ProblemKind::StatusDirMismatch,
+                    format!(
+                        "{num}({rel}): directory says {dir_status} but ## Status says {section_status}"
+                    ),
+                );
+            }
+        }
+    }
+
+    // (4) Broken supersession links. Resolved through the naming seam and
+    // checked against the full identity set, so forward/backward references in
+    // any order — and slug schemes — all work.
+    if markdown {
+        for path in &files {
+            let rel = path
+                .strip_prefix(store.root())
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let (supersedes, superseded_by) =
+                crate::format::parse_markdown_section_supersession(&content, scheme);
+            for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
+                if let Some(r) = r
+                    && !by_ident.contains_key(&ident_key(&r))
+                {
+                    push(
+                        &mut problems,
+                        Severity::Error,
+                        ProblemKind::BrokenSupersession,
+                        format!(
+                            "{rel}: ## Status says {kind} {} but no such ADR exists",
+                            scheme.display(&r)
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // (5) Cross-ADR relative links: each must resolve to an existing file, and
+    // an ADR-numbered link should point at where that ADR currently lives.
+    let by_number_path: BTreeMap<u32, std::path::PathBuf> = by_number
+        .iter()
+        .filter(|(_, paths)| paths.len() == 1)
+        .map(|(n, paths)| (*n, paths[0].clone()))
+        .collect();
+    for path in &files {
+        let rel = path
+            .strip_prefix(store.root())
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        for target in crate::links::relative_md_targets(&content) {
+            let pathpart = target.split('#').next().unwrap_or(target);
+            let resolved = dir.join(pathpart);
+            if !resolved.exists() {
+                push(
+                    &mut problems,
+                    Severity::Error,
+                    ProblemKind::BrokenLink,
+                    format!("{rel}: broken link [{target}] — target file not found"),
+                );
+                continue;
+            }
+            // Stale: resolves, but not to the current home of its ADR number.
+            if let Some(num) = crate::links::number_in_target(target)
+                && let Some(canon) = by_number_path.get(&num)
+                && let (Ok(rp), Ok(cp)) = (
+                    std::fs::canonicalize(&resolved),
+                    std::fs::canonicalize(canon),
+                )
+                && rp != cp
+            {
+                let want = crate::links::rel_link(dir, canon);
+                push(
+                    &mut problems,
+                    Severity::Warning,
+                    ProblemKind::StaleLink,
+                    format!(
+                        "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                    ),
+                );
+            }
+        }
+    }
+
+    // (2) Duplicate identifiers (scheme-aware). The wording stays "number" for
+    // numeric schemes (byte-identical message) and "identifier" otherwise.
+    let noun = if scheme.is_numeric() {
+        "number"
+    } else {
+        "identifier"
+    };
+    for (key, paths) in &by_ident {
+        if paths.len() > 1 {
+            // Numeric identity → `ADR-NNNN` (from the key, so the message is
+            // byte-identical); slug identity → the scheme's display string.
+            let disp = if let Some(num) = key.strip_prefix("n:") {
+                format!("ADR-{:04}", num.parse::<u32>().unwrap_or(0))
+            } else {
+                scheme
+                    .parse(&paths[0], "")
+                    .map(|r| scheme.display(&r))
+                    .unwrap_or_else(|| key.trim_start_matches("s:").to_string())
+            };
+            let list = paths
+                .iter()
+                .map(|p| {
+                    p.strip_prefix(store.root())
+                        .unwrap_or(p)
+                        .display()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            push(
+                &mut problems,
+                Severity::Error,
+                ProblemKind::DuplicateId,
+                format!("{disp}: duplicate {noun} used by {list}"),
+            );
+        }
+    }
+
+    problems.sort_by(|a, b| {
+        a.severity
+            .cmp(&b.severity)
+            .then_with(|| a.message.cmp(&b.message))
+    });
+    Ok(CheckReport {
+        checked: files.len(),
+        problems,
     })
 }
 
@@ -582,6 +822,47 @@ mod tests {
             "Adopt GraphQL",
             "# ADR-0003: Adopt GraphQL\n\n## Status\n\nProposed\n\n## Context\n\nSee [ADR-0001](../accepted/0001-use-postgres.md).\n",
         );
+    }
+
+    #[test]
+    fn check_clean_repo_has_no_problems() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = md_store(tmp.path());
+        seed(&store);
+        let report = check(&store).unwrap();
+        assert_eq!(report.checked, 3);
+        assert!(report.problems.is_empty());
+    }
+
+    #[test]
+    fn check_flags_duplicate_number_as_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = md_store(tmp.path());
+        // Two ADRs share number 9 across status dirs → a duplicate-id error.
+        write_md(
+            &store,
+            Status::Proposed,
+            9,
+            "Alpha",
+            "# ADR-0009: Alpha\n\n## Status\n\nProposed\n\n## Context\n\nx.\n",
+        );
+        write_md(
+            &store,
+            Status::Accepted,
+            9,
+            "Beta",
+            "# ADR-0009: Beta\n\n## Status\n\nAccepted\n\n## Context\n\ny.\n",
+        );
+        let report = check(&store).unwrap();
+        let dups: Vec<_> = report
+            .problems
+            .iter()
+            .filter(|p| p.kind == ProblemKind::DuplicateId)
+            .collect();
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].severity, Severity::Error);
+        assert!(dups[0].message.contains("ADR-0009"));
+        assert!(dups[0].message.contains("duplicate number"));
     }
 
     #[test]

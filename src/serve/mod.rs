@@ -167,6 +167,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/api/search", get(search_adrs))
         .route("/api/stats", get(get_stats))
         .route("/api/graph", get(get_graph))
+        .route("/api/check", get(get_check))
         .route("/api/workspace", get(get_workspace).post(switch_workspace))
         .route("/api/browse", get(browse_dir))
         .route("/api/events", get(events))
@@ -303,6 +304,14 @@ async fn get_graph(State(state): State<AppState>) -> Result<impl IntoResponse, A
     let store = state.store()?;
     let graph = query::graph(&store).map_err(ApiError::internal)?;
     Ok(Json(graph))
+}
+
+/// `GET /api/check` → `CheckReport`: structured repo validation (mirrors
+/// `adroit check`), powering the dashboard's repo-health panel. Read-only.
+async fn get_check(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let store = state.store()?;
+    let report = query::check(&store).map_err(ApiError::internal)?;
+    Ok(Json(report))
 }
 
 // ---- workspace / directory browsing ----
@@ -678,6 +687,18 @@ mod tests {
         assert_eq!(v["nodes"].as_array().unwrap().len(), 2);
         // ADR 2 links to ADR 1 -> at least one edge.
         assert!(!v["edges"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn check_endpoint_reports_clean_repo() {
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/check").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        // The seed repo (ADR-0001 accepted, ADR-0002 proposed with a valid link)
+        // has no problems.
+        assert_eq!(v["checked"], 2);
+        assert!(v["problems"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

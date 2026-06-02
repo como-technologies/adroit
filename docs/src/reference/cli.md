@@ -201,6 +201,10 @@ directory-mismatch check is skipped; the others still apply.
 adroit check
 ```
 
+The same validation runs behind the web dashboard's **repo-health panel** (via
+`GET /api/check`), so the issues `check` reports on the command line also show up
+there — see [Web Dashboard](../usage/web.md).
+
 ### `adroit relink`
 
 Rewrite every cross-ADR relative link so it points at the ADR's **current**
@@ -328,8 +332,8 @@ adroit finds your editor using this precedence chain:
 
 ### `adroit serve` (requires the `web` feature)
 
-Serve the read-only web dashboard (browse, search, stats, relationship graph)
-over a local HTTP server. Built behind the `web` Cargo feature; without it the
+Serve the read-only web dashboard (browse, search, stats, relationship graph,
+repo-health checks) over a local HTTP server. Built behind the `web` Cargo feature; without it the
 command prints a rebuild hint and exits. See [Web Dashboard](../usage/web.md).
 
 ```sh

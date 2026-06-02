@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowRight, BarChart3 } from 'lucide-vue-next'
-import { getStats, type Stats, type Status } from '@/api'
+import { ArrowRight, BarChart3, Clock, CircleX, TriangleAlert, CircleCheck } from 'lucide-vue-next'
+import { getStats, getCheck, type Stats, type Status, type CheckReport } from '@/api'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
 import StatTile from '@/components/StatTile.vue'
 
 const stats = ref<Stats | null>(null)
+const check = ref<CheckReport | null>(null)
 const loading = ref(false)
 const error = ref('')
 
@@ -15,13 +16,19 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    stats.value = await getStats()
+    // Checks are best-effort: a failure there must not blank the whole dashboard.
+    const [s, c] = await Promise.all([getStats(), getCheck().catch(() => null)])
+    stats.value = s
+    check.value = c
   } catch (e) {
     error.value = (e as Error).message
   } finally {
     loading.value = false
   }
 }
+
+// Failed-check count for the headline "Issues" tile.
+const issueCount = computed(() => check.value?.problems.length ?? 0)
 
 onMounted(load)
 // Recompute stats when ADR files change on disk.
@@ -96,7 +103,7 @@ function monthLabel(month: string): string {
         <StatTile label="Total ADRs" :value="stats.total" tone="brand" />
         <StatTile label="Accepted" :value="countOf('Accepted')" tone="emerald" />
         <StatTile label="Proposed" :value="countOf('Proposed')" tone="amber" />
-        <StatTile label="Review due" :value="stats.review_due.length" tone="rose" />
+        <StatTile label="Issues" :value="issueCount" tone="rose" />
       </div>
 
       <div class="grid gap-4 lg:grid-cols-2">
@@ -185,7 +192,7 @@ function monthLabel(month: string): string {
               :key="p.title"
               class="flex items-center gap-3 py-2"
             >
-              <span class="w-12 shrink-0 truncate font-mono text-xs tabular text-slate-400 dark:text-slate-500" :title="p.reference">
+              <span class="w-16 shrink-0 truncate font-mono text-xs tabular text-slate-400 dark:text-slate-500" :title="p.reference">
                 {{ p.reference }}
               </span>
               <span class="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">
@@ -195,40 +202,63 @@ function monthLabel(month: string): string {
                 >{{ p.title }}</RouterLink>
               </span>
               <span
-                class="shrink-0 text-xs tabular font-medium"
+                class="flex shrink-0 items-center gap-1 text-xs tabular font-medium"
                 :class="
-                  (p.age_days ?? 0) > 30
-                    ? 'text-amber-700 dark:text-amber-400'
-                    : 'text-slate-500 dark:text-slate-400'
+                  p.review_due
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : (p.age_days ?? 0) > 30
+                      ? 'text-amber-700 dark:text-amber-400'
+                      : 'text-slate-500 dark:text-slate-400'
                 "
+                :title="p.review_due ? 'Review due' : undefined"
               >
+                <Clock v-if="p.review_due" :size="12" class="shrink-0" />
                 {{ p.age_days !== null ? `${p.age_days}d` : '—' }}
               </span>
             </li>
           </ul>
         </div>
 
-        <!-- Review due -->
-        <div v-if="stats.review_due.length" class="card-glass p-5">
-          <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
-            Review due
-          </h2>
-          <ul class="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800/70">
-            <li
-              v-for="a in stats.review_due"
-              :key="a.address"
-              class="flex items-center gap-3 py-2"
+        <!-- Checks · repo health (mirrors `adroit check`) -->
+        <div class="card-glass p-5">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
+              Checks
+            </h2>
+            <span
+              v-if="check && check.problems.length"
+              class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
             >
-              <span class="w-12 shrink-0 truncate font-mono text-xs tabular text-slate-400 dark:text-slate-500" :title="a.reference">
-                {{ a.reference }}
+              {{ check.problems.length }} {{ check.problems.length === 1 ? 'issue' : 'issues' }}
+            </span>
+          </div>
+
+          <p v-if="!check" class="mt-4 text-sm text-slate-500 dark:text-slate-400">
+            Checks unavailable.
+          </p>
+          <p
+            v-else-if="check.problems.length === 0"
+            class="mt-4 flex items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-400"
+          >
+            <CircleCheck :size="16" class="shrink-0" />
+            All checks passing
+            <span class="font-normal text-slate-400 dark:text-slate-500">({{ check.checked }} ADRs)</span>
+          </p>
+          <ul v-else class="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800/70">
+            <li
+              v-for="(pr, i) in check.problems"
+              :key="i"
+              class="flex items-start gap-2 py-2"
+            >
+              <component
+                :is="pr.severity === 'error' ? CircleX : TriangleAlert"
+                :size="15"
+                class="mt-0.5 shrink-0"
+                :class="pr.severity === 'error' ? 'text-rose-500' : 'text-amber-500'"
+              />
+              <span class="min-w-0 break-words text-sm text-slate-700 dark:text-slate-200">
+                {{ pr.message }}
               </span>
-              <span class="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">
-                <RouterLink
-                  :to="`/adr/${a.address}`"
-                  class="hover:text-brand-700 dark:hover:text-brand-300"
-                >{{ a.title }}</RouterLink>
-              </span>
-              <StatusPill :status="a.status" size="sm" />
             </li>
           </ul>
         </div>

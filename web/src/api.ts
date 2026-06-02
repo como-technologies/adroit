@@ -58,6 +58,8 @@ export interface ProposedAge {
   address: string
   title: string
   age_days: number | null
+  // True when this Proposed ADR is also flagged review-due (past deadline or stale).
+  review_due: boolean
 }
 
 export interface CreatedBucket {
@@ -143,6 +145,36 @@ export function getStats(): Promise<Stats> {
 
 export function getGraph(): Promise<Graph> {
   return getJson<Graph>('/api/graph')
+}
+
+// ---- repo health / checks (mirrors `adroit check`) ----
+
+export type Severity = 'error' | 'warning'
+
+export type ProblemKind =
+  | 'duplicate_id'
+  | 'status_dir_mismatch'
+  | 'unparseable'
+  | 'broken_supersession'
+  | 'broken_link'
+  | 'stale_link'
+
+export interface Problem {
+  severity: Severity
+  kind: ProblemKind
+  message: string
+}
+
+export interface CheckReport {
+  // Number of ADR files inspected.
+  checked: number
+  // Problems found, sorted by severity (errors first) then message; empty when clean.
+  problems: Problem[]
+}
+
+/** The repo-validation report (the same checks as `adroit check`). */
+export function getCheck(): Promise<CheckReport> {
+  return getJson<CheckReport>('/api/check')
 }
 
 // ---- workspace / directory switching ----

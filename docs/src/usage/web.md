@@ -2,8 +2,10 @@
 
 adroit ships a **read-only** web dashboard for exploring an ADR repo in the
 browser: browse and read ADRs (with cross-links), full-text search, a stats
-dashboard, and an interactive **relationship graph**. Authoring stays in the CLI
-and TUI — the web surface never writes.
+dashboard, an interactive **relationship graph**, and a **repo-health panel**
+that surfaces the same problems as [`adroit check`](../reference/cli.md#adroit-check)
+(duplicate identifiers, status/dir mismatches, broken or stale links). Authoring
+stays in the CLI and TUI — the web surface never writes.
 
 The **Insights** page renders a force-directed "wiki-graph" of the repo: each
 ADR is a status-colored node, and relationships are colored edges — supersession,
@@ -82,6 +84,7 @@ directly:
 | `GET /api/search?q=` | summaries matching a full-text query |
 | `GET /api/stats` | counts by status, ages, review-due, created-over-time |
 | `GET /api/graph` | nodes + typed edges for the relationship graph |
+| `GET /api/check` | repo-validation report (the same checks as `adroit check`) |
 | `GET /api/workspace` | the active ADR directory |
 | `POST /api/workspace` | switch the active ADR directory (body `{ "path": … }`) |
 | `GET /api/browse?path=` | subdirectories of `path` + ADR count (powers the directory picker) |

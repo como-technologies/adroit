@@ -52,6 +52,16 @@ JSON with no extra mapping. Write logic stays in the `Store` write path (CLI +
 future TUI only); the query layer never writes. Markdown→HTML rendering is
 deliberately deferred to the web surface (`AdrDetail::body_html` stays `None`).
 
+**Repo validation is shared here too.** `query::check` runs the five `adroit
+check` rules (status/dir mismatch, duplicate identifiers, unparseable files,
+broken supersession, broken/stale links) and returns a structured
+`view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). The CLI's
+`cmd_check` renders that report — sorting `problem.message` so its output stays
+**byte-identical** (the `check_*` integration tests are the guard) — and the web
+`GET /api/check` endpoint serves it for the dashboard's repo-health panel.
+`Stats.proposed_age` rows also carry a `review_due` flag so a surface can mark an
+overdue Proposed ADR inline.
+
 **Dates & lifecycle come from git (`src/history.rs`).** The markdown profile
 persists no creation date and a clone resets mtime, so `query` resolves an
 ADR's `created`, `last_modified`, and status timeline from git instead.
@@ -118,8 +128,9 @@ byte-identical. `e` remains the external-`$EDITOR` escape hatch.
 `src/serve/` is a read-only Axum server gated behind the `web` Cargo feature;
 `--no-default-features` and the `tui` feature never depend on axum/tokio/notify.
 `adroit serve [--host --port]` exposes the shared `query` layer as a JSON API
-(`/api/adrs`, `/api/adrs/{id}`, `/api/search`, `/api/stats`, `/api/graph`, plus
-`/api/workspace` + `/api/browse` for the in-browser directory picker) and serves
+(`/api/adrs`, `/api/adrs/{id}`, `/api/search`, `/api/stats`, `/api/graph`,
+`/api/check`, plus `/api/workspace` + `/api/browse` for the in-browser directory
+picker) and serves
 an embedded Vue 3 SPA (`web/dist`, embedded via `rust-embed`). The store is
 reopened per request, so every response reflects current on-disk state.
 Markdown→HTML rendering is server-side (`pulldown-cmark`). No endpoint writes

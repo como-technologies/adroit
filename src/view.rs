@@ -135,6 +135,11 @@ pub struct ProposedAge {
     /// Whole days since creation (best-effort; `None` if the created date is
     /// unknown).
     pub age_days: Option<i64>,
+    /// `true` when this still-`Proposed` ADR is also flagged review-due (past its
+    /// `review_by` deadline or aged past the staleness threshold) — the same
+    /// signal as [`AdrSummary::review_due`], carried here so a surface can flag
+    /// the row inline without cross-referencing [`Stats::review_due`].
+    pub review_due: bool,
 }
 
 /// ADRs created in a given calendar month.
@@ -170,6 +175,59 @@ pub struct GraphEdge {
     /// Target ADR reference.
     pub to: String,
     pub kind: EdgeKind,
+}
+
+/// A structured repo-validation report — the same checks as `adroit check`,
+/// surfaced through the shared query layer so every surface (CLI, web, future
+/// TUI) reports identical problems.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CheckReport {
+    /// Number of ADR files inspected.
+    pub checked: usize,
+    /// Every problem found, sorted by severity (errors first) then message.
+    /// Empty when the repo is clean.
+    pub problems: Vec<Problem>,
+}
+
+/// One validation problem found by [`crate::query::check`].
+#[derive(Debug, Clone, Serialize)]
+pub struct Problem {
+    /// How serious the problem is.
+    pub severity: Severity,
+    /// Which category of check produced it (for grouping / filtering).
+    pub kind: ProblemKind,
+    /// Human-readable description — byte-identical to the `adroit check` line, so
+    /// the CLI renders these verbatim.
+    pub message: String,
+}
+
+/// Severity of a [`Problem`]. `Error` sorts before `Warning`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// A real defect (duplicate id, status/dir mismatch, unparseable file,
+    /// broken link) — `adroit check` exits non-zero on any of these.
+    Error,
+    /// A fixable inconsistency (a stale cross-ADR link `adroit relink` repairs).
+    Warning,
+}
+
+/// The category of a validation [`Problem`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemKind {
+    /// Two ADR files share one identity (number / slug / uuid).
+    DuplicateId,
+    /// A markdown ADR's `## Status` disagrees with its directory (by_status).
+    StatusDirMismatch,
+    /// A `.md` ADR with no parseable `# ADR-NNNN: Title` heading.
+    Unparseable,
+    /// A `Supersedes` / `Superseded by` note references a nonexistent ADR.
+    BrokenSupersession,
+    /// A relative `.md` link whose target file does not exist.
+    BrokenLink,
+    /// A relative `.md` link that resolves but not to the ADR's current home.
+    StaleLink,
 }
 
 /// The kind of relationship an edge / link represents.

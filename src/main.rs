@@ -20,15 +20,6 @@ fn resolve_ref(cfg: &Config, id: &str) -> Result<AdrRef> {
     })
 }
 
-/// The duplicate-detection / existence key for an ADR identity, so `cmd_check`
-/// groups and looks ADRs up uniformly across schemes.
-fn ident_key(r: &AdrRef) -> String {
-    match r {
-        AdrRef::Number(n) => format!("n:{n}"),
-        AdrRef::Slug(s) => format!("s:{s}"),
-    }
-}
-
 /// Bail when a numeric-only command (`renumber`/`review`, whose artifacts are
 /// number-shaped) runs under a non-numeric naming scheme.
 fn require_numeric_scheme(cfg: &Config, command: &str) -> Result<()> {
@@ -775,200 +766,25 @@ fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-/// `adroit check`: structural CI gate. Collects every problem found across the
-/// store and bails (non-zero exit) with a summary if any exist; otherwise prints
-/// an "OK" line and exits 0.
-///
-/// Checks performed (directory-status checks are skipped in flat/frontmatter
-/// where no directory implies a status):
-/// 1. Status ↔ directory mismatch (by_status only).
-/// 2. Duplicate ADR numbers.
-/// 3. Unparseable / missing-H1 ADR files.
-/// 4. Broken supersession links (referenced ADR number doesn't exist).
-/// 5. Broken / stale cross-ADR relative links.
+/// `adroit check`: structural CI gate. Runs [`query::check`] — the shared
+/// validation engine (also behind the web dashboard's repo-health panel) — and
+/// renders its report: bails (non-zero exit) with a summary when any problem
+/// exists, otherwise prints an "OK" line and exits 0.
 fn cmd_check(store: &Store) -> Result<()> {
-    use std::collections::BTreeMap;
-
-    let files = store.list_files()?;
-    let mut problems: Vec<String> = Vec::new();
-
-    // Track which ADR numbers exist (for the numeric supersession-link checks)
-    // and group paths by the scheme's identity (to flag duplicates — works for
-    // every naming scheme, not just the numeric ones).
-    let mut by_number: BTreeMap<u32, Vec<std::path::PathBuf>> = BTreeMap::new();
-    let mut by_ident: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
-    let scheme = store.options().naming;
-    let markdown = store.options().format == Format::Markdown;
-
-    for path in &files {
-        let rel = path
-            .strip_prefix(store.root())
-            .unwrap_or(path)
-            .display()
-            .to_string();
-
-        // (3) Unparseable / missing H1.
-        let adr = match store.read(path) {
-            Ok(adr) => adr,
-            Err(e) => {
-                problems.push(format!("{rel}: failed to parse ({e})"));
-                continue;
-            }
-        };
-        if let Some(number) = adr.number {
-            by_number
-                .entry(number.get())
-                .or_default()
-                .push(path.clone());
-        }
-        // Group by the scheme's identity for duplicate detection. A numeric ADR
-        // with no number, or a file with no parseable identity, is skipped (same
-        // as before) so stray notes don't register as collisions.
-        let r = adr.reference();
-        let track = matches!(r, AdrRef::Slug(_)) || adr.number.is_some();
-        if track {
-            by_ident
-                .entry(ident_key(&r))
-                .or_default()
-                .push(path.clone());
-        }
-
-        // Markdown-specific checks need the file's raw text and section status.
-        if markdown {
-            let content = std::fs::read_to_string(path)
-                .with_context(|| format!("could not read {}", path.display()))?;
-
-            // (1) Status ↔ directory mismatch (by_status only). A section with
-            // no explicit status word is allowed (directory is source of truth).
-            if let Some(dir_status) = store.dir_status(path)
-                && let Some(section_status) =
-                    adroit::format::parse_markdown_section_status(&content)
-                && dir_status != section_status
-            {
-                let num = adr.number.map(|n| format!("ADR-{n} ")).unwrap_or_default();
-                problems.push(format!(
-                    "{num}({rel}): directory says {dir_status} but ## Status says {section_status}"
-                ));
-            }
-        }
-    }
-
-    // (4) Broken supersession links. Resolved through the naming seam and
-    // checked against the full identity set, so forward/backward references in
-    // any order — and slug schemes — all work.
-    if markdown {
-        for path in &files {
-            let rel = path
-                .strip_prefix(store.root())
-                .unwrap_or(path)
-                .display()
-                .to_string();
-            let Ok(content) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            let (supersedes, superseded_by) =
-                adroit::format::parse_markdown_section_supersession(&content, scheme);
-            for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
-                if let Some(r) = r
-                    && !by_ident.contains_key(&ident_key(&r))
-                {
-                    problems.push(format!(
-                        "{rel}: ## Status says {kind} {} but no such ADR exists",
-                        scheme.display(&r)
-                    ));
-                }
-            }
-        }
-    }
-
-    // (5) Cross-ADR relative links: each must resolve to an existing file, and
-    // an ADR-numbered link should point at where that ADR currently lives.
-    let by_number_path: BTreeMap<u32, std::path::PathBuf> = by_number
-        .iter()
-        .filter(|(_, paths)| paths.len() == 1)
-        .map(|(n, paths)| (*n, paths[0].clone()))
-        .collect();
-    for path in &files {
-        let rel = path
-            .strip_prefix(store.root())
-            .unwrap_or(path)
-            .display()
-            .to_string();
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        for target in adroit::links::relative_md_targets(&content) {
-            let pathpart = target.split('#').next().unwrap_or(target);
-            let resolved = dir.join(pathpart);
-            if !resolved.exists() {
-                problems.push(format!(
-                    "{rel}: broken link [{target}] — target file not found"
-                ));
-                continue;
-            }
-            // Stale: resolves, but not to the current home of its ADR number.
-            if let Some(num) = adroit::links::number_in_target(target)
-                && let Some(canon) = by_number_path.get(&num)
-                && let (Ok(rp), Ok(cp)) = (
-                    std::fs::canonicalize(&resolved),
-                    std::fs::canonicalize(canon),
-                )
-                && rp != cp
-            {
-                let want = adroit::links::rel_link(dir, canon);
-                problems.push(format!(
-                    "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
-                ));
-            }
-        }
-    }
-
-    // (2) Duplicate identifiers (scheme-aware). The wording stays "number" for
-    // numeric schemes (byte-identical message) and "identifier" otherwise.
-    let noun = if scheme.is_numeric() {
-        "number"
-    } else {
-        "identifier"
-    };
-    for (key, paths) in &by_ident {
-        if paths.len() > 1 {
-            // Numeric identity → `ADR-NNNN` (from the key, so the message is
-            // byte-identical); slug identity → the scheme's display string.
-            let disp = if let Some(num) = key.strip_prefix("n:") {
-                format!("ADR-{:04}", num.parse::<u32>().unwrap_or(0))
-            } else {
-                scheme
-                    .parse(&paths[0], "")
-                    .map(|r| scheme.display(&r))
-                    .unwrap_or_else(|| key.trim_start_matches("s:").to_string())
-            };
-            let list = paths
-                .iter()
-                .map(|p| {
-                    p.strip_prefix(store.root())
-                        .unwrap_or(p)
-                        .display()
-                        .to_string()
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            problems.push(format!("{disp}: duplicate {noun} used by {list}"));
-        }
-    }
-
-    if problems.is_empty() {
-        println!("OK: {} ADRs, no problems", files.len());
+    let report = query::check(store)?;
+    if report.problems.is_empty() {
+        println!("OK: {} ADRs, no problems", report.checked);
         Ok(())
     } else {
-        problems.sort();
-        for problem in &problems {
-            eprintln!("{problem}");
+        let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
+        messages.sort_unstable();
+        for message in &messages {
+            eprintln!("{message}");
         }
         anyhow::bail!(
             "{} problem(s) found across {} ADR file(s)",
-            problems.len(),
-            files.len()
+            report.problems.len(),
+            report.checked
         );
     }
 }
