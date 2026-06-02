@@ -207,12 +207,26 @@ pub struct Problem {
     /// Short description with neither the leading `label` nor the path list —
     /// e.g. `"duplicate number"`, `"broken link [..] — target file not found"`.
     pub summary: String,
-    /// Affected file paths (relative to the repo root). The duplicate check lists
-    /// every colliding file here; empty when `label` already names the file.
-    pub paths: Vec<String>,
+    /// Affected files (relative to the repo root), each with its size. The
+    /// duplicate check lists every colliding file here — the line/byte counts let
+    /// a surface flag a header-only stub vs. a full ADR; empty when `label`
+    /// already names the single file.
+    pub paths: Vec<ProblemFile>,
     /// The full one-line message — byte-identical to the `adroit check` line, so
     /// the CLI renders it verbatim.
     pub message: String,
+}
+
+/// One file implicated in a [`Problem`], with its size so a surface can hint at
+/// what's worth diffing — e.g. a few-line header-only stub vs. a full ADR.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProblemFile {
+    /// Path relative to the repo root.
+    pub path: String,
+    /// Line count (`0` if the file can't be read as text).
+    pub lines: usize,
+    /// Byte size on disk.
+    pub bytes: u64,
 }
 
 /// Severity of a [`Problem`]. `Error` sorts before `Warning`.

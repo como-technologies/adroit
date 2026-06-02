@@ -21,7 +21,8 @@ use crate::naming::{AdrRef, NamingScheme};
 use crate::store::{Store, StoreError};
 use crate::view::{
     AdrDetail, AdrSummary, CheckReport, CreatedBucket, EdgeKind, Graph, GraphEdge, GraphNode,
-    Problem, ProblemKind, ProposedAge, RelatedLink, Severity, Stats, StatusCount, TimelineEvent,
+    Problem, ProblemFile, ProblemKind, ProposedAge, RelatedLink, Severity, Stats, StatusCount,
+    TimelineEvent,
 };
 
 /// Errors from the query layer.
@@ -212,6 +213,15 @@ fn ident_key(r: &AdrRef) -> String {
     }
 }
 
+/// Line and byte counts for a file, for the duplicate-check size hints. Returns
+/// `(0, metadata_len_or_0)` for a file that can't be read as UTF-8 text.
+fn file_stats(path: &Path) -> (usize, u64) {
+    match std::fs::read_to_string(path) {
+        Ok(s) => (s.lines().count(), s.len() as u64),
+        Err(_) => (0, std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)),
+    }
+}
+
 /// Validate the ADR repo, returning a structured [`CheckReport`].
 ///
 /// The shared engine behind `adroit check` and the web dashboard's repo-health
@@ -292,7 +302,17 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 // With a number, the ADR ref is the label and the file is a path;
                 // otherwise the file path is itself the label.
                 let (label, paths) = match adr.number {
-                    Some(n) => (format!("ADR-{n}"), vec![rel.clone()]),
+                    Some(n) => {
+                        let (lines, bytes) = file_stats(path);
+                        (
+                            format!("ADR-{n}"),
+                            vec![ProblemFile {
+                                path: rel.clone(),
+                                lines,
+                                bytes,
+                            }],
+                        )
+                    }
                     None => (rel.clone(), Vec::new()),
                 };
                 problems.push(Problem {
@@ -422,23 +442,30 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                     .map(|r| scheme.display(&r))
                     .unwrap_or_else(|| key.trim_start_matches("s:").to_string())
             };
-            let rels: Vec<String> = paths
+            let files: Vec<ProblemFile> = paths
                 .iter()
                 .map(|p| {
-                    p.strip_prefix(store.root())
+                    let path = p
+                        .strip_prefix(store.root())
                         .unwrap_or(p)
                         .display()
-                        .to_string()
+                        .to_string();
+                    let (lines, bytes) = file_stats(p);
+                    ProblemFile { path, lines, bytes }
                 })
                 .collect();
-            let list = rels.join(", ");
+            let list = files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             let message = format!("{disp}: duplicate {noun} used by {list}");
             problems.push(Problem {
                 severity: Severity::Error,
                 kind: ProblemKind::DuplicateId,
                 label: disp,
                 summary: format!("duplicate {noun}"),
-                paths: rels,
+                paths: files,
                 message,
             });
         }
@@ -880,6 +907,8 @@ mod tests {
         assert_eq!(dups[0].label, "ADR-0009");
         assert_eq!(dups[0].summary, "duplicate number");
         assert_eq!(dups[0].paths.len(), 2);
+        // Size hints are populated so the UI can flag a stub vs. a full ADR.
+        assert!(dups[0].paths.iter().all(|f| f.lines > 0 && f.bytes > 0));
         // The flat message stays byte-identical for the CLI.
         assert!(dups[0].message.contains("ADR-0009"));
         assert!(dups[0].message.contains("duplicate number used by"));

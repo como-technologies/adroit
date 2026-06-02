@@ -159,6 +159,12 @@ export type ProblemKind =
   | 'broken_link'
   | 'stale_link'
 
+export interface ProblemFile {
+  path: string
+  lines: number
+  bytes: number
+}
+
 export interface Problem {
   severity: Severity
   kind: ProblemKind
@@ -166,8 +172,8 @@ export interface Problem {
   label: string
   // Short description (no leading label, no path list).
   summary: string
-  // Affected file paths (duplicates list every colliding file; else empty).
-  paths: string[]
+  // Affected files with sizes (duplicates list every colliding file; else empty).
+  paths: ProblemFile[]
   // Full one-line message (matches the `adroit check` CLI output).
   message: string
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Inbox, Clock, Search, SearchX, X } from 'lucide-vue-next'
 import { listAdrs, search, type AdrSummary, type Status } from '@/api'
 import { highlight, shortDate } from '@/util'
@@ -9,6 +9,7 @@ import StatusPill from '@/components/StatusPill.vue'
 import SelectMenu from '@/components/SelectMenu.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 const adrs = ref<AdrSummary[]>([])
 const status = ref<'' | Status>('')
@@ -27,11 +28,18 @@ const SORTS = [
   { value: 'title', label: 'Title' },
 ]
 
-// Seed the status filter from a `?status=` deep-link (the dashboard's by-status
-// panel links here filtered by status).
-const initialStatus = route.query.status
-if (typeof initialStatus === 'string' && (STATUSES as string[]).includes(initialStatus)) {
-  status.value = initialStatus as Status
+// Seed filter / search / sort from the URL query, so deep-links work (the
+// dashboard's by-status panel links here with `?status=`) AND the browser Back
+// button restores the exact list state you left — we keep the query in sync below.
+const q0 = route.query
+if (typeof q0.status === 'string' && (STATUSES as string[]).includes(q0.status)) {
+  status.value = q0.status as Status
+}
+if (typeof q0.sort === 'string' && SORTS.some((s) => s.value === q0.sort)) {
+  sort.value = q0.sort
+}
+if (typeof q0.q === 'string') {
+  term.value = q0.q
 }
 
 // Load either the search results (non-empty query) or the filtered list.
@@ -72,6 +80,16 @@ watch([status, sort], () => {
 })
 // Typing in the box refetches (debounced); clearing it returns to the list.
 watch(term, debouncedLoad)
+// Mirror the active filter / search / sort into the URL (replace → no history
+// spam), so clicking into an ADR and pressing Back returns to this exact view.
+watch([status, sort, term], () => {
+  const query: Record<string, string> = {}
+  if (status.value) query.status = status.value
+  if (sort.value !== 'number') query.sort = sort.value
+  const q = term.value.trim()
+  if (q) query.q = q
+  router.replace({ query }).catch(() => {})
+})
 // Re-fetch (current mode) when ADR files change on disk.
 useLiveReload(load)
 

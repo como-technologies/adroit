@@ -30,6 +30,13 @@ async function load() {
 // Failed-check count for the headline "Issues" tile.
 const issueCount = computed(() => check.value?.problems.length ?? 0)
 
+// Compact byte size for the duplicate-file hints (e.g. "82 B", "4.1 KB").
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
 onMounted(load)
 // Recompute stats when ADR files change on disk.
 useLiveReload(load)
@@ -267,12 +274,19 @@ function monthLabel(month: string): string {
                 </div>
                 <ul v-if="pr.paths.length" class="mt-1 space-y-0.5">
                   <li
-                    v-for="p in pr.paths"
-                    :key="p"
-                    class="truncate font-mono text-xs text-slate-400 dark:text-slate-500"
-                    :title="p"
+                    v-for="f in pr.paths"
+                    :key="f.path"
+                    class="flex items-baseline justify-between gap-3"
                   >
-                    {{ p }}
+                    <span
+                      class="truncate font-mono text-xs text-slate-400 dark:text-slate-500"
+                      :title="f.path"
+                    >
+                      {{ f.path }}
+                    </span>
+                    <span class="shrink-0 font-mono text-[11px] tabular text-slate-400 dark:text-slate-500">
+                      {{ f.lines }} {{ f.lines === 1 ? 'line' : 'lines' }} · {{ fmtBytes(f.bytes) }}
+                    </span>
                   </li>
                 </ul>
               </div>
