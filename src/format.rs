@@ -226,7 +226,8 @@ fn parse_status_line(line: &str, region: &mut StatusRegion) {
 
 /// Case-insensitive `strip_prefix`, returning the remainder after `prefix`.
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
         Some(&s[prefix.len()..])
     } else {
         None
@@ -635,5 +636,17 @@ We need a consistent way to capture architectural decisions.\n";
     #[test]
     fn rewrite_review_by_none_on_clean_doc_is_byte_identical() {
         assert_eq!(rewrite_review_by(SAMPLE, None), SAMPLE);
+    }
+
+    #[test]
+    fn status_region_tolerates_multibyte_chars_at_prefix_boundary() {
+        // Regression: "Proposed — note" has an em-dash starting at byte 9, which
+        // sits inside the byte range of the 10-char prefixes "Supersedes" /
+        // "Review by:". `strip_prefix_ci` must not panic on a non-char-boundary.
+        let doc = "# ADR-0003: Sample\n\n## Status\n\nProposed — implementation evolving\n";
+        let region = parse_status_region(doc);
+        assert!(region.supersedes.is_none());
+        assert!(region.superseded_by.is_none());
+        assert!(region.review_by.is_none());
     }
 }
