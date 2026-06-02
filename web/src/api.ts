@@ -162,6 +162,13 @@ export type ProblemKind =
 export interface Problem {
   severity: Severity
   kind: ProblemKind
+  // Headline id: an ADR reference ("ADR-0009") for a duplicate, else the file path.
+  label: string
+  // Short description (no leading label, no path list).
+  summary: string
+  // Affected file paths (duplicates list every colliding file; else empty).
+  paths: string[]
+  // Full one-line message (matches the `adroit check` CLI output).
   message: string
 }
 

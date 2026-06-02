@@ -190,14 +190,28 @@ pub struct CheckReport {
 }
 
 /// One validation problem found by [`crate::query::check`].
+///
+/// Carries both a flat `message` (rendered verbatim by the CLI — byte-identical
+/// to historical `adroit check` output) and structured fields (`label` /
+/// `summary` / `paths`) so a richer surface, like the web repo-health panel, can
+/// lay it out instead of printing one line.
 #[derive(Debug, Clone, Serialize)]
 pub struct Problem {
     /// How serious the problem is.
     pub severity: Severity,
     /// Which category of check produced it (for grouping / filtering).
     pub kind: ProblemKind,
-    /// Human-readable description — byte-identical to the `adroit check` line, so
-    /// the CLI renders these verbatim.
+    /// Headline identifier: the ADR reference (`"ADR-0009"`) for a duplicate, or
+    /// the offending file's relative path otherwise.
+    pub label: String,
+    /// Short description with neither the leading `label` nor the path list —
+    /// e.g. `"duplicate number"`, `"broken link [..] — target file not found"`.
+    pub summary: String,
+    /// Affected file paths (relative to the repo root). The duplicate check lists
+    /// every colliding file here; empty when `label` already names the file.
+    pub paths: Vec<String>,
+    /// The full one-line message — byte-identical to the `adroit check` line, so
+    /// the CLI renders it verbatim.
     pub message: String,
 }
 

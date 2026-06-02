@@ -248,7 +248,7 @@ function monthLabel(month: string): string {
             <li
               v-for="(pr, i) in check.problems"
               :key="i"
-              class="flex items-start gap-2 py-2"
+              class="flex items-start gap-2.5 py-2"
             >
               <component
                 :is="pr.severity === 'error' ? CircleX : TriangleAlert"
@@ -256,9 +256,26 @@ function monthLabel(month: string): string {
                 class="mt-0.5 shrink-0"
                 :class="pr.severity === 'error' ? 'text-rose-500' : 'text-amber-500'"
               />
-              <span class="min-w-0 break-words text-sm text-slate-700 dark:text-slate-200">
-                {{ pr.message }}
-              </span>
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span class="shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500">
+                    {{ pr.label }}
+                  </span>
+                  <span class="min-w-0 break-words text-sm text-slate-700 dark:text-slate-200">
+                    {{ pr.summary }}
+                  </span>
+                </div>
+                <ul v-if="pr.paths.length" class="mt-1 space-y-0.5">
+                  <li
+                    v-for="p in pr.paths"
+                    :key="p"
+                    class="truncate font-mono text-xs text-slate-400 dark:text-slate-500"
+                    :title="p"
+                  >
+                    {{ p }}
+                  </li>
+                </ul>
+              </div>
             </li>
           </ul>
         </div>

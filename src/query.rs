@@ -228,13 +228,6 @@ fn ident_key(r: &AdrRef) -> String {
 pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     let files = store.list_files()?;
     let mut problems: Vec<Problem> = Vec::new();
-    let push = |problems: &mut Vec<Problem>, severity, kind, message| {
-        problems.push(Problem {
-            severity,
-            kind,
-            message,
-        });
-    };
 
     // Track which ADR numbers exist (for the numeric supersession-link checks)
     // and group paths by the scheme's identity (to flag duplicates — works for
@@ -255,12 +248,14 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
         let adr = match store.read(path) {
             Ok(adr) => adr,
             Err(e) => {
-                push(
-                    &mut problems,
-                    Severity::Error,
-                    ProblemKind::Unparseable,
-                    format!("{rel}: failed to parse ({e})"),
-                );
+                problems.push(Problem {
+                    severity: Severity::Error,
+                    kind: ProblemKind::Unparseable,
+                    label: rel.clone(),
+                    summary: format!("failed to parse ({e})"),
+                    paths: Vec::new(),
+                    message: format!("{rel}: failed to parse ({e})"),
+                });
                 continue;
             }
         };
@@ -294,14 +289,24 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 && dir_status != section_status
             {
                 let num = adr.number.map(|n| format!("ADR-{n} ")).unwrap_or_default();
-                push(
-                    &mut problems,
-                    Severity::Error,
-                    ProblemKind::StatusDirMismatch,
-                    format!(
+                // With a number, the ADR ref is the label and the file is a path;
+                // otherwise the file path is itself the label.
+                let (label, paths) = match adr.number {
+                    Some(n) => (format!("ADR-{n}"), vec![rel.clone()]),
+                    None => (rel.clone(), Vec::new()),
+                };
+                problems.push(Problem {
+                    severity: Severity::Error,
+                    kind: ProblemKind::StatusDirMismatch,
+                    label,
+                    summary: format!(
+                        "directory says {dir_status} but ## Status says {section_status}"
+                    ),
+                    paths,
+                    message: format!(
                         "{num}({rel}): directory says {dir_status} but ## Status says {section_status}"
                     ),
-                );
+                });
             }
         }
     }
@@ -325,15 +330,17 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 if let Some(r) = r
                     && !by_ident.contains_key(&ident_key(&r))
                 {
-                    push(
-                        &mut problems,
-                        Severity::Error,
-                        ProblemKind::BrokenSupersession,
-                        format!(
-                            "{rel}: ## Status says {kind} {} but no such ADR exists",
-                            scheme.display(&r)
+                    let disp = scheme.display(&r);
+                    problems.push(Problem {
+                        severity: Severity::Error,
+                        kind: ProblemKind::BrokenSupersession,
+                        label: rel.clone(),
+                        summary: format!("## Status says {kind} {disp} but no such ADR exists"),
+                        paths: Vec::new(),
+                        message: format!(
+                            "{rel}: ## Status says {kind} {disp} but no such ADR exists"
                         ),
-                    );
+                    });
                 }
             }
         }
@@ -360,12 +367,14 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             let pathpart = target.split('#').next().unwrap_or(target);
             let resolved = dir.join(pathpart);
             if !resolved.exists() {
-                push(
-                    &mut problems,
-                    Severity::Error,
-                    ProblemKind::BrokenLink,
-                    format!("{rel}: broken link [{target}] — target file not found"),
-                );
+                problems.push(Problem {
+                    severity: Severity::Error,
+                    kind: ProblemKind::BrokenLink,
+                    label: rel.clone(),
+                    summary: format!("broken link [{target}] — target file not found"),
+                    paths: Vec::new(),
+                    message: format!("{rel}: broken link [{target}] — target file not found"),
+                });
                 continue;
             }
             // Stale: resolves, but not to the current home of its ADR number.
@@ -378,14 +387,18 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 && rp != cp
             {
                 let want = crate::links::rel_link(dir, canon);
-                push(
-                    &mut problems,
-                    Severity::Warning,
-                    ProblemKind::StaleLink,
-                    format!(
+                problems.push(Problem {
+                    severity: Severity::Warning,
+                    kind: ProblemKind::StaleLink,
+                    label: rel.clone(),
+                    summary: format!(
+                        "stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                    ),
+                    paths: Vec::new(),
+                    message: format!(
                         "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
                     ),
-                );
+                });
             }
         }
     }
@@ -409,7 +422,7 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                     .map(|r| scheme.display(&r))
                     .unwrap_or_else(|| key.trim_start_matches("s:").to_string())
             };
-            let list = paths
+            let rels: Vec<String> = paths
                 .iter()
                 .map(|p| {
                     p.strip_prefix(store.root())
@@ -417,14 +430,17 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                         .display()
                         .to_string()
                 })
-                .collect::<Vec<_>>()
-                .join(", ");
-            push(
-                &mut problems,
-                Severity::Error,
-                ProblemKind::DuplicateId,
-                format!("{disp}: duplicate {noun} used by {list}"),
-            );
+                .collect();
+            let list = rels.join(", ");
+            let message = format!("{disp}: duplicate {noun} used by {list}");
+            problems.push(Problem {
+                severity: Severity::Error,
+                kind: ProblemKind::DuplicateId,
+                label: disp,
+                summary: format!("duplicate {noun}"),
+                paths: rels,
+                message,
+            });
         }
     }
 
@@ -861,8 +877,12 @@ mod tests {
             .collect();
         assert_eq!(dups.len(), 1);
         assert_eq!(dups[0].severity, Severity::Error);
+        assert_eq!(dups[0].label, "ADR-0009");
+        assert_eq!(dups[0].summary, "duplicate number");
+        assert_eq!(dups[0].paths.len(), 2);
+        // The flat message stays byte-identical for the CLI.
         assert!(dups[0].message.contains("ADR-0009"));
-        assert!(dups[0].message.contains("duplicate number"));
+        assert!(dups[0].message.contains("duplicate number used by"));
     }
 
     #[test]
