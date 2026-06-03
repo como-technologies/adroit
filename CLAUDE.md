@@ -362,10 +362,24 @@ format-preserving `## References` section (`format::upsert_reference`);
 + closes the issue (refuses if blocked; the whole op previews unless `--yes`);
 `set-status rejected`/`deprecated` close the PR + mark the issue won't-fix;
 `supersede` comments on + closes the old ADR's issue/PR. Each orchestration is
-split into a testable core (`run_new`/`run_status_change`) exercised with mock/
-noop adapters. **Not yet wired** (later phases): `check`/`list`/`stats`
-enrichment, `review`/`set-review` mirroring, `relink` URL patching, the `serve`
-panel, and the cross-cutting `publish`/`notify`/`init`/`auth` verbs.
+split into a testable core (`run_new`/`run_status_change`/`comment`) exercised
+with mock/noop adapters. Read-side: `check --forge` appends
+`ProblemKind::ForgeIntegration` drift warnings; `list --forge` enriches rows
+(`forge::enrich` → `AdrSummary.forge_data`); `review`/`set-review --with-forge`
+post a comment (kickoff / deadline) via the shared `forge::comment`.
+
+**Providers.** `github` + `gitlab` (each a same-system Forge+Tracker via
+`{github,gitlab}::open(cfg)`); `jira` is a split **Tracker** (`forge/jira.rs`,
+REST v2, Basic auth) selected by `forge.tracker = jira` so a GitHub/GitLab forge
+pairs with Jira issues — `forge::open` chooses forge and tracker independently.
+
+**Cross-cutting verbs.** `adroit init` (detect provider from the git remote →
+`config::parse_remote_url` → write `forge.*`), `adroit publish` (export accepted
+ADRs to a dir — `src/publish.rs`, core/offline; Confluence/Notion adapters are
+future), `adroit notify <id>` (POST to a Slack/Teams webhook via
+`forge::notify`). **Still future:** `adroit auth` (OAuth device-flow + keychain),
+forge artifact templates, MR-description sync, the `serve` dashboard forge panel,
+and `relink` patching forge-side URLs.
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
 `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are

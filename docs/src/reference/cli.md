@@ -458,13 +458,22 @@ editor: vim
 | `forge.host` | host | provider default | API host for self-managed / enterprise (`api.github.com` by default). |
 | `forge.branch_prefix` | string | `adr/` | Branch prefix `new --with-forge` generates (`adr/0021-…`). |
 | `forge.base_branch` | string | `main` | Base branch PRs target. |
-| `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. |
+| `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. `jira` pairs a GitHub/GitLab forge with Jira. |
+| `forge.tracker_project` | string | — | Split-tracker project key (e.g. the Jira project `OPS`). |
+| `forge.tracker_host` | host | — | Split-tracker API host (e.g. `your-site.atlassian.net`). |
 
 Tokens are **never** stored in config — they come from the environment
-(`ADROIT_GITHUB_TOKEN`). The forge integration is opt-in per command via
-`--with-forge` on `new` / `set-status` / `supersede` (with `--dry-run` to preview
-and `--yes` to apply mutations like a PR merge), and the binary must be built
-`--features forge`.
+(`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +
+`ADROIT_JIRA_EMAIL`). The binary must be built `--features forge`. The
+integration is opt-in per command:
+
+- `new` / `set-status` / `supersede` / `review` / `set-review` take `--with-forge`
+  (+ `--dry-run` to preview, `--yes` to apply a mutation like a PR merge).
+- `check --forge` and `list --forge` add read-only forge awareness (drift checks
+  / live PR state).
+- `adroit init` detects the forge from the git remote and writes `forge.*`;
+  `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
+  `adroit notify <id>` posts to a Slack/Teams webhook (`ADROIT_NOTIFY_WEBHOOK`).
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 
