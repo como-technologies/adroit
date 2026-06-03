@@ -227,7 +227,7 @@ function monthLabel(month: string): string {
         </div>
 
         <!-- Checks · repo health (mirrors `adroit check`) -->
-        <div class="card-glass p-5">
+        <div class="card-glass flex flex-col p-5">
           <div class="flex items-center justify-between gap-3">
             <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
               Checks
@@ -243,14 +243,24 @@ function monthLabel(month: string): string {
           <p v-if="!check" class="mt-4 text-sm text-slate-500 dark:text-slate-400">
             Checks unavailable.
           </p>
-          <p
+          <div
             v-else-if="check.problems.length === 0"
-            class="mt-4 flex items-center gap-2 text-sm font-medium text-emerald-700 dark:text-emerald-400"
+            class="mt-4 flex min-h-[13rem] flex-1 flex-col items-center justify-center gap-3 text-center"
           >
-            <CircleCheck :size="16" class="shrink-0" />
-            All checks passing
-            <span class="font-normal text-slate-400 dark:text-slate-500">({{ check.checked }} ADRs)</span>
-          </p>
+            <div
+              class="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 ring-1 ring-emerald-200/70 dark:bg-emerald-950/40 dark:ring-emerald-900/60"
+            >
+              <CircleCheck :size="26" class="text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div>
+              <p class="font-display text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                All checks passing
+              </p>
+              <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                {{ check.checked }} ADRs validated · no issues found
+              </p>
+            </div>
+          </div>
           <ul v-else class="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800/70">
             <li
               v-for="(pr, i) in check.problems"
@@ -260,7 +270,7 @@ function monthLabel(month: string): string {
               <component
                 :is="pr.severity === 'error' ? CircleX : TriangleAlert"
                 :size="15"
-                class="mt-0.5 shrink-0"
+                class="mt-1 shrink-0"
                 :class="pr.severity === 'error' ? 'text-rose-500' : 'text-amber-500'"
               />
               <div class="min-w-0 flex-1">
