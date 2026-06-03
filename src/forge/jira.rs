@@ -1,10 +1,13 @@
 //! Jira adapter — a **split** [`Tracker`] (Jira has no PRs, so it implements no
 //! [`Forge`](super::Forge)). Pairs with a GitHub/GitLab forge when
-//! `forge.tracker = jira`, reaching the GitLab-MRs + Jira-issues setup. Uses
-//! Jira Cloud REST v2 (plain-text descriptions) with Basic auth (email + API
-//! token). Config: `forge.tracker_host` (`site.atlassian.net`) +
-//! `forge.tracker_project` (the project key) + env `ADROIT_JIRA_EMAIL` /
-//! `ADROIT_JIRA_TOKEN`.
+//! `forge.tracker = jira`, reaching the GitLab-MRs + Jira-issues setup. REST v2
+//! (plain-text descriptions), which both Jira Cloud and Server/Data Center
+//! serve. **Auth follows the deployment:** Cloud uses Basic `email:token` (set
+//! `ADROIT_JIRA_EMAIL`); Server/Data Center uses a Bearer Personal Access Token
+//! (omit the email). Config: `forge.tracker_host` (`site.atlassian.net` for
+//! Cloud, or a self-hosted host like `jira.example.com`) +
+//! `forge.tracker_project` (the project key) + env `ADROIT_JIRA_TOKEN`
+//! (+ `ADROIT_JIRA_EMAIL` for Cloud).
 
 use std::sync::Arc;
 
@@ -14,21 +17,27 @@ use super::{
     Forge, ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport,
 };
 
-/// A Jira Cloud REST client scoped to one project.
+/// A Jira REST client scoped to one project (Cloud or Server/Data Center).
 #[derive(Clone)]
 pub struct Jira {
-    host: String,    // site.atlassian.net
+    host: String,    // site.atlassian.net, or a self-hosted host
     project: String, // project key, e.g. OPS
-    auth: String,    // pre-built "Basic <base64(email:token)>"
+    auth: String,    // pre-built header: Basic (Cloud) or Bearer PAT (Server/DC)
     transport: Arc<dyn HttpTransport>,
 }
 
 impl Jira {
-    pub fn new(host: String, project: String, email: &str, token: &str) -> Self {
+    /// `email` selects the auth scheme: `Some` ⇒ Jira **Cloud** (Basic
+    /// `email:token`); `None` ⇒ Jira **Server/Data Center** (Bearer PAT).
+    pub fn new(host: String, project: String, email: Option<&str>, token: &str) -> Self {
+        let auth = match email {
+            Some(email) => format!("Basic {}", base64(format!("{email}:{token}").as_bytes())),
+            None => format!("Bearer {token}"),
+        };
         Self {
             host,
             project,
-            auth: format!("Basic {}", base64(format!("{email}:{token}").as_bytes())),
+            auth,
             transport: Arc::new(UreqTransport),
         }
     }
@@ -83,18 +92,21 @@ impl Jira {
     }
 }
 
-/// Construct a Jira tracker, or `None` if inactive (missing host / project /
-/// `ADROIT_JIRA_EMAIL` / `ADROIT_JIRA_TOKEN`).
+/// Construct a Jira tracker, or `None` if inactive (missing `tracker_host` /
+/// `tracker_project` / `ADROIT_JIRA_TOKEN`). `ADROIT_JIRA_EMAIL` is optional —
+/// set it for Cloud (Basic auth); omit it for Server/Data Center (Bearer PAT).
 pub fn open(cfg: &crate::config::ForgeConfig) -> Option<Box<dyn Tracker>> {
     let host = cfg.tracker_host.clone()?;
     let project = cfg.tracker_project.clone()?;
-    let email = std::env::var("ADROIT_JIRA_EMAIL")
-        .ok()
-        .or_else(|| crate::config::load_credential("jira_email"))?;
     let token = std::env::var("ADROIT_JIRA_TOKEN")
         .ok()
         .or_else(|| crate::config::load_credential("jira"))?;
-    Some(Box::new(Jira::new(host, project, &email, &token)))
+    // Email is optional: present ⇒ Jira Cloud (Basic email:token); absent ⇒
+    // Jira Server/Data Center (Bearer PAT).
+    let email = std::env::var("ADROIT_JIRA_EMAIL")
+        .ok()
+        .or_else(|| crate::config::load_credential("jira_email"));
+    Some(Box::new(Jira::new(host, project, email.as_deref(), &token)))
 }
 
 fn message_of(body: &[u8]) -> String {
@@ -289,6 +301,21 @@ mod tests {
             "OPS",
             Arc::new(Fake(r, Mutex::new(vec![]))),
         )
+    }
+
+    #[test]
+    fn auth_scheme_follows_deployment() {
+        // Cloud: email present → Basic email:token.
+        let cloud = Jira::new(
+            "x.atlassian.net".into(),
+            "OPS".into(),
+            Some("me@corp.com"),
+            "tok",
+        );
+        assert!(cloud.auth.starts_with("Basic "));
+        // Server / Data Center: no email → Bearer PAT.
+        let server = Jira::new("jira.example.com".into(), "OPS".into(), None, "tok");
+        assert_eq!(server.auth, "Bearer tok");
     }
 
     #[test]

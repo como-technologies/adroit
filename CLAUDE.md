@@ -370,8 +370,12 @@ post a comment (kickoff / deadline) via the shared `forge::comment`.
 
 **Providers.** `github` + `gitlab` (each a same-system Forge+Tracker via
 `{github,gitlab}::open(cfg)`); `jira` is a split **Tracker** (`forge/jira.rs`,
-REST v2, Basic auth) selected by `forge.tracker = jira` so a GitHub/GitLab forge
-pairs with Jira issues — `forge::open` chooses forge and tracker independently.
+REST v2) selected by `forge.tracker = jira` so a GitHub/GitLab forge pairs with
+Jira issues — `forge::open` chooses forge and tracker independently. Jira auth
+follows the deployment: Cloud uses Basic `email:token` (email set), Server/Data
+Center uses a Bearer PAT (email omitted). GitHub/GitLab use the same token cloud
+or self-hosted; only `forge.host` changes (GitHub Enterprise host includes the
+`/api/v3` base).
 
 **Cross-cutting verbs.** `adroit init` (detect provider from the git remote →
 `config::parse_remote_url` → write `forge.*`), `adroit publish` (export accepted
