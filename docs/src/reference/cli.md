@@ -95,14 +95,31 @@ move git records. Outside a git repository adroit falls back to the file's
 modification time, and the timeline is omitted. See
 [ADR Format](./adr-format.md#dates-come-from-git).
 
-### `adroit status <ID> <STATUS>`
+### `adroit status <ID>`
 
-Update the lifecycle status of an ADR (`<ID>` resolved as in [`show`](#adroit-show-id)). Status names are case-insensitive. In by-status markdown mode this **moves the file** to the matching status directory and rewrites the `## Status` section (minimal-diff).
+Print an ADR's current status — just the word, **lowercase** (`<ID>` resolved as
+in [`show`](#adroit-show-id)). It's a focused, scriptable getter: the output
+feeds straight into [`set-status`](#adroit-set-status-id-status) or a shell test,
+and matches the by-status directory names. For the full record use
+[`show`](#adroit-show-id) (whose `Status:` line is the capitalized display form).
+
+```sh
+adroit status 1            # -> proposed
+[ "$(adroit status 1)" = accepted ] && echo "ready to publish"
+```
+
+### `adroit set-status <ID> <STATUS>`
+
+Set the lifecycle status of an ADR (`<ID>` resolved as in [`show`](#adroit-show-id)).
+Status names are case-insensitive. In by-status markdown mode this **moves the
+file** to the matching status directory and rewrites the `## Status` section
+(minimal-diff), then reconciles cross-ADR links per
+[`relink_scope`](#configuration). Mirrors [`set-review`](#adroit-set-review-id-date).
 
 Valid statuses: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
 
 ```sh
-adroit status 1 accepted
+adroit set-status 1 accepted
 ```
 
 ### `adroit supersede <NEW> <OLD>`

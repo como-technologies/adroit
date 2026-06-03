@@ -40,11 +40,12 @@ adroit show 1
 ## Accept a decision
 
 ```sh
-adroit status 1 accepted
+adroit set-status 1 accepted
 ```
 
 In by-status mode this moves the file from `proposed/` to `accepted/` and
 rewrites its `## Status` section — the rest of the file is left byte-identical.
+(Reading the status back is `adroit status 1`, which prints `accepted`.)
 
 ## Edit a decision
 

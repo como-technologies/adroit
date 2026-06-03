@@ -42,11 +42,14 @@ Case-insensitive search over titles and bodies.
 ## Updating status
 
 ```sh
-adroit status 1 accepted
+adroit set-status 1 accepted   # the setter
+adroit status 1                # the getter — prints `accepted` (lowercase, scriptable)
 ```
 
-In by-status mode this moves the file to the matching directory and rewrites
-the `## Status` section, leaving the rest of the file byte-identical.
+`set-status` moves the file to the matching directory (in by-status mode) and
+rewrites the `## Status` section, leaving the rest of the file byte-identical.
+`status <ID>` is the read-only counterpart — just the status word, lowercase, so
+it pipes cleanly; `show` gives the full, capitalized record.
 
 > **Don't want files moving between directories on every status change?** The
 > default `by_status` layout encodes status as the directory. If that churn is

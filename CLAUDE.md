@@ -252,8 +252,8 @@ that changed (idempotent → no-op on a canonical repo). `relink(apply)` with
 **Relink scope on a status move (`relink_scope`).** After a move, `set_status_at`
 reconciles links via `relink_after_move`, dispatching on the
 `config::RelinkScope` carried on `StoreOptions`: `all` (default) calls
-`relink(true)` to heal every inbound link (`adroit status`/`supersede` self-heal
-the whole repo — best for a single author); `self` calls `relink_one(&new_path)`
+`relink(true)` to heal every inbound link (`adroit set-status`/`supersede`
+self-heal the whole repo — best for a single author); `self` calls `relink_one(&new_path)`
 to fix only the moved file's own outbound links (`relink_one` reuses the
 `link_resolver_map` + `links::rewrite_links` on that one file), leaving neighbors'
 inbound links for a later relink; `none` does nothing. `self`/`none` make a
@@ -290,13 +290,13 @@ Consumers route through it: `Store::write`/`read` assign+parse identity via the
 scheme and name files with `scheme.filename`; `next_ref`/`find_path_by_ref` and
 the `set_*_ref` mutation methods address ADRs by `AdrRef`; `template::render`
 fills `{{heading}}` from `scheme.heading`; `query::summary_of` fills
-`AdrSummary.reference` from `scheme.display`; the CLI's `show`/`status`/`edit`/
-`set-review` take an `<ID>` parsed by `scheme.parse_ref`; `check`'s duplicate
+`AdrSummary.reference` from `scheme.display`; the CLI's `show`/`status`/
+`set-status`/`edit`/`set-review` take an `<ID>` parsed by `scheme.parse_ref`; `check`'s duplicate
 detection groups by scheme identity. **Sequential stays byte-identical** — the
 additive identity model (`Adr.number: Option<Number>` + `Adr.slug:
 Option<String>`, `Adr::reference()`) keeps it the no-op path, and the existing
 unit + integration tests are the regression guard. `date` + `uuid` work
-end-to-end (create/list/show/status/set-review/supersede/check) — supersession
+end-to-end (create/list/show/status/set-status/set-review/supersede/check) — supersession
 is a scheme-agnostic `Option<AdrRef>` (serde-untagged in frontmatter; resolved
 from the markdown link via `ref_in_note`), and the graph/related/view layer
 carries scheme `reference` + `address` strings so the TUI and web SPA route

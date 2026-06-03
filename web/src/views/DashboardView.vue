@@ -131,7 +131,7 @@ function monthLabel(month: string): string {
             <RouterLink
               v-for="s in stats.by_status"
               :key="s.status"
-              :to="{ path: '/browse', query: { status: s.status } }"
+              :to="{ path: '/browse', query: { status: s.status.toLowerCase() } }"
               class="group flex items-center gap-3 rounded-lg px-1 py-0.5 transition-colors hover:bg-slate-100/60 dark:hover:bg-slate-800/40"
             >
               <div class="w-24 shrink-0">
@@ -245,7 +245,7 @@ function monthLabel(month: string): string {
           </p>
           <div
             v-else-if="check.problems.length === 0"
-            class="mt-4 flex min-h-[13rem] flex-1 flex-col items-center justify-center gap-3 text-center"
+            class="flex min-h-[13rem] flex-1 flex-col items-center justify-center gap-3 text-center"
           >
             <div
               class="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 ring-1 ring-emerald-200/70 dark:bg-emerald-950/40 dark:ring-emerald-900/60"

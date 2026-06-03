@@ -86,7 +86,7 @@ adroit set-review 9 2026-07-15
 adroit review 9 --output review-kickoff.md
 
 # Record the outcome — moves the file + rewrites status in one step
-adroit status 9 accepted
+adroit set-status 9 accepted
 # ...or supersede an older decision with a newer one
 adroit supersede 9 4
 

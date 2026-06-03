@@ -106,8 +106,14 @@ pub enum Command {
         /// or the slug / uuid prefix under the date / uuid schemes.
         id: String,
     },
-    /// Update the status of an ADR (moves the file in by_status layout).
+    /// Print an ADR's current status — lowercase and scriptable, so it feeds
+    /// straight into `set-status` or a shell test. Use `show` for the full record.
     Status {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+    },
+    /// Set an ADR's status (moves the file in by_status layout, rewrites links).
+    SetStatus {
         /// ADR identifier (number, slug, or uuid prefix — see `show`).
         id: String,
         /// New status (proposed, accepted, rejected, deprecated, superseded).

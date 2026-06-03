@@ -32,8 +32,12 @@ const SORTS = [
 // dashboard's by-status panel links here with `?status=`) AND the browser Back
 // button restores the exact list state you left — we keep the query in sync below.
 const q0 = route.query
-if (typeof q0.status === 'string' && (STATUSES as string[]).includes(q0.status)) {
-  status.value = q0.status as Status
+// The URL carries the status lowercase (e.g. `?status=proposed`); map it back to
+// the canonical capitalized Status used for filtering, labels, and pills.
+const rawStatus = q0.status
+if (typeof rawStatus === 'string') {
+  const match = STATUSES.find((s) => s.toLowerCase() === rawStatus.toLowerCase())
+  if (match) status.value = match
 }
 if (typeof q0.sort === 'string' && SORTS.some((s) => s.value === q0.sort)) {
   sort.value = q0.sort
@@ -84,7 +88,8 @@ watch(term, debouncedLoad)
 // spam), so clicking into an ADR and pressing Back returns to this exact view.
 watch([status, sort, term], () => {
   const query: Record<string, string> = {}
-  if (status.value) query.status = status.value
+  // Lowercase in the URL (display keeps the capitalized label); see issue #2.
+  if (status.value) query.status = status.value.toLowerCase()
   if (sort.value !== 'number') query.sort = sort.value
   const q = term.value.trim()
   if (q) query.q = q

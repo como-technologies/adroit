@@ -148,20 +148,8 @@ fn main() -> Result<()> {
         }
         Some(Command::List { status }) => cmd_list(&store, status.as_deref())?,
         Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
-        Some(Command::Status { id, status }) => {
-            let new_status: Status = status.parse().map_err(|_| {
-                anyhow::anyhow!(
-                    "invalid status '{status}', expected: proposed, accepted, rejected, deprecated, superseded"
-                )
-            })?;
-            let r = resolve_ref(&cfg, &id)?;
-            let path = store.set_status_ref(&r, new_status)?;
-            println!(
-                "Updated {} status to {new_status} ({})",
-                cfg.naming.display(&r),
-                path.display()
-            );
-        }
+        Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
+        Some(Command::SetStatus { id, status }) => cmd_set_status(&store, &cfg, &id, &status)?,
         Some(Command::Supersede { new, old }) => {
             cmd_supersede(
                 &store,
@@ -382,6 +370,36 @@ fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
         println!();
         println!("{}", detail.body);
     }
+    Ok(())
+}
+
+/// `adroit status <ID>`: print just an ADR's current status word, **lowercase**,
+/// so it's scriptable — it round-trips into `set-status` and matches the
+/// by_status directory names (e.g. `[ "$(adroit status 7)" = accepted ]`). The
+/// capitalized form is display-only (`show`, `list`).
+fn cmd_get_status(store: &Store, cfg: &Config, id: &str) -> Result<()> {
+    let r = resolve_ref(cfg, id)?;
+    let path = store.find_path_by_ref(&r)?;
+    let detail = query::detail_at(store, &path)?;
+    println!("{}", detail.summary.status.to_string().to_lowercase());
+    Ok(())
+}
+
+/// `adroit set-status <ID> <STATUS>`: set an ADR's status (moves the file in
+/// by_status layout and rewrites links per `relink_scope`).
+fn cmd_set_status(store: &Store, cfg: &Config, id: &str, status: &str) -> Result<()> {
+    let new_status: Status = status.parse().map_err(|_| {
+        anyhow::anyhow!(
+            "invalid status '{status}', expected: proposed, accepted, rejected, deprecated, superseded"
+        )
+    })?;
+    let r = resolve_ref(cfg, id)?;
+    let path = store.set_status_ref(&r, new_status)?;
+    println!(
+        "Updated {} status to {new_status} ({})",
+        cfg.naming.display(&r),
+        path.display()
+    );
     Ok(())
 }
 

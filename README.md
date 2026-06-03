@@ -54,7 +54,8 @@ layers it came from; `adroit config set <key> <value>` persists a default (add
 adroit new "Use PostgreSQL for the datastore"   # next number, scaffolds proposed/, opens $EDITOR
 adroit list                             # or: --status accepted
 adroit search postgres
-adroit status 9 accepted                # moves the file + rewrites ## Status
+adroit status 9                         # getter: prints the status (lowercase, scriptable)
+adroit set-status 9 accepted            # setter: moves the file + rewrites ## Status
 adroit supersede 9 4                    # 9 supersedes 4 (moves 4, links both)
 adroit link 9 --depends-on 4            # typed relational link (frontmatter profile)
 adroit set-review 9 2026-07-15          # review deadline (review-due once past)

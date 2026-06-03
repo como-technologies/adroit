@@ -106,7 +106,7 @@ fn list_filter_by_status() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "2", "accepted"])
+        .args(["set-status", "2", "accepted"])
         .assert()
         .success();
 
@@ -126,7 +126,7 @@ fn status_moves_file_between_dirs() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "1", "accepted"])
+        .args(["set-status", "1", "accepted"])
         .assert()
         .success();
 
@@ -136,6 +136,33 @@ fn status_moves_file_between_dirs() {
     let content = fs::read_to_string(&accepted).unwrap();
     assert!(content.contains("## Status"));
     assert!(content.contains("Accepted"));
+}
+
+#[test]
+fn status_getter_prints_lowercase_and_round_trips_into_set_status() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+
+    // `status <ID>` is a getter: just the status word, lowercase (scriptable).
+    adroit(&dir)
+        .args(["status", "1"])
+        .assert()
+        .success()
+        .stdout("proposed\n");
+
+    // ...and it feeds straight back into `set-status`.
+    adroit(&dir)
+        .args(["set-status", "1", "accepted"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["status", "1"])
+        .assert()
+        .success()
+        .stdout("accepted\n");
 }
 
 #[test]
@@ -150,7 +177,7 @@ fn supersede_moves_old_and_links_both() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "2", "accepted"])
+        .args(["set-status", "2", "accepted"])
         .assert()
         .success();
 
@@ -296,7 +323,7 @@ fn check_passes_on_clean_repo() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "2", "accepted"])
+        .args(["set-status", "2", "accepted"])
         .assert()
         .success();
 
@@ -448,7 +475,7 @@ fn index_check_fails_when_out_of_date() {
 
     // Change a status without re-indexing: SUMMARY.md is now stale.
     new_cmd()
-        .args(["status", "1", "accepted"])
+        .args(["set-status", "1", "accepted"])
         .assert()
         .success();
 
@@ -489,7 +516,7 @@ fn next_number_is_max_across_dirs() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "2", "accepted"])
+        .args(["set-status", "2", "accepted"])
         .assert()
         .success();
     // Third should be 0003 even though 0002 moved dirs.
@@ -537,7 +564,7 @@ fn status_invalid_errors() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "1", "bogus"])
+        .args(["set-status", "1", "bogus"])
         .assert()
         .failure();
 }
@@ -635,7 +662,7 @@ fn status_change_relinks_inbound_links_and_check_passes() {
 
     // Accepting ADR-0002 moves it to accepted/ AND rewrites ADR-0001's link.
     adroit(&dir)
-        .args(["status", "2", "accepted"])
+        .args(["set-status", "2", "accepted"])
         .assert()
         .success();
 
@@ -738,7 +765,7 @@ fn self_scope_status_change_defers_inbound_relink_to_explicit_relink() {
     // Accept 0002 with self-scope: it moves to accepted/ and fixes ITS OWN link,
     // but must NOT rewrite the inbound link in its neighbor 0001.
     adroit(&dir)
-        .args(["--relink-scope", "self", "status", "2", "accepted"])
+        .args(["--relink-scope", "self", "set-status", "2", "accepted"])
         .assert()
         .success();
 
@@ -928,7 +955,7 @@ fn migrate_converts_by_status_to_flat() {
         .assert()
         .success();
     adroit(&dir)
-        .args(["status", "2", "accepted"])
+        .args(["set-status", "2", "accepted"])
         .assert()
         .success();
     assert!(dir.path().join("proposed/0001-one.md").exists());
@@ -1166,7 +1193,7 @@ fn flat_full_workflow() {
         .assert()
         .success();
     adroit_flat(&dir)
-        .args(["status", "1", "accepted"])
+        .args(["set-status", "1", "accepted"])
         .assert()
         .success();
     adroit_flat(&dir)
@@ -1262,7 +1289,7 @@ fn per_category_show_and_status_by_composite_id() {
 
     // A status change stays in the category directory (no move).
     adroit_category(&dir)
-        .args(["status", "data/0001", "accepted"])
+        .args(["set-status", "data/0001", "accepted"])
         .assert()
         .success();
     assert!(
@@ -1548,7 +1575,7 @@ fn date_scheme_list_show_status_by_slug() {
 
     // `status <slug> accepted` moves the file to accepted/ keeping its slug.
     adroit_date(&dir)
-        .args(["status", &slug, "accepted"])
+        .args(["set-status", &slug, "accepted"])
         .assert()
         .success();
     let moved = &adr_files(dir.path())[0];
@@ -1631,7 +1658,7 @@ fn date_scheme_relinks_cross_adr_links_on_status_move() {
     // Accepting B moves it to accepted/ and must rewrite A's link via the seam.
     let b_slug = b_name.strip_suffix(".md").unwrap();
     adroit_date(&dir)
-        .args(["status", b_slug, "accepted"])
+        .args(["set-status", b_slug, "accepted"])
         .assert()
         .success();
 
