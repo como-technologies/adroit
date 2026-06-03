@@ -17,10 +17,11 @@ use std::io::Read;
 use serde::Serialize;
 
 use crate::adr::Status;
-use crate::config::{Config, ForgeConfig, Provider};
+use crate::config::{Config, ForgeConfig, Provider, TrackerProvider};
 
 pub mod github;
 pub mod gitlab;
+pub mod jira;
 pub mod noop;
 
 // ---------------------------------------------------------------------------
@@ -224,13 +225,24 @@ fn read_response(resp: ureq::Response) -> HttpResponse {
 /// GitHub/GitLab arms land in Phase 1/1b; for now an enabled provider with a
 /// token returns `(None, None)` as well (no adapter wired yet).
 pub fn open(cfg: &ForgeConfig) -> Adapters {
-    // Thin dispatcher: each provider module owns its own construction (token env
-    // var, slug/host requirements). Adding a provider is one arm + one module.
-    match cfg.provider {
+    // Thin dispatcher. The forge (PR/MR host) comes from `provider`; each module
+    // owns its own construction. The tracker is normally the same system, but a
+    // split setup (`tracker = jira`) swaps in a different tracker adapter —
+    // that's how GitLab MRs + Jira issues are reached.
+    let (forge, native_tracker) = match cfg.provider {
         Provider::None => (None, None),
         Provider::Github => github::open(cfg),
         Provider::Gitlab => gitlab::open(cfg),
-    }
+    };
+    let tracker = match cfg.tracker {
+        TrackerProvider::Jira => jira::open(cfg),
+        // Linear isn't implemented yet; fall back to the forge's native tracker.
+        TrackerProvider::Native | TrackerProvider::GhIssues | TrackerProvider::GlIssues => {
+            native_tracker
+        }
+        TrackerProvider::Linear => native_tracker,
+    };
+    (forge, tracker)
 }
 
 /// Orchestrate the forge side of `adroit new`: create the tracker issue, base a

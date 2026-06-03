@@ -211,6 +211,13 @@ pub struct ForgeConfig {
     pub base_branch: String,
     /// Issue tracker (default `native` = the forge's own issues).
     pub tracker: TrackerProvider,
+    /// Project key/id for a **split** tracker (e.g. the Jira project `OPS`).
+    /// Unused when `tracker = native`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracker_project: Option<String>,
+    /// API host for a split tracker (e.g. `your-site.atlassian.net`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracker_host: Option<String>,
     /// API token — env-only, never persisted (`#[serde(skip)]`). Populated at
     /// construction from `ADROIT_*_TOKEN`.
     #[serde(skip)]
@@ -226,6 +233,8 @@ impl Default for ForgeConfig {
             branch_prefix: "adr/".to_string(),
             base_branch: "main".to_string(),
             tracker: TrackerProvider::default(),
+            tracker_project: None,
+            tracker_host: None,
             token: None,
         }
     }
@@ -384,6 +393,11 @@ impl Config {
                 || TrackerProvider::default().to_string(),
                 |f| f.tracker.to_string(),
             ),
+            "forge.tracker_project" => self
+                .forge
+                .as_ref()
+                .and_then(|f| f.tracker_project.clone())?,
+            "forge.tracker_host" => self.forge.as_ref().and_then(|f| f.tracker_host.clone())?,
             _ => return None,
         })
     }
@@ -458,6 +472,16 @@ impl Config {
                     .parse()
                     .map_err(|_| bad("tracker (native|jira|linear|gh_issues|gl_issues)"))?
             }
+            "forge.tracker_project" => {
+                self.forge
+                    .get_or_insert_with(ForgeConfig::default)
+                    .tracker_project = Some(value.to_string())
+            }
+            "forge.tracker_host" => {
+                self.forge
+                    .get_or_insert_with(ForgeConfig::default)
+                    .tracker_host = Some(value.to_string())
+            }
             _ => return Err(format!("unknown config key `{key}`")),
         }
         Ok(())
@@ -486,6 +510,8 @@ pub const CONFIG_KEYS: &[&str] = &[
     "forge.branch_prefix",
     "forge.base_branch",
     "forge.tracker",
+    "forge.tracker_project",
+    "forge.tracker_host",
 ];
 
 /// The environment variable that overrides a config key (for `.env` writes and
