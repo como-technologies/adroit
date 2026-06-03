@@ -140,6 +140,10 @@ fn is_heading(line: &str) -> bool {
     line.trim_start().starts_with('#')
 }
 
+fn is_references_heading(line: &str) -> bool {
+    line.trim().eq_ignore_ascii_case("## References")
+}
+
 /// What the parser extracts from the `## Status` region of a markdown ADR.
 ///
 /// Supersession is captured as the **raw fragment** after the `Superseded by` /
@@ -457,6 +461,90 @@ fn review_insert_point(lines: &[String]) -> Option<usize> {
     Some(if j < lines.len() { j + 1 } else { j })
 }
 
+/// Upsert a `- <label>: <url>` bullet into the ADR's `## References` section,
+/// preserving the rest of the document byte-for-byte. The section is created at
+/// the end of the file if absent. **Idempotent per label**: re-running with the
+/// same label replaces only that line's URL, and a no-change write is
+/// byte-identical — so the forge integration can call it repeatedly.
+pub fn upsert_reference(original: &str, label: &str, url: &str) -> String {
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut lines: Vec<String> = original.split(newline).map(str::to_string).collect();
+    let entry = format!("- {label}: {url}");
+    let label_prefix = format!("- {label}:").to_ascii_lowercase();
+
+    match lines.iter().position(|l| is_references_heading(l)) {
+        Some(h) => {
+            // Section runs from the heading to the next heading (or EOF).
+            let end = lines[h + 1..]
+                .iter()
+                .position(|l| is_heading(l))
+                .map_or(lines.len(), |rel| h + 1 + rel);
+            let existing = lines[h + 1..end]
+                .iter()
+                .position(|l| {
+                    l.trim_start()
+                        .to_ascii_lowercase()
+                        .starts_with(&label_prefix)
+                })
+                .map(|rel| h + 1 + rel);
+            match existing {
+                Some(idx) => lines[idx] = entry,
+                None => {
+                    // Append after the section's last non-blank line.
+                    let mut at = end;
+                    while at > h + 1 && lines[at - 1].trim().is_empty() {
+                        at -= 1;
+                    }
+                    lines.insert(at, entry);
+                }
+            }
+        }
+        None => {
+            while lines.last().is_some_and(|l| l.trim().is_empty()) {
+                lines.pop();
+            }
+            lines.push(String::new());
+            lines.push("## References".to_string());
+            lines.push(String::new());
+            lines.push(entry);
+        }
+    }
+
+    let mut out = lines.join(newline);
+    if original.ends_with('\n') && !out.ends_with('\n') {
+        out.push_str(newline);
+    }
+    out
+}
+
+/// Parse the `- label: url` bullets from an ADR's `## References` section, in
+/// order. The forge integration writes these (issue / pull request URLs) and
+/// reads them back on `set-status` / `supersede`.
+pub fn parse_references(original: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for line in original.lines() {
+        if is_references_heading(line) {
+            in_section = true;
+            continue;
+        }
+        if in_section && is_heading(line) {
+            break;
+        }
+        if in_section
+            && let Some(rest) = line.trim().strip_prefix("- ")
+            && let Some((label, url)) = rest.split_once(':')
+        {
+            out.push((label.trim().to_string(), url.trim().to_string()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,6 +744,32 @@ We need a consistent way to capture architectural decisions.\n";
         assert!(region.supersedes.is_none());
         assert!(region.superseded_by.is_none());
         assert!(region.review_by.is_none());
+    }
+
+    #[test]
+    fn upsert_reference_creates_section_then_upserts_idempotently() {
+        let base = "# ADR-0001: X\n\n## Status\n\nProposed\n";
+        // First write creates the section.
+        let a = upsert_reference(base, "Issue", "https://x/issues/7");
+        assert!(a.contains("## References"));
+        assert!(a.contains("- Issue: https://x/issues/7"));
+        assert!(a.ends_with('\n'));
+        // Re-writing the same label+url is byte-identical (idempotent).
+        assert_eq!(upsert_reference(&a, "Issue", "https://x/issues/7"), a);
+        // A second label appends a bullet, not a second section.
+        let b = upsert_reference(&a, "Pull Request", "https://x/pull/42");
+        assert_eq!(b.matches("## References").count(), 1);
+        assert!(b.contains("- Issue: https://x/issues/7"));
+        assert!(b.contains("- Pull Request: https://x/pull/42"));
+        // Re-using an existing label replaces only its URL.
+        let c = upsert_reference(&b, "Issue", "https://x/issues/9");
+        assert!(c.contains("- Issue: https://x/issues/9"));
+        assert!(!c.contains("issues/7"));
+        assert_eq!(parse_references(&c).len(), 2);
+        assert_eq!(
+            parse_references(&c)[0],
+            ("Issue".to_string(), "https://x/issues/9".to_string())
+        );
     }
 
     #[test]

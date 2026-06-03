@@ -18,6 +18,7 @@ use serde::Serialize;
 
 use crate::config::{Config, ForgeConfig, Provider};
 
+pub mod github;
 pub mod noop;
 
 // ---------------------------------------------------------------------------
@@ -221,34 +222,141 @@ fn read_response(resp: ureq::Response) -> HttpResponse {
 /// GitHub/GitLab arms land in Phase 1/1b; for now an enabled provider with a
 /// token returns `(None, None)` as well (no adapter wired yet).
 pub fn open(cfg: &ForgeConfig) -> Adapters {
+    // Thin dispatcher: each provider module owns its own construction (token env
+    // var, slug/host requirements). Adding a provider is one arm + one module.
     match cfg.provider {
         Provider::None => (None, None),
-        // TODO(phase 1 / 1b): construct the GitHub / GitLab adapter here from
-        // `cfg` + the env token; until then, enabling a provider is a no-op.
-        Provider::Github | Provider::Gitlab => (None, None),
+        Provider::Github => github::open(cfg),
+        // Phase 1b: gitlab::open(cfg)
+        Provider::Gitlab => (None, None),
     }
 }
 
-/// Orchestrate the forge side of `adroit new` (issue + draft PR + `## References`).
+/// Orchestrate the forge side of `adroit new`: create the tracker issue, base a
+/// draft PR on an `adr/NNNN-…` branch, and record both URLs in the ADR's
+/// `## References`. `dry_run` previews the plan and touches nothing.
 ///
-/// **Phase 0 stub:** the adapters aren't wired yet ([`open`] returns `(None, None)`),
-/// so this reports that an enabled provider is a no-op and leaves the local ADR
-/// untouched. Phase 1 replaces this body with the real GitHub orchestration.
+/// Graceful by design: a network/offline or git failure warns and returns `Ok`
+/// (the ADR is already written locally — the durable record); only an auth/API
+/// error surfaces. Every write is idempotent, so re-running converges.
 pub fn after_new(
     cfg: &Config,
-    _path: &std::path::Path,
-    _dry_run: bool,
-    _yes: bool,
+    path: &std::path::Path,
+    title: &str,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(());
     };
     let (forge, tracker) = open(fcfg);
-    if forge.is_none() || tracker.is_none() {
+    let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
-            "adroit: forge provider `{}` isn't wired up yet — wrote the ADR locally only",
+            "adroit: --with-forge: the `{}` integration is inactive — set the repo \
+             (`forge.repo`) and an auth token (e.g. ADROIT_GITHUB_TOKEN). Wrote the ADR \
+             locally only.",
             fcfg.provider
         );
+        return Ok(());
+    };
+    run_new(forge.as_ref(), tracker.as_ref(), path, title, fcfg, dry_run)
+}
+
+/// The provider-agnostic orchestration (testable with mock/noop adapters and a
+/// scratch git repo). Separated from [`after_new`] so tests don't need real
+/// config/env to construct an adapter.
+fn run_new(
+    forge: &dyn Forge,
+    tracker: &dyn Tracker,
+    path: &std::path::Path,
+    title: &str,
+    fcfg: &ForgeConfig,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("adr");
+    let branch = format!("{}{stem}", fcfg.branch_prefix);
+    let file = path.file_name().and_then(|s| s.to_str()).unwrap_or(stem);
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+    if dry_run {
+        println!("Forge plan ({}):", forge.describe());
+        println!("  - create issue: {title:?}");
+        println!(
+            "  - branch {branch} off {} + commit {file} + push",
+            fcfg.base_branch
+        );
+        println!("  - open draft PR (Closes the issue)");
+        println!("  - write issue + PR URLs into ## References");
+        println!("\nDry run - re-run without --dry-run to apply.");
+        return Ok(());
+    }
+
+    // 1. Tracker issue. Offline -> keep local; auth/API -> surface.
+    let issue_body =
+        format!("Tracking issue for ADR \u{201c}{title}\u{201d} (`{file}`), managed by adroit.");
+    let issue = match tracker.create_issue(title, &issue_body) {
+        Ok(i) => i,
+        Err(e) if e.is_offline() => {
+            eprintln!("adroit: forge unreachable ({e}); wrote the ADR locally only.");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // 2. Record the issue URL first (durable even if the push later fails).
+    upsert_ref(path, "Issue", &issue.url)?;
+
+    // 3. Branch + commit + push. Any git failure -> warn, keep the issue link.
+    let commit_msg = format!("ADR: {title}");
+    if let Err(e) = (|| -> Result<(), crate::git::GitError> {
+        crate::git::create_branch(dir, &branch)?;
+        crate::git::add(dir, path)?;
+        crate::git::commit(dir, &commit_msg)?;
+        crate::git::push(dir, "origin", &branch)
+    })() {
+        eprintln!(
+            "adroit: git step failed ({e}); created issue {} but skipped the PR.",
+            issue.url
+        );
+        return Ok(());
+    }
+
+    // 4. Draft PR linking the issue.
+    let pr = match forge.open_pr(&PrDraft {
+        branch: branch.clone(),
+        base: fcfg.base_branch.clone(),
+        title: format!("ADR: {title}"),
+        body: format!("ADR: {title}\n\nCloses #{}.", issue.id),
+    }) {
+        Ok(p) => p,
+        Err(e) if e.is_offline() => {
+            eprintln!(
+                "adroit: forge unreachable opening PR ({e}); branch {branch} pushed, issue {} created.",
+                issue.url
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // 5. Record the PR URL and commit+push it too (idempotent upsert).
+    upsert_ref(path, "Pull Request", &pr.url)?;
+    let _ = (|| -> Result<(), crate::git::GitError> {
+        crate::git::add(dir, path)?;
+        crate::git::commit(dir, &format!("ADR: link PR for {title}"))?;
+        crate::git::push(dir, "origin", &branch)
+    })();
+
+    println!("Forge: issue {} - PR {}", issue.url, pr.url);
+    Ok(())
+}
+
+/// Read `path`, upsert a `## References` bullet, write it back (no-op if
+/// unchanged).
+fn upsert_ref(path: &std::path::Path, label: &str, url: &str) -> anyhow::Result<()> {
+    let original = std::fs::read_to_string(path)?;
+    let updated = crate::format::upsert_reference(&original, label, url);
+    if updated != original {
+        std::fs::write(path, updated)?;
     }
     Ok(())
 }
@@ -280,5 +388,63 @@ mod tests {
             .unwrap();
         assert_eq!(pr.branch, "adr/0001-x");
         assert!(!f.pr_state("1").unwrap().merged);
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+    }
+
+    #[test]
+    fn run_new_records_issue_reference_and_survives_a_remoteless_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q"]);
+        git(dir, &["config", "user.email", "t@example.com"]);
+        git(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("seed"), "x").unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "seed"]);
+
+        let adr = dir.join("0001-x.md");
+        std::fs::write(&adr, "# ADR-0001: X\n\n## Status\n\nProposed\n").unwrap();
+
+        // No `origin` remote → the push fails → graceful Ok; the issue link is
+        // still recorded (durable-record-first ordering).
+        run_new(
+            &noop::NoopForge,
+            &noop::NoopTracker,
+            &adr,
+            "X",
+            &ForgeConfig::default(),
+            false,
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(&adr).unwrap();
+        assert!(body.contains("## References"), "got:\n{body}");
+        assert!(body.contains("- Issue: (dry-run)"), "got:\n{body}");
+    }
+
+    #[test]
+    fn run_new_dry_run_touches_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let adr = tmp.path().join("0001-x.md");
+        let original = "# ADR-0001: X\n\n## Status\n\nProposed\n";
+        std::fs::write(&adr, original).unwrap();
+        run_new(
+            &noop::NoopForge,
+            &noop::NoopTracker,
+            &adr,
+            "X",
+            &ForgeConfig::default(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&adr).unwrap(), original);
     }
 }

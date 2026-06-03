@@ -136,6 +136,13 @@ pub enum Command {
         /// layout; rejected by the others).
         #[arg(short, long)]
         category: Option<String>,
+        /// Also create the linked tracker issue + a draft PR and record their
+        /// URLs in `## References` (opt-in; requires a configured `forge`).
+        #[arg(long)]
+        with_forge: bool,
+        /// With `--with-forge`, preview the forge actions without performing them.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List existing ADRs.
     List {

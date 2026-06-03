@@ -1757,3 +1757,72 @@ fn uuid_scheme_new_and_show_by_prefix() {
         .success()
         .stdout(predicate::str::contains("Adopt PostgreSQL"));
 }
+
+// ---------------------------------------------------------------------------
+// Forge integration (issue #4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_without_forge_has_no_references_section() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Plain ADR", "--no-edit"])
+        .assert()
+        .success();
+    let body = fs::read_to_string(dir.path().join("proposed/0001-plain-adr.md")).unwrap();
+    assert!(
+        !body.contains("## References"),
+        "bare `new` must not touch forge"
+    );
+}
+
+#[cfg(not(feature = "forge"))]
+#[test]
+fn new_with_forge_warns_when_feature_absent() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit", "--with-forge"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("lacks the `forge` feature"));
+}
+
+#[cfg(feature = "forge")]
+#[test]
+fn new_with_forge_dry_run_previews_plan_without_network() {
+    // Point config at a temp XDG dir with a github forge block + a fake token,
+    // so the adapter constructs but --dry-run returns before any HTTP/git.
+    let home = TempDir::new().unwrap();
+    let cfgdir = home.path().join("adroit");
+    fs::create_dir_all(&cfgdir).unwrap();
+    fs::write(
+        cfgdir.join("config.yaml"),
+        "forge:\n  provider: github\n  repo: owner/repo\n",
+    )
+    .unwrap();
+
+    let dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("adroit").unwrap();
+    cmd.env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("ADROIT_GITHUB_TOKEN", "fake-token")
+        .arg("--dir")
+        .arg(dir.path())
+        .args([
+            "new",
+            "Adopt Postgres",
+            "--no-edit",
+            "--with-forge",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Forge plan"))
+        .stdout(predicate::str::contains("create issue"));
+
+    // Dry run touched nothing beyond the ADR file itself.
+    let body = fs::read_to_string(dir.path().join("proposed/0001-adopt-postgres.md")).unwrap();
+    assert!(!body.contains("## References"));
+}

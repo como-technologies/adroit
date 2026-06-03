@@ -27,17 +27,17 @@ pub struct ForgeFlags {
 /// PR and record their URLs in `## References`. A no-op unless `--with-forge`
 /// is set *and* the binary was built with the `forge` feature.
 #[cfg(feature = "forge")]
-pub fn after_new(cfg: &Config, path: &Path, flags: ForgeFlags) -> Result<()> {
+pub fn after_new(cfg: &Config, path: &Path, title: &str, flags: ForgeFlags) -> Result<()> {
     if !flags.enabled {
         return Ok(());
     }
-    crate::forge::after_new(cfg, path, flags.dry_run, flags.yes)
+    crate::forge::after_new(cfg, path, title, flags.dry_run)
 }
 
 /// No-op stub when built without the `forge` feature — warns if the user asked
 /// for forge so the silence isn't mysterious.
 #[cfg(not(feature = "forge"))]
-pub fn after_new(_cfg: &Config, _path: &Path, flags: ForgeFlags) -> Result<()> {
+pub fn after_new(_cfg: &Config, _path: &Path, _title: &str, flags: ForgeFlags) -> Result<()> {
     if flags.enabled {
         eprintln!(
             "adroit: --with-forge ignored — this build lacks the `forge` feature \

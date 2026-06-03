@@ -133,6 +133,8 @@ fn main() -> Result<()> {
             template,
             no_edit,
             category,
+            with_forge,
+            dry_run,
         }) => {
             let path = cmd_new(
                 &store,
@@ -142,6 +144,19 @@ fn main() -> Result<()> {
                 category.as_deref(),
             )?;
             println!("Created {}", path.display());
+            // Opt-in forge hook (issue + draft PR + ## References). No-op unless
+            // --with-forge and the `forge` feature is built in. Runs before the
+            // editor so the populated References are visible.
+            adroit::forge_hook::after_new(
+                &cfg,
+                &path,
+                &title,
+                adroit::forge_hook::ForgeFlags {
+                    enabled: with_forge,
+                    dry_run,
+                    yes: false,
+                },
+            )?;
             if cfg.open_on_new && !no_edit {
                 open_in_editor(editor, &path)?;
             }
