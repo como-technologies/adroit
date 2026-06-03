@@ -1781,7 +1781,7 @@ fn new_without_forge_has_no_references_section() {
 fn new_with_forge_warns_when_feature_absent() {
     let dir = TempDir::new().unwrap();
     adroit(&dir)
-        .args(["new", "X", "--no-edit", "--with-forge"])
+        .args(["new", "X", "--no-edit", "--forge"])
         .assert()
         .success()
         .stderr(predicate::str::contains("lacks the `forge` feature"));
@@ -1810,13 +1810,7 @@ fn new_with_forge_dry_run_previews_plan_without_network() {
         .env("ADROIT_GITHUB_TOKEN", "fake-token")
         .arg("--dir")
         .arg(dir.path())
-        .args([
-            "new",
-            "Adopt Postgres",
-            "--no-edit",
-            "--with-forge",
-            "--dry-run",
-        ])
+        .args(["new", "Adopt Postgres", "--no-edit", "--forge", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Forge plan"))

@@ -266,7 +266,7 @@ pub fn after_new(
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
-            "adroit: --with-forge: the `{}` integration is inactive — set the repo \
+            "adroit: --forge: the `{}` integration is inactive — set the repo \
              (`forge.repo`) and an auth token (e.g. ADROIT_GITHUB_TOKEN). Wrote the ADR \
              locally only.",
             fcfg.provider
@@ -451,7 +451,7 @@ pub fn before_status_change(
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
-            "adroit: --with-forge: `{}` integration inactive (set forge.repo + a token); \
+            "adroit: --forge: `{}` integration inactive (set forge.repo + a token); \
              doing the local status change only.",
             fcfg.provider
         );
@@ -627,7 +627,7 @@ pub fn on_supersede(
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
-            "adroit: --with-forge: `{}` integration inactive; doing the local supersede only.",
+            "adroit: --forge: `{}` integration inactive; doing the local supersede only.",
             fcfg.provider
         );
         return Ok(true);
@@ -674,7 +674,7 @@ pub fn comment(
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
-            "adroit: --with-forge: `{}` integration inactive; skipping the {label} comment.",
+            "adroit: --forge: `{}` integration inactive; skipping the {label} comment.",
             fcfg.provider
         );
         return Ok(());
@@ -710,7 +710,7 @@ pub fn comment(
 
 /// Refresh an ADR's linked PR **description** to the current ADR content (an
 /// adroit-managed, marked body). Backs `adroit sync` (MR-description sync) and
-/// `relink --with-forge` (re-point the PR after a status move). Opt-in,
+/// `relink --forge` (re-point the PR after a status move). Opt-in,
 /// dry-run/--yes gated, graceful-offline. Returns `Ok(true)` to proceed.
 pub fn sync_pr(
     cfg: &Config,
@@ -724,7 +724,7 @@ pub fn sync_pr(
     let (forge, _tracker) = open(fcfg);
     let Some(forge) = forge else {
         eprintln!(
-            "adroit: --with-forge: `{}` integration inactive; skipping PR sync.",
+            "adroit: --forge: `{}` integration inactive; skipping PR sync.",
             fcfg.provider
         );
         return Ok(true);
@@ -763,7 +763,10 @@ pub fn sync_pr(
 /// POST `text` to a Slack/Teams-compatible incoming webhook (the `{ "text": … }`
 /// shape both accept). Best-effort: a non-2xx or offline webhook warns and
 /// returns `Ok` (a notification failure shouldn't fail the command).
-pub fn notify(webhook: &str, text: &str) -> anyhow::Result<()> {
+/// POST the message to `webhook`. Returns `true` only on a 2xx — a non-2xx or
+/// an unreachable host warns and returns `false` (graceful, but the caller must
+/// not then claim it was delivered).
+pub fn notify(webhook: &str, text: &str) -> anyhow::Result<bool> {
     let body = serde_json::to_vec(&serde_json::json!({ "text": text })).expect("serialize");
     match UreqTransport.request(
         "POST",
@@ -771,14 +774,14 @@ pub fn notify(webhook: &str, text: &str) -> anyhow::Result<()> {
         &[("Content-Type", "application/json")],
         Some(&body),
     ) {
-        Ok(resp) if (200..300).contains(&resp.status) => Ok(()),
+        Ok(resp) if (200..300).contains(&resp.status) => Ok(true),
         Ok(resp) => {
             eprintln!("adroit: notify webhook returned HTTP {}", resp.status);
-            Ok(())
+            Ok(false)
         }
         Err(e) => {
             eprintln!("adroit: notify webhook unreachable ({e})");
-            Ok(())
+            Ok(false)
         }
     }
 }
@@ -1164,7 +1167,7 @@ mod tests {
 
     #[test]
     fn accept_dry_run_preview_is_credential_free() {
-        // `set-status accepted --with-forge --dry-run` (dry_run=true, no --yes):
+        // `set-status accepted --forge --dry-run` (dry_run=true, no --yes):
         // a bad/missing token must NOT abort the preview — it prints the plan
         // without live approval/CI status and stops before any local move.
         let proceed = run_status_change(

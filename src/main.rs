@@ -142,7 +142,7 @@ fn main() -> Result<()> {
             template,
             no_edit,
             category,
-            with_forge,
+            forge,
             dry_run,
         }) => {
             let path = cmd_new(
@@ -154,14 +154,14 @@ fn main() -> Result<()> {
             )?;
             println!("Created {}", path.display());
             // Opt-in forge hook (issue + draft PR + ## References). No-op unless
-            // --with-forge and the `forge` feature is built in. Runs before the
+            // --forge and the `forge` feature is built in. Runs before the
             // editor so the populated References are visible.
             adroit::forge_hook::after_new(
                 &cfg,
                 &path,
                 &title,
                 adroit::forge_hook::ForgeFlags {
-                    enabled: with_forge,
+                    enabled: forge,
                     dry_run,
                     yes: false,
                 },
@@ -176,7 +176,7 @@ fn main() -> Result<()> {
         Some(Command::SetStatus {
             id,
             status,
-            with_forge,
+            forge,
             dry_run,
             yes,
         }) => cmd_set_status(
@@ -185,7 +185,7 @@ fn main() -> Result<()> {
             &id,
             &status,
             adroit::forge_hook::ForgeFlags {
-                enabled: with_forge,
+                enabled: forge,
                 dry_run,
                 yes,
             },
@@ -193,7 +193,7 @@ fn main() -> Result<()> {
         Some(Command::Supersede {
             new,
             old,
-            with_forge,
+            forge,
             dry_run,
             yes,
         }) => {
@@ -203,7 +203,7 @@ fn main() -> Result<()> {
                 &resolve_ref(&cfg, &new)?,
                 &resolve_ref(&cfg, &old)?,
                 adroit::forge_hook::ForgeFlags {
-                    enabled: with_forge,
+                    enabled: forge,
                     dry_run,
                     yes,
                 },
@@ -213,7 +213,7 @@ fn main() -> Result<()> {
             id,
             date,
             clear,
-            with_forge,
+            forge,
             dry_run,
             yes,
         }) => {
@@ -224,7 +224,7 @@ fn main() -> Result<()> {
                 date.as_deref(),
                 clear,
                 adroit::forge_hook::ForgeFlags {
-                    enabled: with_forge,
+                    enabled: forge,
                     dry_run,
                     yes,
                 },
@@ -243,14 +243,14 @@ fn main() -> Result<()> {
         Some(Command::Check { forge }) => cmd_check(&store, &cfg, forge)?,
         Some(Command::Relink {
             dry_run,
-            with_forge,
+            forge,
             yes,
         }) => cmd_relink(
             &store,
             &cfg,
             dry_run,
             adroit::forge_hook::ForgeFlags {
-                enabled: with_forge,
+                enabled: forge,
                 dry_run,
                 yes,
             },
@@ -274,7 +274,7 @@ fn main() -> Result<()> {
             days,
             quorum,
             output,
-            with_forge,
+            forge,
             dry_run,
             yes,
         }) => {
@@ -287,7 +287,7 @@ fn main() -> Result<()> {
                 quorum,
                 output.as_deref(),
                 adroit::forge_hook::ForgeFlags {
-                    enabled: with_forge,
+                    enabled: forge,
                     dry_run,
                     yes,
                 },
@@ -1147,8 +1147,9 @@ fn cmd_notify(store: &Store, cfg: &Config, id: &str, dry_run: bool) -> Result<()
     let detail = query::detail_at(store, &path)?;
     let s = &detail.summary;
     let text = format!("*{}: {}* — {}", s.reference, s.title, s.status);
-    adroit::forge_hook::notify(&webhook, &text, dry_run)?;
-    if !dry_run {
+    // Print success only when it was actually posted — not on a dry run, a
+    // failed/unreachable webhook, or a build without the `forge` feature.
+    if adroit::forge_hook::notify(&webhook, &text, dry_run)? {
         println!("Notified ({})", s.reference);
     }
     Ok(())

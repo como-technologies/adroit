@@ -456,7 +456,7 @@ editor: vim
 | `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Opt-in forge integration (requires the `forge` feature build). `github` drives GitHub PRs + Issues. |
 | `forge.repo` | `owner/repo` | — | The provider slug (GitHub `owner/repo`). Required when a provider is set. |
 | `forge.host` | host | provider default | API host for self-managed / enterprise. GitLab self-hosted: the host (`gitlab.example.com`); GitHub Enterprise: the host incl. base path (`ghe.example.com/api/v3`). Same token auth as the cloud version. |
-| `forge.branch_prefix` | string | `adr/` | Branch prefix `new --with-forge` generates (`adr/0021-…`). |
+| `forge.branch_prefix` | string | `adr/` | Branch prefix `new --forge` generates (`adr/0021-…`). |
 | `forge.base_branch` | string | `main` | Base branch PRs target. |
 | `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. `jira` pairs a GitHub/GitLab forge with Jira. |
 | `forge.tracker_project` | string | — | Split-tracker project key (e.g. the Jira project `OPS`). |
@@ -471,7 +471,7 @@ Jira **Server/Data Center** and supply a Personal Access Token as
 `ADROIT_JIRA_TOKEN` (Bearer). GitHub/GitLab use the same token whether cloud or
 self-hosted — only `forge.host` changes. The integration is opt-in per command:
 
-- `new` / `set-status` / `supersede` / `review` / `set-review` take `--with-forge`
+- `new` / `set-status` / `supersede` / `review` / `set-review` take `--forge`
   (+ `--dry-run` to preview, `--yes` to apply a mutation like a PR merge).
 - `check --forge` and `list --forge` add read-only forge awareness (drift checks
   / live PR state).

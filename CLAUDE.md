@@ -353,7 +353,7 @@ construction (token env var, slug/host). Adding a provider = one match arm + one
 module. HTTP is behind the `HttpTransport` seam so adapters are tested with a
 `FakeTransport` (no network).
 
-**Verbs wired** (all opt-in via `--with-forge`, with migrate-style `--dry-run`/
+**Verbs wired** (all opt-in via `--forge`, with migrate-style `--dry-run`/
 `--yes`; graceful-offline = warn + keep the local write; the ADR is the durable
 record): `new` creates the issue + a draft PR off an `adr/NNNN-…` branch
 (`src/git.rs` does branch/commit/push) and records both URLs in a
@@ -365,7 +365,7 @@ format-preserving `## References` section (`format::upsert_reference`);
 split into a testable core (`run_new`/`run_status_change`/`comment`) exercised
 with mock/noop adapters. Read-side: `check --forge` appends
 `ProblemKind::ForgeIntegration` drift warnings; `list --forge` enriches rows
-(`forge::enrich` → `AdrSummary.forge_data`); `review`/`set-review --with-forge`
+(`forge::enrich` → `AdrSummary.forge_data`); `review`/`set-review --forge`
 post a comment (kickoff / deadline) via the shared `forge::comment`.
 
 **Providers.** `github` + `gitlab` (each a same-system Forge+Tracker via

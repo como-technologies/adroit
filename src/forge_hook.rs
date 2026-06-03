@@ -16,7 +16,7 @@ use crate::config::Config;
 /// dry-run/apply UX).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ForgeFlags {
-    /// `--with-forge` was passed (opt-in; the hook is otherwise a no-op).
+    /// `--forge` was passed (opt-in; the hook is otherwise a no-op).
     pub enabled: bool,
     /// `--dry-run`: print the plan, touch nothing remote or on disk.
     pub dry_run: bool,
@@ -25,7 +25,7 @@ pub struct ForgeFlags {
 }
 
 /// Fired after `adroit new` writes the ADR: create the tracker issue + draft
-/// PR and record their URLs in `## References`. A no-op unless `--with-forge`
+/// PR and record their URLs in `## References`. A no-op unless `--forge`
 /// is set *and* the binary was built with the `forge` feature.
 #[cfg(feature = "forge")]
 pub fn after_new(cfg: &Config, path: &Path, title: &str, flags: ForgeFlags) -> Result<()> {
@@ -219,32 +219,37 @@ pub fn sync_pr(cfg: &Config, path: &Path, flags: ForgeFlags) -> Result<bool> {
 #[cfg(not(feature = "forge"))]
 pub fn sync_pr(_cfg: &Config, _path: &Path, flags: ForgeFlags) -> Result<bool> {
     if flags.enabled {
-        warn_no_feature();
+        eprintln!(
+            "adroit: refreshing a PR description needs the `forge` feature \
+             (rebuild with `--features forge`)"
+        );
     }
     Ok(true)
 }
 
 /// Post a chat notification to `webhook`. `dry_run` prints the message instead.
+/// Returns `true` only when the message was actually delivered (so the caller
+/// doesn't claim success on a dry run, a failed webhook, or a no-forge build).
 #[cfg(feature = "forge")]
-pub fn notify(webhook: &str, text: &str, dry_run: bool) -> Result<()> {
+pub fn notify(webhook: &str, text: &str, dry_run: bool) -> Result<bool> {
     if dry_run {
         println!("Would post to webhook:\n{text}");
-        return Ok(());
+        return Ok(false);
     }
     crate::forge::notify(webhook, text)
 }
 
 #[cfg(not(feature = "forge"))]
-pub fn notify(_webhook: &str, _text: &str, _dry_run: bool) -> Result<()> {
+pub fn notify(_webhook: &str, _text: &str, _dry_run: bool) -> Result<bool> {
     eprintln!("adroit: `notify` needs the `forge` feature (rebuild with `--features forge`)");
-    Ok(())
+    Ok(false)
 }
 
-/// Shared "you asked for --with-forge but this build lacks it" notice.
+/// Shared "you asked for --forge but this build lacks it" notice.
 #[cfg(not(feature = "forge"))]
 fn warn_no_feature() {
     eprintln!(
-        "adroit: --with-forge ignored — this build lacks the `forge` feature \
+        "adroit: --forge ignored — this build lacks the `forge` feature \
          (rebuild with `--features forge`)"
     );
 }

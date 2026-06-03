@@ -40,13 +40,15 @@ Repo health:
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
+
+Publishing:
   index         Regenerate the ADR section of SUMMARY.md
+  publish       Export the accepted ADR set to a directory
 
 Forge integration:
   init          Detect the forge from the git remote and configure it
   auth          Store a forge token in the local credential store
   sync          Refresh a linked PR/MR description from the ADR
-  publish       Export the accepted ADR set to a directory
   notify        Post an ADR's state to a chat webhook
 
 Configuration:
@@ -186,8 +188,8 @@ pub enum Command {
         /// Also create the linked tracker issue + a draft PR and record their
         /// URLs in `## References` (opt-in; requires a configured `forge`).
         #[arg(long)]
-        with_forge: bool,
-        /// With `--with-forge`, preview the forge actions without performing them.
+        forge: bool,
+        /// With `--forge`, preview the forge actions without performing them.
         #[arg(long)]
         dry_run: bool,
     },
@@ -223,11 +225,11 @@ pub enum Command {
         /// PR + close the issue; on `rejected`/`deprecated` close them. Opt-in;
         /// requires a configured `forge`.
         #[arg(long)]
-        with_forge: bool,
-        /// With `--with-forge`, preview the forge actions and make no changes.
+        forge: bool,
+        /// With `--forge`, preview the forge actions and make no changes.
         #[arg(long)]
         dry_run: bool,
-        /// With `--with-forge`, apply (e.g. merge the PR). Without it, preview.
+        /// With `--forge`, apply (e.g. merge the PR). Without it, preview.
         #[arg(long)]
         yes: bool,
     },
@@ -239,11 +241,11 @@ pub enum Command {
         old: String,
         /// Also comment on + close the superseded ADR's forge issue/PR. Opt-in.
         #[arg(long)]
-        with_forge: bool,
-        /// With `--with-forge`, preview the forge actions and make no changes.
+        forge: bool,
+        /// With `--forge`, preview the forge actions and make no changes.
         #[arg(long)]
         dry_run: bool,
-        /// With `--with-forge`, apply. Without it, preview.
+        /// With `--forge`, apply. Without it, preview.
         #[arg(long)]
         yes: bool,
     },
@@ -284,11 +286,11 @@ pub enum Command {
         clear: bool,
         /// Also mirror the deadline as a comment on the ADR's linked issue/PR.
         #[arg(long)]
-        with_forge: bool,
-        /// With `--with-forge`, preview the comment without posting.
+        forge: bool,
+        /// With `--forge`, preview the comment without posting.
         #[arg(long)]
         dry_run: bool,
-        /// With `--with-forge`, post the comment (without it, preview).
+        /// With `--forge`, post the comment (without it, preview).
         #[arg(long)]
         yes: bool,
     },
@@ -320,8 +322,8 @@ pub enum Command {
         /// Also refresh each linked PR's description to the current ADR (patches
         /// forge-side links after status moves). Requires a configured `forge`.
         #[arg(long)]
-        with_forge: bool,
-        /// With `--with-forge`, apply the PR updates (without it, preview).
+        forge: bool,
+        /// With `--forge`, apply the PR updates (without it, preview).
         #[arg(long)]
         yes: bool,
     },
@@ -442,11 +444,11 @@ pub enum Command {
         output: Option<PathBuf>,
         /// Also post the kickoff as a comment on the ADR's linked issue/PR.
         #[arg(long)]
-        with_forge: bool,
-        /// With `--with-forge`, preview the comment without posting.
+        forge: bool,
+        /// With `--forge`, preview the comment without posting.
         #[arg(long)]
         dry_run: bool,
-        /// With `--with-forge`, post the comment (without it, preview).
+        /// With `--forge`, post the comment (without it, preview).
         #[arg(long)]
         yes: bool,
     },
