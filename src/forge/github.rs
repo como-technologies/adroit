@@ -272,6 +272,15 @@ impl Forge for Github {
         .map(drop)
     }
 
+    fn set_pr_body(&self, pr: &str, body: &str) -> Result<(), ForgeError> {
+        self.call(
+            "PATCH",
+            &format!("repos/{}/pulls/{pr}", self.repo),
+            Some(json!({ "body": body })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("github:{}", self.repo)
     }

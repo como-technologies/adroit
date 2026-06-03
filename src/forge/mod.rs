@@ -134,6 +134,8 @@ pub trait Forge {
     fn close_pr(&self, pr: &str) -> Result<(), ForgeError>;
     /// Post a comment on a PR.
     fn comment_pr(&self, pr: &str, body: &str) -> Result<(), ForgeError>;
+    /// Replace a PR's description/body (MR-description sync, relink URL patch).
+    fn set_pr_body(&self, pr: &str, body: &str) -> Result<(), ForgeError>;
     /// Short label for diagnostics (e.g. `github:owner/repo`).
     fn describe(&self) -> String;
 }
@@ -667,6 +669,58 @@ pub fn comment(
     Ok(())
 }
 
+/// Refresh an ADR's linked PR **description** to the current ADR content (an
+/// adroit-managed, marked body). Backs `adroit sync` (MR-description sync) and
+/// `relink --with-forge` (re-point the PR after a status move). Opt-in,
+/// dry-run/--yes gated, graceful-offline. Returns `Ok(true)` to proceed.
+pub fn sync_pr(
+    cfg: &Config,
+    path: &std::path::Path,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<bool> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(true);
+    };
+    let (forge, _tracker) = open(fcfg);
+    let Some(forge) = forge else {
+        eprintln!(
+            "adroit: --with-forge: `{}` integration inactive; skipping PR sync.",
+            fcfg.provider
+        );
+        return Ok(true);
+    };
+    let refs = read_refs(path);
+    let Some((pr, pr_url)) = refs.pr else {
+        return Ok(true); // no PR linked → nothing to sync
+    };
+    let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("adr");
+    let apply = yes && !dry_run;
+    if !apply {
+        println!("Forge plan (sync): refresh PR {pr_url} description from `{file}`");
+        println!("\nPreview — re-run with --yes to apply.");
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(path)?;
+    let closes = refs
+        .issue
+        .as_ref()
+        .map(|(id, _)| format!("Closes #{id}\n\n"))
+        .unwrap_or_default();
+    let body = format!("{closes}<!-- adroit:adr={file} -->\n{content}");
+    match forge.set_pr_body(&pr, &body) {
+        Ok(()) => {
+            println!("Forge: synced PR {pr_url}");
+            Ok(true)
+        }
+        Err(e) if e.is_offline() => {
+            eprintln!("adroit: forge unreachable ({e}); PR left unchanged.");
+            Ok(true)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// POST `text` to a Slack/Teams-compatible incoming webhook (the `{ "text": … }`
 /// shape both accept). Best-effort: a non-2xx or offline webhook warns and
 /// returns `Ok` (a notification failure shouldn't fail the command).
@@ -946,6 +1000,9 @@ mod tests {
             Ok(())
         }
         fn comment_pr(&self, _: &str, _: &str) -> Result<(), ForgeError> {
+            Ok(())
+        }
+        fn set_pr_body(&self, _: &str, _: &str) -> Result<(), ForgeError> {
             Ok(())
         }
         fn describe(&self) -> String {

@@ -182,6 +182,23 @@ pub fn comment(
     Ok(())
 }
 
+/// Refresh an ADR's linked PR description from its content (sync / relink-patch).
+#[cfg(feature = "forge")]
+pub fn sync_pr(cfg: &Config, path: &Path, flags: ForgeFlags) -> Result<bool> {
+    if !flags.enabled {
+        return Ok(true);
+    }
+    crate::forge::sync_pr(cfg, path, flags.dry_run, flags.yes)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn sync_pr(_cfg: &Config, _path: &Path, flags: ForgeFlags) -> Result<bool> {
+    if flags.enabled {
+        warn_no_feature();
+    }
+    Ok(true)
+}
+
 /// Post a chat notification to `webhook`. `dry_run` prints the message instead.
 #[cfg(feature = "forge")]
 pub fn notify(webhook: &str, text: &str, dry_run: bool) -> Result<()> {

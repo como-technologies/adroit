@@ -232,7 +232,21 @@ fn main() -> Result<()> {
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
         Some(Command::Check { forge }) => cmd_check(&store, &cfg, forge)?,
-        Some(Command::Relink { dry_run }) => cmd_relink(&store, dry_run)?,
+        Some(Command::Relink {
+            dry_run,
+            with_forge,
+            yes,
+        }) => cmd_relink(
+            &store,
+            &cfg,
+            dry_run,
+            adroit::forge_hook::ForgeFlags {
+                enabled: with_forge,
+                dry_run,
+                yes,
+            },
+        )?,
+        Some(Command::Sync { id, dry_run, yes }) => cmd_sync(&store, &cfg, &id, dry_run, yes)?,
         Some(Command::Renumber { old, new, file }) => {
             require_numeric_scheme(&cfg, "renumber")?;
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
@@ -915,8 +929,20 @@ fn cmd_renumber(
 /// `adroit relink`: rewrite cross-ADR relative links to each ADR's current
 /// location. Repairs links left stale by file moves; idempotent. `--dry-run`
 /// reports what would change without writing.
-fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
+fn cmd_relink(
+    store: &Store,
+    cfg: &Config,
+    dry_run: bool,
+    forge: adroit::forge_hook::ForgeFlags,
+) -> Result<()> {
     let r = store.relink(!dry_run)?;
+    // Opt-in: after fixing in-repo links, refresh each linked PR's description so
+    // its ADR reference tracks the (possibly moved) file.
+    if forge.enabled {
+        for (path, _) in store.list_with_paths()? {
+            adroit::forge_hook::sync_pr(cfg, &path, forge)?;
+        }
+    }
     if r.files_changed == 0 {
         println!("Links already canonical — nothing to relink.");
         return Ok(());
@@ -942,6 +968,22 @@ fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
     if dry_run {
         println!("\nDry run — no files written. Re-run without `--dry-run` to apply.");
     }
+    Ok(())
+}
+
+/// `adroit sync`: refresh an ADR's linked PR description from its content.
+fn cmd_sync(store: &Store, cfg: &Config, id: &str, dry_run: bool, yes: bool) -> Result<()> {
+    let r = resolve_ref(cfg, id)?;
+    let path = store.find_path_by_ref(&r)?;
+    adroit::forge_hook::sync_pr(
+        cfg,
+        &path,
+        adroit::forge_hook::ForgeFlags {
+            enabled: true, // `sync` is inherently a forge op
+            dry_run,
+            yes,
+        },
+    )?;
     Ok(())
 }
 

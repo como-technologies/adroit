@@ -209,6 +209,9 @@ impl Forge for Jira {
     fn comment_pr(&self, _: &str, _: &str) -> Result<(), ForgeError> {
         unreachable!()
     }
+    fn set_pr_body(&self, _: &str, _: &str) -> Result<(), ForgeError> {
+        unreachable!()
+    }
     fn describe(&self) -> String {
         format!("jira:{}", self.project)
     }

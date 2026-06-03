@@ -34,6 +34,9 @@ impl Forge for NoopForge {
     fn comment_pr(&self, _pr: &str, _body: &str) -> Result<(), ForgeError> {
         Ok(())
     }
+    fn set_pr_body(&self, _pr: &str, _body: &str) -> Result<(), ForgeError> {
+        Ok(())
+    }
     fn describe(&self) -> String {
         "noop:forge".to_string()
     }

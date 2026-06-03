@@ -266,6 +266,15 @@ impl Forge for Gitlab {
         .map(drop)
     }
 
+    fn set_pr_body(&self, pr: &str, body: &str) -> Result<(), ForgeError> {
+        self.call(
+            "PUT",
+            &format!("projects/{}/merge_requests/{pr}", self.proj()),
+            Some(json!({ "description": body })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("gitlab:{}", self.project)
     }

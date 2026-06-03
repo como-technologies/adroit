@@ -270,6 +270,27 @@ pub enum Command {
         /// Show which files/links would change without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Also refresh each linked PR's description to the current ADR (patches
+        /// forge-side links after status moves). Requires a configured `forge`.
+        #[arg(long)]
+        with_forge: bool,
+        /// With `--with-forge`, apply the PR updates (without it, preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Refresh an ADR's linked PR description from its content (MR-desc sync).
+    ///
+    /// Writes the ADR (with a `<!-- adroit:adr=… -->` marker) into the PR body so
+    /// reviewers always see the latest text. Requires a configured `forge`.
+    Sync {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Preview without changing the PR.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply the change (without it, preview).
+        #[arg(long)]
+        yes: bool,
     },
     /// Renumber an ADR (sequential scheme) to resolve a collision.
     ///
