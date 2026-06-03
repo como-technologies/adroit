@@ -101,6 +101,58 @@ pub fn on_supersede(
     Ok(true)
 }
 
+/// Forge-aware `check` problems (issue/PR drift). Empty unless enabled + built.
+#[cfg(feature = "forge")]
+pub fn check_repo(
+    cfg: &Config,
+    entries: &[(std::path::PathBuf, crate::adr::Adr)],
+    enabled: bool,
+) -> Result<Vec<crate::view::Problem>> {
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    crate::forge::check_repo(cfg, entries)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn check_repo(
+    _cfg: &Config,
+    _entries: &[(std::path::PathBuf, crate::adr::Adr)],
+    enabled: bool,
+) -> Result<Vec<crate::view::Problem>> {
+    if enabled {
+        warn_no_feature();
+    }
+    Ok(Vec::new())
+}
+
+/// Attach live forge state to list/dashboard rows. No-op unless enabled + built.
+#[cfg(feature = "forge")]
+pub fn enrich(
+    cfg: &Config,
+    store: &crate::store::Store,
+    summaries: &mut [crate::view::AdrSummary],
+    enabled: bool,
+) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    crate::forge::enrich(cfg, store, summaries)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn enrich(
+    _cfg: &Config,
+    _store: &crate::store::Store,
+    _summaries: &mut [crate::view::AdrSummary],
+    enabled: bool,
+) -> Result<()> {
+    if enabled {
+        warn_no_feature();
+    }
+    Ok(())
+}
+
 /// Shared "you asked for --with-forge but this build lacks it" notice.
 #[cfg(not(feature = "forge"))]
 fn warn_no_feature() {

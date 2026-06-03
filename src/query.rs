@@ -742,6 +742,7 @@ fn summary_of(
             .collect(),
         superseded_by: adr.superseded_by.as_ref().map(|r| scheme.display(r)),
         review_due,
+        forge_data: None,
     }
 }
 

@@ -567,6 +567,136 @@ pub fn on_supersede(
     Ok(true)
 }
 
+/// Forge-aware repo checks (issue #4 lifecycle map): flag drift between an ADR
+/// and its linked issue/PR. Network reads degrade gracefully (warn-once offline,
+/// skip). Returns `Warning`-severity problems so `check` reports but doesn't fail.
+pub fn check_repo(
+    cfg: &Config,
+    entries: &[(std::path::PathBuf, crate::adr::Adr)],
+) -> anyhow::Result<Vec<crate::view::Problem>> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(vec![]);
+    };
+    let (forge, tracker) = open(fcfg);
+    let (Some(forge), Some(tracker)) = (forge, tracker) else {
+        return Ok(vec![]);
+    };
+    let mut problems = Vec::new();
+    let mut warned = false;
+    for (path, adr) in entries {
+        let refs = read_refs(path);
+        let rel = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if let Some((pr, url)) = &refs.pr {
+            match forge.pr_state(pr) {
+                Ok(st) => {
+                    if adr.status == Status::Accepted && !st.merged {
+                        problems.push(forge_problem(
+                            &rel,
+                            "accepted ADR but its PR is not merged",
+                            url,
+                        ));
+                    } else if adr.status == Status::Proposed && st.merged {
+                        problems.push(forge_problem(
+                            &rel,
+                            "PR is merged but the ADR is still proposed",
+                            url,
+                        ));
+                    }
+                }
+                Err(e) if e.is_offline() => {
+                    if !warned {
+                        eprintln!("adroit: forge unreachable ({e}); skipping forge checks");
+                        warned = true;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        if let Some((issue, url)) = &refs.issue
+            && let Ok(st) = tracker.issue_state(issue)
+            && !st.open
+            && adr.status == Status::Proposed
+        {
+            problems.push(forge_problem(
+                &rel,
+                "tracker issue is closed but the ADR is still proposed",
+                url,
+            ));
+        }
+    }
+    Ok(problems)
+}
+
+fn forge_problem(label: &str, summary: &str, url: &str) -> crate::view::Problem {
+    crate::view::Problem {
+        severity: crate::view::Severity::Warning,
+        kind: crate::view::ProblemKind::ForgeIntegration,
+        label: label.to_string(),
+        summary: summary.to_string(),
+        paths: Vec::new(),
+        message: format!("{label}: {summary} ({url})"),
+    }
+}
+
+/// Attach live forge state (issue/PR URLs + PR approvals/CI/merged) to each
+/// summary for `list --forge` / the dashboard. Opt-in; warn-once offline.
+pub fn enrich(
+    cfg: &Config,
+    store: &crate::store::Store,
+    summaries: &mut [crate::view::AdrSummary],
+) -> anyhow::Result<()> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(());
+    };
+    let (forge, _tracker) = open(fcfg);
+    let Some(forge) = forge else {
+        return Ok(());
+    };
+    let naming = store.options().naming;
+    let mut warned = false;
+    for s in summaries.iter_mut() {
+        let Some(r) = naming.parse_ref(&s.address) else {
+            continue;
+        };
+        let Ok(path) = store.find_path_by_ref(&r) else {
+            continue;
+        };
+        let refs = read_refs(&path);
+        if refs.issue.is_none() && refs.pr.is_none() {
+            continue;
+        }
+        let mut data = crate::view::ForgeData {
+            issue_url: refs.issue.as_ref().map(|(_, u)| u.clone()),
+            pr_url: refs.pr.as_ref().map(|(_, u)| u.clone()),
+            pr_approvals: None,
+            pr_ci: None,
+            pr_merged: None,
+        };
+        if let Some((pr, _)) = &refs.pr {
+            match forge.pr_state(pr) {
+                Ok(st) => {
+                    data.pr_approvals = Some(st.approvals);
+                    data.pr_ci = Some(format!("{:?}", st.ci).to_lowercase());
+                    data.pr_merged = Some(st.merged);
+                }
+                Err(e) if e.is_offline() => {
+                    if !warned {
+                        eprintln!("adroit: forge unreachable ({e}); showing links only");
+                        warned = true;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        s.forge_data = Some(data);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

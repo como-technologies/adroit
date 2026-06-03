@@ -149,6 +149,10 @@ pub enum Command {
         /// Only show ADRs with this status.
         #[arg(short, long)]
         status: Option<String>,
+        /// Enrich each row with live forge state (PR approvals/CI). Reads the
+        /// forge; requires a configured `forge` + the feature build.
+        #[arg(long)]
+        forge: bool,
     },
     /// Show a single ADR by its identifier.
     Show {
@@ -242,7 +246,12 @@ pub enum Command {
     /// A structural CI gate: checks for status/directory mismatches,
     /// duplicate numbers, unparseable files, broken supersession links, and
     /// broken/stale cross-ADR relative links.
-    Check,
+    Check {
+        /// Also run forge-aware checks (issue/PR drift). Reads the forge over
+        /// the network; requires a configured `forge` + the feature build.
+        #[arg(long)]
+        forge: bool,
+    },
     /// Rewrite cross-ADR relative links to each ADR's current location.
     ///
     /// Fixes links left stale by status-change file moves (run by hand or in

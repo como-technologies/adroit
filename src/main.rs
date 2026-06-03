@@ -161,7 +161,7 @@ fn main() -> Result<()> {
                 open_in_editor(editor, &path)?;
             }
         }
-        Some(Command::List { status }) => cmd_list(&store, status.as_deref())?,
+        Some(Command::List { status, forge }) => cmd_list(&store, &cfg, status.as_deref(), forge)?,
         Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
         Some(Command::SetStatus {
@@ -219,7 +219,7 @@ fn main() -> Result<()> {
             cmd_link(&store, &cfg, &id, relates_to, depends_on, refines, remove)?;
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
-        Some(Command::Check) => cmd_check(&store)?,
+        Some(Command::Check { forge }) => cmd_check(&store, &cfg, forge)?,
         Some(Command::Relink { dry_run }) => cmd_relink(&store, dry_run)?,
         Some(Command::Renumber { old, new, file }) => {
             require_numeric_scheme(&cfg, "renumber")?;
@@ -346,7 +346,7 @@ fn cmd_new(
     Ok(store.write(&mut adr)?)
 }
 
-fn cmd_list(store: &Store, status_filter: Option<&str>) -> Result<()> {
+fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: bool) -> Result<()> {
     let status: Option<Status> = match status_filter {
         Some(s) => Some(
             s.parse()
@@ -358,10 +358,12 @@ fn cmd_list(store: &Store, status_filter: Option<&str>) -> Result<()> {
         status,
         ..Default::default()
     };
-    let rows = query::summaries(store, &filter)?;
+    let mut rows = query::summaries(store, &filter)?;
     if rows.is_empty() {
         return Ok(());
     }
+    // Opt-in: attach live forge state (no-op unless --forge + feature + config).
+    adroit::forge_hook::enrich(cfg, store, &mut rows, forge)?;
     let id_w = id_col_width(&rows);
     println!("{:<id_w$}{:<12}Title", "#", "Status");
     for row in &rows {
@@ -623,7 +625,39 @@ fn id_col_width(rows: &[AdrSummary]) -> usize {
 /// Render one `list` / `search` row. Shared so the two read commands stay
 /// byte-identical. `id_w` is the (dynamic) identifier column width.
 fn print_summary_row(row: &AdrSummary, id_w: usize) {
-    println!("{:<id_w$}{:<12}{}", row_id(row), row.status, row.title);
+    println!(
+        "{:<id_w$}{:<12}{}{}",
+        row_id(row),
+        row.status,
+        row.title,
+        forge_suffix(row)
+    );
+}
+
+/// A compact " · PR merged/2 approvals, ci ok" suffix for `list --forge` rows.
+fn forge_suffix(row: &AdrSummary) -> String {
+    let Some(f) = &row.forge_data else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if f.pr_url.is_some() {
+        let state = if f.pr_merged == Some(true) {
+            "merged".to_string()
+        } else {
+            match (f.pr_approvals, &f.pr_ci) {
+                (Some(a), Some(ci)) => format!("{a} approvals, ci {ci}"),
+                _ => "open".to_string(),
+            }
+        };
+        parts.push(format!("PR {state}"));
+    } else if f.issue_url.is_some() {
+        parts.push("issue".to_string());
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("  · {}", parts.join(", "))
+    }
 }
 
 fn cmd_index(store: &Store, cfg: &Config, check: bool) -> Result<()> {
@@ -889,8 +923,16 @@ fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
 /// `adroit relink` will heal) is printed but exits 0. This lets a status-change
 /// PR branch — which transiently carries stale inbound links under
 /// `relink_scope = self` — pass CI, while a genuine defect still fails it.
-fn cmd_check(store: &Store) -> Result<()> {
-    let report = query::check(store)?;
+fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
+    let mut report = query::check(store)?;
+    // Opt-in forge-aware checks (issue/PR drift) appended to the same report;
+    // they're Warning-severity so they report but don't fail the gate.
+    if forge {
+        let entries = store.list_with_paths()?;
+        report
+            .problems
+            .extend(adroit::forge_hook::check_repo(cfg, &entries, forge)?);
+    }
     // Print every problem (errors and warnings), sorted for stable output.
     let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
     messages.sort_unstable();
