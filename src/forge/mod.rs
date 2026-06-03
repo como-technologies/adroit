@@ -271,12 +271,39 @@ pub fn after_new(
         );
         return Ok(());
     };
-    run_new(forge.as_ref(), tracker.as_ref(), path, title, fcfg, dry_run)
+    // Optional forge-artifact templates (`<templates_dir>/{issue,pr}.md`), so a
+    // team can encode its conventions once. Placeholders: {{title}} {{file}} {{issue}}.
+    let issue_tmpl = read_forge_template(cfg, "issue");
+    let pr_tmpl = read_forge_template(cfg, "pr");
+    run_new(
+        forge.as_ref(),
+        tracker.as_ref(),
+        path,
+        title,
+        fcfg,
+        dry_run,
+        issue_tmpl.as_deref(),
+        pr_tmpl.as_deref(),
+    )
+}
+
+/// Read an optional forge-artifact template (`<templates_dir>/<name>.md`).
+fn read_forge_template(cfg: &Config, name: &str) -> Option<String> {
+    let dir = cfg.templates_dir.as_ref()?;
+    std::fs::read_to_string(dir.join(format!("{name}.md"))).ok()
+}
+
+/// Substitute `{{title}}` / `{{file}}` / `{{issue}}` in a forge template.
+fn render_forge_template(tmpl: &str, title: &str, file: &str, issue: &str) -> String {
+    tmpl.replace("{{title}}", title)
+        .replace("{{file}}", file)
+        .replace("{{issue}}", issue)
 }
 
 /// The provider-agnostic orchestration (testable with mock/noop adapters and a
 /// scratch git repo). Separated from [`after_new`] so tests don't need real
 /// config/env to construct an adapter.
+#[allow(clippy::too_many_arguments)]
 fn run_new(
     forge: &dyn Forge,
     tracker: &dyn Tracker,
@@ -284,6 +311,8 @@ fn run_new(
     title: &str,
     fcfg: &ForgeConfig,
     dry_run: bool,
+    issue_tmpl: Option<&str>,
+    pr_tmpl: Option<&str>,
 ) -> anyhow::Result<()> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("adr");
     let branch = format!("{}{stem}", fcfg.branch_prefix);
@@ -304,8 +333,12 @@ fn run_new(
     }
 
     // 1. Tracker issue. Offline -> keep local; auth/API -> surface.
-    let issue_body =
-        format!("Tracking issue for ADR \u{201c}{title}\u{201d} (`{file}`), managed by adroit.");
+    let issue_body = match issue_tmpl {
+        Some(t) => render_forge_template(t, title, file, ""),
+        None => {
+            format!("Tracking issue for ADR \u{201c}{title}\u{201d} (`{file}`), managed by adroit.")
+        }
+    };
     let issue = match tracker.create_issue(title, &issue_body) {
         Ok(i) => i,
         Err(e) if e.is_offline() => {
@@ -334,11 +367,15 @@ fn run_new(
     }
 
     // 4. Draft PR linking the issue.
+    let pr_body = match pr_tmpl {
+        Some(t) => render_forge_template(t, title, file, &issue.id),
+        None => format!("ADR: {title}\n\nCloses #{}.", issue.id),
+    };
     let pr = match forge.open_pr(&PrDraft {
         branch: branch.clone(),
         base: fcfg.base_branch.clone(),
         title: format!("ADR: {title}"),
-        body: format!("ADR: {title}\n\nCloses #{}.", issue.id),
+        body: pr_body,
     }) {
         Ok(p) => p,
         Err(e) if e.is_offline() => {
@@ -844,12 +881,25 @@ mod tests {
             "X",
             &ForgeConfig::default(),
             false,
+            None,
+            None,
         )
         .unwrap();
 
         let body = std::fs::read_to_string(&adr).unwrap();
         assert!(body.contains("## References"), "got:\n{body}");
         assert!(body.contains("- Issue: (dry-run)"), "got:\n{body}");
+    }
+
+    #[test]
+    fn forge_template_substitutes_placeholders() {
+        let out = render_forge_template(
+            "Issue for {{title}} ({{file}}) — see #{{issue}}",
+            "Adopt PG",
+            "0007-pg.md",
+            "42",
+        );
+        assert_eq!(out, "Issue for Adopt PG (0007-pg.md) — see #42");
     }
 
     #[test]
@@ -865,6 +915,8 @@ mod tests {
             "X",
             &ForgeConfig::default(),
             true,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&adr).unwrap(), original);
