@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::adr::Status;
 use crate::config::Config;
 
 /// Flags from `adroit new` that drive the forge hook (mirrors `migrate`'s
@@ -39,10 +40,72 @@ pub fn after_new(cfg: &Config, path: &Path, title: &str, flags: ForgeFlags) -> R
 #[cfg(not(feature = "forge"))]
 pub fn after_new(_cfg: &Config, _path: &Path, _title: &str, flags: ForgeFlags) -> Result<()> {
     if flags.enabled {
-        eprintln!(
-            "adroit: --with-forge ignored — this build lacks the `forge` feature \
-             (rebuild with `--features forge`)"
-        );
+        warn_no_feature();
     }
     Ok(())
+}
+
+/// Forge actions before a `set-status` move (verify + merge/close). Returns
+/// `true` to proceed with the local move, `false` to stop (preview / not
+/// `--yes`); `Err` aborts (e.g. an unapproved `accepted`).
+#[cfg(feature = "forge")]
+pub fn before_status_change(
+    cfg: &Config,
+    path: &Path,
+    new_status: Status,
+    flags: ForgeFlags,
+) -> Result<bool> {
+    if !flags.enabled {
+        return Ok(true);
+    }
+    crate::forge::before_status_change(cfg, path, new_status, flags.dry_run, flags.yes)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn before_status_change(
+    _cfg: &Config,
+    _path: &Path,
+    _new_status: Status,
+    flags: ForgeFlags,
+) -> Result<bool> {
+    if flags.enabled {
+        warn_no_feature();
+    }
+    Ok(true)
+}
+
+/// Forge actions before a `supersede` (comment + close the old ADR's issue/PR).
+#[cfg(feature = "forge")]
+pub fn on_supersede(
+    cfg: &Config,
+    old_path: &Path,
+    new_label: &str,
+    flags: ForgeFlags,
+) -> Result<bool> {
+    if !flags.enabled {
+        return Ok(true);
+    }
+    crate::forge::on_supersede(cfg, old_path, new_label, flags.dry_run, flags.yes)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn on_supersede(
+    _cfg: &Config,
+    _old_path: &Path,
+    _new_label: &str,
+    flags: ForgeFlags,
+) -> Result<bool> {
+    if flags.enabled {
+        warn_no_feature();
+    }
+    Ok(true)
+}
+
+/// Shared "you asked for --with-forge but this build lacks it" notice.
+#[cfg(not(feature = "forge"))]
+fn warn_no_feature() {
+    eprintln!(
+        "adroit: --with-forge ignored — this build lacks the `forge` feature \
+         (rebuild with `--features forge`)"
+    );
 }

@@ -16,6 +16,7 @@ use std::io::Read;
 
 use serde::Serialize;
 
+use crate::adr::Status;
 use crate::config::{Config, ForgeConfig, Provider};
 
 pub mod github;
@@ -361,6 +362,211 @@ fn upsert_ref(path: &std::path::Path, label: &str, url: &str) -> anyhow::Result<
     Ok(())
 }
 
+/// The linked issue / PR `(number, url)` parsed from an ADR's `## References`.
+struct ForgeRefs {
+    issue: Option<(String, String)>,
+    pr: Option<(String, String)>,
+}
+
+fn read_refs(path: &std::path::Path) -> ForgeRefs {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let refs = crate::format::parse_references(&content);
+    let find = |label: &str| {
+        refs.iter()
+            .find(|(l, _)| l.eq_ignore_ascii_case(label))
+            .map(|(_, u)| u.clone())
+    };
+    // The trailing path segment of the URL is the number (.../issues/7, .../pull/42).
+    let pair = |u: String| (u.rsplit('/').next().unwrap_or("").to_string(), u);
+    ForgeRefs {
+        issue: find("Issue").map(pair),
+        pr: find("Pull Request").map(pair),
+    }
+}
+
+/// Forge actions for `set-status`, run **before** the local move. Returns
+/// `Ok(true)` to proceed with the move, `Ok(false)` to stop (preview / not
+/// `--yes`), or `Err` to abort (e.g. accepting a PR that isn't approved).
+pub fn before_status_change(
+    cfg: &Config,
+    path: &std::path::Path,
+    new_status: Status,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<bool> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(true);
+    };
+    let (forge, tracker) = open(fcfg);
+    let (Some(forge), Some(tracker)) = (forge, tracker) else {
+        eprintln!(
+            "adroit: --with-forge: `{}` integration inactive (set forge.repo + a token); \
+             doing the local status change only.",
+            fcfg.provider
+        );
+        return Ok(true);
+    };
+    run_status_change(
+        forge.as_ref(),
+        tracker.as_ref(),
+        &read_refs(path),
+        new_status,
+        cfg.review_quorum,
+        dry_run,
+        yes,
+    )
+}
+
+/// Provider-agnostic `set-status` orchestration (testable with mock adapters).
+fn run_status_change(
+    forge: &dyn Forge,
+    tracker: &dyn Tracker,
+    refs: &ForgeRefs,
+    new_status: Status,
+    quorum: u32,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<bool> {
+    let apply = yes && !dry_run;
+    match new_status {
+        Status::Accepted => {
+            let Some((pr, pr_url)) = refs.pr.clone() else {
+                return Ok(true); // no PR recorded → just move locally
+            };
+            let st = match forge.pr_state(&pr) {
+                Ok(s) => s,
+                Err(e) if e.is_offline() => {
+                    eprintln!("adroit: forge unreachable ({e}); local status change only.");
+                    return Ok(true);
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let ok = st.approvals >= quorum && matches!(st.ci, CiStatus::Success | CiStatus::None);
+            if !apply {
+                println!("Forge plan (accept):");
+                println!(
+                    "  - PR {pr_url}: {}/{quorum} approvals, CI {:?}{}",
+                    st.approvals,
+                    st.ci,
+                    if st.merged { " (already merged)" } else { "" }
+                );
+                if let Some((_, iu)) = &refs.issue {
+                    println!("  - close issue {iu}");
+                }
+                if !ok && !st.merged {
+                    println!("  (blocked: needs {quorum} approvals + passing CI)");
+                }
+                println!("\nPreview — re-run with --yes to apply.");
+                return Ok(false);
+            }
+            if !st.merged {
+                if !ok {
+                    anyhow::bail!(
+                        "refusing to accept: PR {pr_url} has {}/{quorum} approvals, CI {:?}",
+                        st.approvals,
+                        st.ci
+                    );
+                }
+                match forge.merge_pr(&pr) {
+                    Ok(()) => {}
+                    Err(e) if e.is_offline() => {
+                        eprintln!("adroit: forge unreachable merging PR ({e}); local change only.");
+                        return Ok(true);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            if let Some((issue, _)) = &refs.issue
+                && let Err(e) = tracker.close_issue(issue)
+            {
+                eprintln!("adroit: couldn't close issue ({e})");
+            }
+            println!("Forge: merged PR {pr_url}");
+            Ok(true)
+        }
+        Status::Rejected | Status::Deprecated => {
+            let verb = if new_status == Status::Rejected {
+                "rejected"
+            } else {
+                "deprecated"
+            };
+            if !apply {
+                println!("Forge plan ({verb}):");
+                if let Some((_, pu)) = &refs.pr {
+                    println!("  - close PR {pu}");
+                }
+                if let Some((_, iu)) = &refs.issue {
+                    println!("  - mark issue {iu} won't-fix");
+                }
+                println!("\nPreview — re-run with --yes to apply.");
+                return Ok(false);
+            }
+            if let Some((pr, _)) = &refs.pr {
+                let _ = forge.comment_pr(pr, &format!("Closing: ADR {verb}."));
+                match forge.close_pr(pr) {
+                    Ok(()) => {}
+                    Err(e) if e.is_offline() => {
+                        eprintln!("adroit: forge unreachable ({e}); local change only.");
+                        return Ok(true);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            if let Some((issue, _)) = &refs.issue {
+                let _ = tracker.transition(issue, Transition::WontFix);
+            }
+            Ok(true)
+        }
+        // Proposed / Superseded: no forge action here (Superseded → `supersede`).
+        _ => Ok(true),
+    }
+}
+
+/// Forge actions for `supersede`, run before the local change: comment on and
+/// close the *old* ADR's issue + PR. Returns `Ok(true)` to proceed locally.
+pub fn on_supersede(
+    cfg: &Config,
+    old_path: &std::path::Path,
+    new_label: &str,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<bool> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(true);
+    };
+    let (forge, tracker) = open(fcfg);
+    let (Some(forge), Some(tracker)) = (forge, tracker) else {
+        eprintln!(
+            "adroit: --with-forge: `{}` integration inactive; doing the local supersede only.",
+            fcfg.provider
+        );
+        return Ok(true);
+    };
+    let refs = read_refs(old_path);
+    let apply = yes && !dry_run;
+    if !apply {
+        println!("Forge plan (supersede):");
+        if let Some((_, pu)) = &refs.pr {
+            println!("  - comment + close PR {pu}");
+        }
+        if let Some((_, iu)) = &refs.issue {
+            println!("  - comment + close issue {iu}");
+        }
+        println!("\nPreview — re-run with --yes to apply.");
+        return Ok(false);
+    }
+    let msg = format!("Superseded by {new_label}.");
+    if let Some((pr, _)) = &refs.pr {
+        let _ = forge.comment_pr(pr, &msg);
+        let _ = forge.close_pr(pr);
+    }
+    if let Some((issue, _)) = &refs.issue {
+        let _ = tracker.comment_issue(issue, &msg);
+        let _ = tracker.transition(issue, Transition::Done);
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +652,111 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&adr).unwrap(), original);
+    }
+
+    /// A forge whose PR state is configurable and that records a merge.
+    struct MockForge {
+        state: PrState,
+        merged: std::cell::Cell<bool>,
+    }
+    impl Forge for MockForge {
+        fn open_pr(&self, d: &PrDraft) -> Result<PrRef, ForgeError> {
+            Ok(PrRef {
+                id: "1".into(),
+                url: "u".into(),
+                branch: d.branch.clone(),
+            })
+        }
+        fn pr_state(&self, _: &str) -> Result<PrState, ForgeError> {
+            Ok(self.state.clone())
+        }
+        fn merge_pr(&self, _: &str) -> Result<(), ForgeError> {
+            self.merged.set(true);
+            Ok(())
+        }
+        fn close_pr(&self, _: &str) -> Result<(), ForgeError> {
+            Ok(())
+        }
+        fn comment_pr(&self, _: &str, _: &str) -> Result<(), ForgeError> {
+            Ok(())
+        }
+        fn describe(&self) -> String {
+            "mock".into()
+        }
+    }
+
+    fn refs_with_pr() -> ForgeRefs {
+        ForgeRefs {
+            issue: Some(("7".into(), "issue-url".into())),
+            pr: Some(("42".into(), "pr-url".into())),
+        }
+    }
+    fn pr_state(approvals: u32, ci: CiStatus) -> PrState {
+        PrState {
+            approvals,
+            ci,
+            merged: false,
+            draft: true,
+        }
+    }
+
+    #[test]
+    fn accept_refuses_below_quorum() {
+        let forge = MockForge {
+            state: pr_state(1, CiStatus::Success),
+            merged: false.into(),
+        };
+        let err = run_status_change(
+            &forge,
+            &noop::NoopTracker,
+            &refs_with_pr(),
+            Status::Accepted,
+            3,
+            false,
+            true, // --yes
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("refusing to accept"));
+        assert!(!forge.merged.get());
+    }
+
+    #[test]
+    fn accept_merges_when_approved_and_green() {
+        let forge = MockForge {
+            state: pr_state(3, CiStatus::Success),
+            merged: false.into(),
+        };
+        let proceed = run_status_change(
+            &forge,
+            &noop::NoopTracker,
+            &refs_with_pr(),
+            Status::Accepted,
+            3,
+            false,
+            true,
+        )
+        .unwrap();
+        assert!(proceed); // local move proceeds
+        assert!(forge.merged.get()); // PR merged
+    }
+
+    #[test]
+    fn accept_without_yes_previews_and_does_not_merge() {
+        let forge = MockForge {
+            state: pr_state(3, CiStatus::Success),
+            merged: false.into(),
+        };
+        let proceed = run_status_change(
+            &forge,
+            &noop::NoopTracker,
+            &refs_with_pr(),
+            Status::Accepted,
+            3,
+            false,
+            false, // no --yes → preview
+        )
+        .unwrap();
+        assert!(!proceed); // stop: no local move
+        assert!(!forge.merged.get()); // no merge
     }
 }

@@ -164,13 +164,40 @@ fn main() -> Result<()> {
         Some(Command::List { status }) => cmd_list(&store, status.as_deref())?,
         Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
-        Some(Command::SetStatus { id, status }) => cmd_set_status(&store, &cfg, &id, &status)?,
-        Some(Command::Supersede { new, old }) => {
+        Some(Command::SetStatus {
+            id,
+            status,
+            with_forge,
+            dry_run,
+            yes,
+        }) => cmd_set_status(
+            &store,
+            &cfg,
+            &id,
+            &status,
+            adroit::forge_hook::ForgeFlags {
+                enabled: with_forge,
+                dry_run,
+                yes,
+            },
+        )?,
+        Some(Command::Supersede {
+            new,
+            old,
+            with_forge,
+            dry_run,
+            yes,
+        }) => {
             cmd_supersede(
                 &store,
                 &cfg,
                 &resolve_ref(&cfg, &new)?,
                 &resolve_ref(&cfg, &old)?,
+                adroit::forge_hook::ForgeFlags {
+                    enabled: with_forge,
+                    dry_run,
+                    yes,
+                },
             )?;
         }
         Some(Command::SetReview { id, date, clear }) => {
@@ -402,13 +429,25 @@ fn cmd_get_status(store: &Store, cfg: &Config, id: &str) -> Result<()> {
 
 /// `adroit set-status <ID> <STATUS>`: set an ADR's status (moves the file in
 /// by_status layout and rewrites links per `relink_scope`).
-fn cmd_set_status(store: &Store, cfg: &Config, id: &str, status: &str) -> Result<()> {
+fn cmd_set_status(
+    store: &Store,
+    cfg: &Config,
+    id: &str,
+    status: &str,
+    forge: adroit::forge_hook::ForgeFlags,
+) -> Result<()> {
     let new_status: Status = status.parse().map_err(|_| {
         anyhow::anyhow!(
             "invalid status '{status}', expected: proposed, accepted, rejected, deprecated, superseded"
         )
     })?;
     let r = resolve_ref(cfg, id)?;
+    // Opt-in forge pre-step (verify + merge/close before the local move). A
+    // false return means "previewed only — don't move"; an error aborts.
+    let path = store.find_path_by_ref(&r)?;
+    if !adroit::forge_hook::before_status_change(cfg, &path, new_status, forge)? {
+        return Ok(());
+    }
     let path = store.set_status_ref(&r, new_status)?;
     println!(
         "Updated {} status to {new_status} ({})",
@@ -456,7 +495,20 @@ fn cmd_link(
     Ok(())
 }
 
-fn cmd_supersede(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) -> Result<()> {
+fn cmd_supersede(
+    store: &Store,
+    cfg: &Config,
+    new: &AdrRef,
+    old: &AdrRef,
+    forge: adroit::forge_hook::ForgeFlags,
+) -> Result<()> {
+    // Opt-in forge pre-step: comment on + close the old ADR's issue/PR. A false
+    // return means "previewed only — don't change locally".
+    let old_path_pre = store.find_path_by_ref(old)?;
+    let new_label = cfg.naming.display(new);
+    if !adroit::forge_hook::on_supersede(cfg, &old_path_pre, &new_label, forge)? {
+        return Ok(());
+    }
     let old_path = store.supersede(new, old)?;
     // Add a reciprocal note to the new ADR referencing the old one.
     add_supersedes_note(store, cfg, new, old)?;

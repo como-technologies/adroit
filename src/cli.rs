@@ -168,6 +168,17 @@ pub enum Command {
         id: String,
         /// New status (proposed, accepted, rejected, deprecated, superseded).
         status: String,
+        /// Also drive the forge: on `accepted` verify approvals/CI then merge the
+        /// PR + close the issue; on `rejected`/`deprecated` close them. Opt-in;
+        /// requires a configured `forge`.
+        #[arg(long)]
+        with_forge: bool,
+        /// With `--with-forge`, preview the forge actions and make no changes.
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--with-forge`, apply (e.g. merge the PR). Without it, preview.
+        #[arg(long)]
+        yes: bool,
     },
     /// Mark an older ADR as superseded by a newer one.
     Supersede {
@@ -175,6 +186,15 @@ pub enum Command {
         new: String,
         /// The old (superseded) ADR identifier (number, slug, or uuid prefix).
         old: String,
+        /// Also comment on + close the superseded ADR's forge issue/PR. Opt-in.
+        #[arg(long)]
+        with_forge: bool,
+        /// With `--with-forge`, preview the forge actions and make no changes.
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--with-forge`, apply. Without it, preview.
+        #[arg(long)]
+        yes: bool,
     },
     /// Add (or remove with `--remove`) a typed relational link between two ADRs.
     ///
