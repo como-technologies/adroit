@@ -8,7 +8,54 @@ use crate::naming::NamingScheme;
 
 /// A snappy tool for managing Architecture Decision Records.
 #[derive(Debug, Parser)]
-#[command(name = "adroit", version, about)]
+#[command(
+    name = "adroit",
+    version,
+    about,
+    // clap 4 can't group subcommands under headings, so the command list is
+    // hand-curated into workflow categories here. The `commands_are_all_grouped`
+    // test fails if a subcommand is added without being placed in a group.
+    help_template = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+Authoring:
+  new           Create a new ADR
+  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  link          Add or remove a typed link between two ADRs
+
+Browse & inspect:
+  list          List ADRs
+  show          Show one ADR by its identifier
+  status        Print an ADR's status (lowercase, scriptable)
+  search        Search ADRs by title and body
+  serve         Serve the read-only web dashboard
+
+Repo health:
+  check         Validate the repo (exits non-zero on problems)
+  relink        Rewrite cross-ADR links to current locations
+  renumber      Renumber an ADR to resolve a number collision
+  migrate       Convert the repo to the configured layout/format
+  index         Regenerate the ADR section of SUMMARY.md
+
+Forge integration:
+  init          Detect the forge from the git remote and configure it
+  auth          Store a forge token in the local credential store
+  sync          Refresh a linked PR/MR description from the ADR
+  publish       Export the accepted ADR set to a directory
+  notify        Post an ADR's state to a chat webhook
+
+Configuration:
+  config        Inspect or change configuration
+  help          Print help for a command
+
+Options:
+{options}{after-help}"
+)]
 pub struct Cli {
     // --- Repo selection (global: inherited by every subcommand) -------------
     /// ADR directory (overrides config; default `~/.local/share/adroit/`).
@@ -457,5 +504,26 @@ mod tests {
     #[test]
     fn cli_parses_without_errors() {
         Cli::command().debug_assert();
+    }
+
+    /// The top-level command list is hand-curated into workflow categories in
+    /// `Cli`'s `help_template` (clap 4 can't group subcommands). This guards
+    /// against drift: every real subcommand must appear in that grouped help, so
+    /// adding a command without categorizing it fails the build.
+    #[test]
+    fn commands_are_all_grouped() {
+        let help = Cli::command().render_help().to_string();
+        for sub in Cli::command().get_subcommands() {
+            let name = sub.get_name();
+            // Match the command at the start of its listing line ("  <name>  …"),
+            // so `status` isn't satisfied by `set-status`, nor `link` by `relink`.
+            let listed = help
+                .lines()
+                .any(|l| l.trim_start().starts_with(&format!("{name} ")));
+            assert!(
+                listed,
+                "subcommand `{name}` is missing from Cli's grouped help_template — add it to a category"
+            );
+        }
     }
 }
