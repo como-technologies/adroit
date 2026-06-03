@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowRight, BarChart3, Clock, CircleX, TriangleAlert, CircleCheck } from 'lucide-vue-next'
+import {
+  ArrowRight,
+  BarChart3,
+  Clock,
+  CircleX,
+  TriangleAlert,
+  CircleCheck,
+  CircleAlert,
+  CalendarClock,
+} from 'lucide-vue-next'
 import { getStats, getCheck, type Stats, type Status, type CheckReport } from '@/api'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
 import StatTile from '@/components/StatTile.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const stats = ref<Stats | null>(null)
 const check = ref<CheckReport | null>(null)
@@ -164,9 +174,12 @@ function monthLabel(month: string): string {
               Insights <ArrowRight :size="13" />
             </RouterLink>
           </div>
-          <p v-if="stats.created_over_time.length === 0" class="mt-4 text-sm text-slate-500 dark:text-slate-400">
-            No dated ADRs yet.
-          </p>
+          <EmptyState
+            v-if="stats.created_over_time.length === 0"
+            :icon="CalendarClock"
+            title="No dated ADRs yet"
+            subtitle="Dates appear once ADRs are committed to git."
+          />
           <div v-else class="mt-4 space-y-2">
             <div v-for="m in stats.created_over_time" :key="m.month" class="flex items-center gap-3">
               <span class="w-20 shrink-0 text-xs tabular text-slate-500 dark:text-slate-400">
@@ -186,13 +199,17 @@ function monthLabel(month: string): string {
         </div>
 
         <!-- Proposed awaiting decision -->
-        <div class="card-glass p-5">
+        <div class="card-glass flex flex-col p-5">
           <h2 class="font-display text-sm font-semibold text-slate-700 dark:text-slate-200">
             Proposed · awaiting decision
           </h2>
-          <p v-if="stats.proposed_age.length === 0" class="mt-4 text-sm text-slate-500 dark:text-slate-400">
-            Nothing sitting in proposed. 🎉
-          </p>
+          <EmptyState
+            v-if="stats.proposed_age.length === 0"
+            :icon="CircleCheck"
+            tone="success"
+            title="Nothing awaiting decision"
+            subtitle="No proposed ADRs in the queue."
+          />
           <ul v-else class="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800/70">
             <li
               v-for="p in stats.proposed_age"
@@ -240,27 +257,20 @@ function monthLabel(month: string): string {
             </span>
           </div>
 
-          <p v-if="!check" class="mt-4 text-sm text-slate-500 dark:text-slate-400">
-            Checks unavailable.
-          </p>
-          <div
+          <EmptyState
+            v-if="!check"
+            :icon="CircleAlert"
+            tone="warn"
+            title="Checks unavailable"
+            subtitle="Couldn't load repo health — try refreshing."
+          />
+          <EmptyState
             v-else-if="check.problems.length === 0"
-            class="flex min-h-[13rem] flex-1 flex-col items-center justify-center gap-3 text-center"
-          >
-            <div
-              class="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 ring-1 ring-emerald-200/70 dark:bg-emerald-950/40 dark:ring-emerald-900/60"
-            >
-              <CircleCheck :size="26" class="text-emerald-600 dark:text-emerald-400" />
-            </div>
-            <div>
-              <p class="font-display text-sm font-semibold text-emerald-700 dark:text-emerald-400">
-                All checks passing
-              </p>
-              <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                {{ check.checked }} ADRs validated · no issues found
-              </p>
-            </div>
-          </div>
+            :icon="CircleCheck"
+            tone="success"
+            title="All checks passing"
+            :subtitle="`${check.checked} ADRs validated · no issues found`"
+          />
           <ul v-else class="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800/70">
             <li
               v-for="(pr, i) in check.problems"

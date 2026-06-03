@@ -7,6 +7,7 @@ import RelationsGraph from '@/components/RelationsGraph.vue'
 import DonutChart from '@/components/DonutChart.vue'
 import GrowthChart from '@/components/GrowthChart.vue'
 import CohortChart from '@/components/CohortChart.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const graph = ref<Graph | null>(null)
 const stats = ref<Stats | null>(null)
@@ -107,13 +108,12 @@ useLiveReload(load)
           Relationship graph
         </h2>
 
-        <div
+        <EmptyState
           v-if="graph && graph.nodes.length === 0"
-          class="flex flex-col items-center gap-2 px-6 py-12 text-center"
-        >
-          <Share2 :size="28" class="text-slate-400" />
-          <p class="text-sm text-slate-500 dark:text-slate-400">No ADRs to graph yet.</p>
-        </div>
+          :icon="Share2"
+          title="No ADRs to graph yet"
+          subtitle="Links between decisions show up here as you add them."
+        />
         <div v-else-if="graph" class="mt-3">
           <RelationsGraph :graph="graph" />
         </div>

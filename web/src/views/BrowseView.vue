@@ -7,6 +7,7 @@ import { highlight, shortDate } from '@/util'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
 import SelectMenu from '@/components/SelectMenu.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -207,18 +208,14 @@ const reviewDueCount = computed(() => adrs.value.filter((a) => a.review_due).len
       {{ error }}
     </div>
 
-    <div
-      v-else-if="adrs.length === 0"
-      class="card-glass flex flex-col items-center gap-2 px-6 py-12 text-center"
-    >
-      <SearchX v-if="searching" :size="28" class="text-slate-400" />
-      <Inbox v-else :size="28" class="text-slate-400" />
-      <p class="text-sm text-slate-500 dark:text-slate-400">
-        <template v-if="searching">
-          No ADRs matched “<span class="font-medium text-slate-700 dark:text-slate-200">{{ term.trim() }}</span>”.
-        </template>
-        <template v-else>No ADRs match this filter.</template>
-      </p>
+    <div v-else-if="adrs.length === 0" class="card-glass">
+      <EmptyState
+        :icon="searching ? SearchX : Inbox"
+        :title="searching ? 'No matches' : 'No ADRs here'"
+        :subtitle="
+          searching ? `No ADRs matched “${term.trim()}”.` : 'Nothing matches this filter.'
+        "
+      />
     </div>
 
     <!-- ADR list -->

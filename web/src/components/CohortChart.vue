@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { BarChart3 } from 'lucide-vue-next'
 import type { AdrSummary, Status } from '@/api'
 import { statusColor as fill } from '@/statusColor'
+import EmptyState from '@/components/EmptyState.vue'
 
 // Status by cohort: stacked columns, one per created-month, segmented by the
 // ADR's *current* status. Derived client-side from listAdrs() because the API's
@@ -100,12 +102,12 @@ const labelEvery = computed(() => Math.max(1, Math.ceil(cohorts.value.length / 9
 
 <template>
   <div>
-    <p
+    <EmptyState
       v-if="columns.length === 0"
-      class="py-10 text-center text-sm text-slate-500 dark:text-slate-400"
-    >
-      No ADRs to chart yet.
-    </p>
+      :icon="BarChart3"
+      title="No ADRs to chart yet"
+      subtitle="Charts fill in once ADRs have creation dates."
+    />
     <template v-else>
       <svg :viewBox="`0 0 ${W} ${H}`" class="cohort">
         <line :x1="PAD.left" :y1="baseline" :x2="W - PAD.right" :y2="baseline" class="axis" />

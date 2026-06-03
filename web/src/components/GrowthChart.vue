@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { CalendarClock } from 'lucide-vue-next'
 import type { CreatedBucket } from '@/api'
+import EmptyState from '@/components/EmptyState.vue'
 
 // Growth over time: cumulative ADR count as a filled area/line, overlaid with
 // per-month creation bars. Hand-rolled inline SVG (no chart dependency), styled
@@ -93,12 +95,12 @@ const labelEvery = computed(() => Math.max(1, Math.ceil(points.value.length / 8)
 
 <template>
   <div>
-    <p
+    <EmptyState
       v-if="points.length === 0"
-      class="py-10 text-center text-sm text-slate-500 dark:text-slate-400"
-    >
-      No dated ADRs yet.
-    </p>
+      :icon="CalendarClock"
+      title="No dated ADRs yet"
+      subtitle="Dates appear once ADRs are committed to git."
+    />
     <svg v-else :viewBox="`0 0 ${W} ${H}`" class="growth">
       <defs>
         <linearGradient id="growth-area" x1="0" y1="0" x2="0" y2="1">

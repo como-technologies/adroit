@@ -114,6 +114,15 @@ body,
   transform: scale(0.96);
 }
 
+/* Buttons should read as clickable. Browsers default `<button>` to
+   `cursor: default` (only links get a pointer) and our build doesn't override
+   it, so every enabled button / role=button gets a pointer; disabled ones keep
+   the default arrow. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
 /* Consistent focus ring across interactive elements (keyboard a11y). */
 :where(a, button, input, select, [tabindex]):focus-visible {
   outline: 2px solid var(--color-brand-500);
