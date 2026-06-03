@@ -10,68 +10,111 @@ use crate::naming::NamingScheme;
 #[derive(Debug, Parser)]
 #[command(name = "adroit", version, about)]
 pub struct Cli {
-    /// Path to the ADR directory. Overrides the config file and
-    /// XDG data directory default (~/.local/share/adroit/).
+    // --- Repo selection (global: inherited by every subcommand) -------------
+    /// ADR directory (overrides config; default `~/.local/share/adroit/`).
     ///
     /// Also settable via the `ADROIT_DIR` environment variable (e.g. from a
     /// `.env` file), so you don't have to pass `--dir` on every command.
-    #[arg(short, long, global = true, env = "ADROIT_DIR")]
+    #[arg(
+        short,
+        long,
+        global = true,
+        env = "ADROIT_DIR",
+        help_heading = "Repo selection"
+    )]
     pub dir: Option<PathBuf>,
 
-    /// On-disk format profile (overrides config): markdown or frontmatter.
+    /// On-disk format: `markdown` or `frontmatter` (overrides config).
     ///
     /// Also settable via `ADROIT_FORMAT`.
-    #[arg(long, value_enum, global = true, env = "ADROIT_FORMAT")]
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_FORMAT",
+        help_heading = "Repo selection"
+    )]
     pub format: Option<Format>,
 
-    /// Directory layout (overrides config): by_status or flat.
+    /// Directory layout: `by_status`, `by_category`, or `flat` (overrides config).
     ///
     /// Also settable via `ADROIT_LAYOUT`.
-    #[arg(long, value_enum, global = true, env = "ADROIT_LAYOUT")]
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_LAYOUT",
+        help_heading = "Repo selection"
+    )]
     pub layout: Option<Layout>,
 
-    /// TUI markdown-preview color theme: default or gruvbox.
+    /// How ADR identifiers/filenames are formed (overrides config).
     ///
-    /// Also settable via `ADROIT_THEME`.
-    #[arg(long, value_enum, global = true, env = "ADROIT_THEME")]
-    pub theme: Option<MarkdownTheme>,
-
-    /// Days after which a still-Proposed ADR with no explicit `review_by` is
-    /// flagged review-due (overrides config; `0` disables age-based flagging).
-    ///
-    /// Also settable via `ADROIT_REVIEW_OVERDUE_DAYS`.
-    #[arg(long, global = true, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
-    pub review_overdue_days: Option<u32>,
-
-    /// Default template for `new` — a built-in name (`madr`, `nygard`) or a path
-    /// (overrides config). `new --template` still wins per-invocation.
-    ///
-    /// Also settable via `ADROIT_TEMPLATE`.
-    #[arg(long, global = true, env = "ADROIT_TEMPLATE")]
-    pub default_template: Option<String>,
-
-    /// Where ADR dates/lifecycle come from: auto (git when available, else
-    /// filesystem), git (require git; warn if unavailable/shallow), or
-    /// filesystem (never shell git). Overrides config.
-    ///
-    /// Also settable via `ADROIT_DATE_SOURCE`.
-    #[arg(long, value_enum, global = true, env = "ADROIT_DATE_SOURCE")]
-    pub date_source: Option<DateSource>,
-
-    /// How ADR identifiers/filenames are formed: sequential (NNNN, default),
-    /// date (YYYYMMDD-title), uuid, or per_category. Overrides config.
-    ///
-    /// Also settable via `ADROIT_NAMING`.
-    #[arg(long, value_enum, global = true, env = "ADROIT_NAMING")]
+    /// `sequential` (NNNN, default), `date` (YYYYMMDD-title), `uuid`, or
+    /// `per_category`. Also settable via `ADROIT_NAMING`.
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_NAMING",
+        help_heading = "Repo selection"
+    )]
     pub naming: Option<NamingScheme>,
 
-    /// How much a status-change move auto-relinks: all (heal every inbound link,
-    /// default), self (only the moved file's own links — defer the rest to a
-    /// post-merge `adroit relink`), or none (move only). Overrides config.
+    /// Where ADR dates/lifecycle come from (overrides config).
     ///
-    /// Also settable via `ADROIT_RELINK_SCOPE`.
-    #[arg(long, value_enum, global = true, env = "ADROIT_RELINK_SCOPE")]
+    /// `auto` (git when available, else filesystem), `git` (require git; warn if
+    /// unavailable/shallow), or `filesystem` (never shell git). Also settable via
+    /// `ADROIT_DATE_SOURCE`.
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_DATE_SOURCE",
+        help_heading = "Repo selection"
+    )]
+    pub date_source: Option<DateSource>,
+
+    /// How much a status-change move auto-relinks (overrides config).
+    ///
+    /// `all` (heal every inbound link, default), `self` (only the moved file's
+    /// own links — defer the rest to a post-merge `adroit relink`), or `none`
+    /// (move only). Also settable via `ADROIT_RELINK_SCOPE`.
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_RELINK_SCOPE",
+        help_heading = "Repo selection"
+    )]
     pub relink_scope: Option<RelinkScope>,
+
+    // --- Command-specific defaults (top-level only; env binds everywhere) ----
+    // These are NOT `global` — the env var still binds (clap reads env
+    // regardless), but the flag stays off every subcommand's `--help` since only
+    // a few commands use each. Set them in config / `.env`, or before the
+    // subcommand (e.g. `adroit --theme gruvbox`).
+    /// TUI markdown-preview color theme: `default` or `gruvbox` (overrides config).
+    ///
+    /// Only the TUI (bare `adroit`) and `serve` consult it. Also settable via
+    /// `ADROIT_THEME`.
+    #[arg(long, value_enum, env = "ADROIT_THEME")]
+    pub theme: Option<MarkdownTheme>,
+
+    /// Default template for `new`: a built-in (`madr`, `nygard`) or a path.
+    ///
+    /// Overrides config; `new --template` still wins per-invocation. Also
+    /// settable via `ADROIT_TEMPLATE`.
+    #[arg(long, env = "ADROIT_TEMPLATE")]
+    pub default_template: Option<String>,
+
+    /// Days after which a still-Proposed ADR with no `review_by` is flagged
+    /// review-due — `0` disables (overrides config).
+    ///
+    /// Used by `list` / `stats` / `check` and the dashboard. Also settable via
+    /// `ADROIT_REVIEW_OVERDUE_DAYS`.
+    #[arg(long, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
+    pub review_overdue_days: Option<u32>,
 
     #[command(subcommand)]
     pub command: Option<Command>,

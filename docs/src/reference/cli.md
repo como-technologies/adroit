@@ -2,22 +2,35 @@
 
 ## Global options
 
+### Repo selection
+
+Global — inherited by every subcommand and shown under **Repo selection** in each
+`--help`. They work before *or* after the subcommand (`adroit --dir X list` and
+`adroit list --dir X` are equivalent).
+
 | Flag | Default | Description |
 |---|---|---|
 | `--dir <PATH>` / `-d` | `~/.local/share/adroit/` | Path to the ADR directory (env: `ADROIT_DIR`; overrides config) |
 | `--format <markdown\|frontmatter>` | `markdown` | On-disk format profile (env: `ADROIT_FORMAT`; overrides config) |
-| `--layout <by_status\|flat\|by_category>` | `by_status` | Directory layout: `by_status` (status by dir), `flat`, or `by_category` (dir = area, with `per_category` naming) (env: `ADROIT_LAYOUT`; overrides config) |
-| `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme (env: `ADROIT_THEME`; overrides config) |
-| `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
-| `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
-| `--date-source <auto\|git\|filesystem>` | `auto` | Where ADR dates/lifecycle come from: `auto` (git when available, else filesystem), `git` (require git; warn if unavailable/shallow), `filesystem` (never shell git) (env: `ADROIT_DATE_SOURCE`; overrides config) |
+| `--layout <by_status\|by_category\|flat>` | `by_status` | Directory layout: `by_status` (status by dir), `by_category` (dir = area, with `per_category` naming), or `flat` (env: `ADROIT_LAYOUT`; overrides config) |
 | `--naming <sequential\|date\|uuid\|per_category>` | `sequential` | How ADR identifiers/filenames are formed (env: `ADROIT_NAMING`; overrides config). See [Naming schemes](./adr-format.md#naming-schemes) |
+| `--date-source <auto\|git\|filesystem>` | `auto` | Where ADR dates/lifecycle come from: `auto` (git when available, else filesystem), `git` (require git; warn if unavailable/shallow), `filesystem` (never shell git) (env: `ADROIT_DATE_SOURCE`; overrides config) |
 | `--relink-scope <all\|self\|none>` | `all` | How much a status-change move auto-relinks: `all` (heal every inbound link), `self` (only the moved file's own links), `none` (move only). `self`/`none` defer the rest to a post-merge `adroit relink` (env: `ADROIT_RELINK_SCOPE`; overrides config). See [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching) |
-| `--version` | | Print version information |
-| `--help` | | Print help |
 
-All of these flags are **global** — they work before *or* after the subcommand
-(`adroit --dir X list` and `adroit list --dir X` are equivalent).
+### Command defaults
+
+Top-level only — pass them *before* the subcommand (e.g. `adroit --theme gruvbox`)
+or, more usually, set them in config / `.env`. The environment variable binds
+everywhere regardless; only the flag is kept off each subcommand's `--help`,
+since just a few commands use each.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme; only the TUI and `serve` use it (env: `ADROIT_THEME`; overrides config) |
+| `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables. Used by `list`/`stats`/`check` (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
+| `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
+
+`--version` / `--help` (`-h` for a short summary) are available everywhere.
 
 Each also reads from an environment variable, so you don't have to pass it on
 every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
