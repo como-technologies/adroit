@@ -1,0 +1,83 @@
+# adroit ADR pipeline (GitHub Actions) — copy to .github/workflows/adr.yml
+#
+# Gates the ADR process and generates the review-kickoff brief on decision PRs.
+# See ci-templates/README.md. Two knobs:
+#   1. ADROIT_DIR below — your ADR directory.
+#   2. The "Install adroit" step — how the binary is obtained (not on crates.io
+#      yet; pin to a tag / vendor a binary / use an image as you prefer).
+
+name: ADR
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Run in the merge queue's speculative merge too. This is what catches an
+  # ADR-number collision BETWEEN branches: two PRs each adding NNNN are fine on
+  # their own branch, but `adroit check` sees BOTH 0009 files in the merge group
+  # and fails — ejecting the second PR. Enable the merge queue on `main` and mark
+  # "Validate ADRs" a required check for it (Settings → Branches → branch
+  # protection → Require merge queue + required status checks).
+  merge_group:
+
+env:
+  # Path to your ADR tree (relative to the repo root).
+  ADROIT_DIR: docs/adrs
+
+jobs:
+  # --- Gate every change: structure + index must stay consistent. ----------
+  validate:
+    name: Validate ADRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install adroit
+        run: cargo install --git https://github.com/como-technologies/adroit --locked
+
+      - name: Check ADR integrity
+        # status↔dir, dup numbers, parse, supersession links. Exits non-zero on
+        # errors only; a stale link (a deferred-relink PR not yet canonicalized)
+        # is a warning and does not fail the build.
+        run: adroit check
+
+      - name: Check SUMMARY.md is in sync
+        run: adroit index --check
+
+  # --- On a decision PR: post the review-kickoff as the PR description. ------
+  # Heuristic: a PR that moves a file out of proposed/ is a decision PR.
+  review-brief:
+    name: Review kickoff
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install adroit
+        run: cargo install --git https://github.com/como-technologies/adroit --locked
+
+      - name: Find the ADR being decided
+        id: adr
+        run: |
+          # Newest accepted/ or rejected/ file changed in this PR.
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          file=$(git diff --name-only "$base" "$head" -- \
+                 "$ADROIT_DIR/accepted" "$ADROIT_DIR/rejected" | head -n1)
+          if [ -z "$file" ]; then echo "decision=0" >> "$GITHUB_OUTPUT"; exit 0; fi
+          num=$(basename "$file" | grep -oE '^[0-9]+' | sed 's/^0*//')
+          echo "decision=1" >> "$GITHUB_OUTPUT"
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+
+      - name: Generate + post review-kickoff
+        if: steps.adr.outputs.decision == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          adroit review "${{ steps.adr.outputs.number }}" --output kickoff.md
+          gh pr edit "${{ github.event.pull_request.number }}" --body-file kickoff.md

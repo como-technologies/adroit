@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::adr::{AdrId, Created, Number, Status};
+use crate::adr::{AdrId, Created, Number, ReviewBy, Status};
+use crate::naming::AdrRef;
 
 /// The YAML frontmatter fields persisted to disk.
 ///
 /// Separate from `Adr` because the core model has runtime-only fields
 /// (`git_sha`, `body`) that don't belong in the YAML block.
+///
+/// The supersession and review fields are optional and only serialized when
+/// present (`skip_serializing_if`), so existing files stay clean and legacy
+/// files without them still parse (`#[serde(default)]`).
 #[derive(Debug, Serialize, Deserialize)]
 struct Frontmatter {
     id: AdrId,
@@ -13,6 +18,18 @@ struct Frontmatter {
     title: String,
     status: Status,
     created: Created,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supersedes: Option<AdrRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    superseded_by: Option<AdrRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relates_to: Vec<AdrRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<AdrRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    refines: Vec<AdrRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review_by: Option<ReviewBy>,
 }
 
 /// Render an ADR as a frontmatter + body string for writing to disk.
@@ -29,6 +46,12 @@ pub fn serialize(adr: &crate::adr::Adr) -> anyhow::Result<String> {
         title: adr.title.clone(),
         status: adr.status,
         created: adr.created,
+        supersedes: adr.supersedes.clone(),
+        superseded_by: adr.superseded_by.clone(),
+        relates_to: adr.relates_to.clone(),
+        depends_on: adr.depends_on.clone(),
+        refines: adr.refines.clone(),
+        review_by: adr.review_by,
     };
 
     let yaml = serde_yaml_ng::to_string(&fm)?;
@@ -52,11 +75,19 @@ pub fn deserialize(input: &str) -> anyhow::Result<crate::adr::Adr> {
     Ok(crate::adr::Adr {
         id: fm.id,
         number: Some(fm.number),
+        slug: None,
+        category: None,
         title: fm.title,
         status: fm.status,
         created: fm.created,
         body: body.trim_end().to_owned(),
         git_sha: None,
+        supersedes: fm.supersedes,
+        superseded_by: fm.superseded_by,
+        relates_to: fm.relates_to,
+        depends_on: fm.depends_on,
+        refines: fm.refines,
+        review_by: fm.review_by,
     })
 }
 
@@ -141,6 +172,7 @@ mod tests {
         for status in [
             Status::Proposed,
             Status::Accepted,
+            Status::Rejected,
             Status::Deprecated,
             Status::Superseded,
         ] {
@@ -159,5 +191,80 @@ mod tests {
         let text = serialize(&adr).unwrap();
         let parsed = deserialize(&text).unwrap();
         assert!(parsed.body.is_empty());
+    }
+
+    #[test]
+    fn supersession_fields_round_trip() {
+        let mut adr = sample_adr();
+        adr.supersedes = Some(AdrRef::Number(2));
+        adr.superseded_by = Some(AdrRef::Number(9));
+        let text = serialize(&adr).unwrap();
+        // Numeric refs serialize as bare numbers (byte-identical with the old
+        // `Option<Number>` fields).
+        assert!(text.contains("supersedes: 2"));
+        assert!(text.contains("superseded_by: 9"));
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(parsed.supersedes, Some(AdrRef::Number(2)));
+        assert_eq!(parsed.superseded_by, Some(AdrRef::Number(9)));
+    }
+
+    #[test]
+    fn supersession_slug_refs_round_trip() {
+        let mut adr = sample_adr();
+        adr.superseded_by = Some(AdrRef::Slug("20260601-adopt-x".into()));
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("superseded_by: 20260601-adopt-x"));
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(
+            parsed.superseded_by,
+            Some(AdrRef::Slug("20260601-adopt-x".into()))
+        );
+    }
+
+    #[test]
+    fn supersession_fields_absent_when_none() {
+        let adr = sample_adr();
+        let text = serialize(&adr).unwrap();
+        // Clean files: optional fields are not emitted when unset.
+        assert!(!text.contains("supersedes:"));
+        assert!(!text.contains("superseded_by:"));
+        assert!(!text.contains("relates_to:"));
+        assert!(!text.contains("depends_on:"));
+        assert!(!text.contains("refines:"));
+        assert!(!text.contains("review_by:"));
+    }
+
+    #[test]
+    fn typed_links_round_trip() {
+        let mut adr = sample_adr();
+        adr.depends_on = vec![AdrRef::Number(2), AdrRef::Number(3)];
+        adr.relates_to = vec![AdrRef::Slug("20260601-adopt-x".into())];
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("depends_on:"));
+        assert!(text.contains("relates_to:"));
+        // `refines` is empty → not emitted (clean files).
+        assert!(!text.contains("refines:"));
+
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(
+            parsed.depends_on,
+            vec![AdrRef::Number(2), AdrRef::Number(3)]
+        );
+        assert_eq!(
+            parsed.relates_to,
+            vec![AdrRef::Slug("20260601-adopt-x".into())]
+        );
+        assert!(parsed.refines.is_empty());
+    }
+
+    #[test]
+    fn review_by_round_trips() {
+        use crate::adr::ReviewBy;
+        let mut adr = sample_adr();
+        adr.review_by = Some("2026-07-01".parse::<ReviewBy>().unwrap());
+        let text = serialize(&adr).unwrap();
+        assert!(text.contains("review_by: 2026-07-01"));
+        let parsed = deserialize(&text).unwrap();
+        assert_eq!(parsed.review_by, adr.review_by);
     }
 }

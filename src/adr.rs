@@ -1,8 +1,10 @@
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
-use time::OffsetDateTime;
+use time::format_description::well_known::Iso8601;
+use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -16,6 +18,11 @@ pub struct AdrId(Uuid);
 impl AdrId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+
+    /// The underlying UUID (used by the `uuid` naming scheme).
+    pub fn uuid(self) -> Uuid {
+        self.0
     }
 }
 
@@ -89,21 +96,102 @@ impl fmt::Display for Created {
     }
 }
 
+/// A review deadline for a still-proposed ADR (a plain calendar date).
+///
+/// Serialized as an ISO-8601 `YYYY-MM-DD` string in both on-disk profiles, so
+/// it round-trips identically through YAML frontmatter and the markdown
+/// `Review by:` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ReviewBy(#[serde(with = "review_by_format")] Date);
+
+impl ReviewBy {
+    pub fn new(date: Date) -> Self {
+        Self(date)
+    }
+
+    pub fn get(self) -> Date {
+        self.0
+    }
+}
+
+impl fmt::Display for ReviewBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0.format(&Iso8601::DATE).map_err(|_| fmt::Error)?
+        )
+    }
+}
+
+impl FromStr for ReviewBy {
+    type Err = AdrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Date::parse(s.trim(), &Iso8601::DATE)
+            .map(Self)
+            .map_err(|_| AdrError::BadReviewDate(s.to_string()))
+    }
+}
+
+/// Serialize/deserialize a [`Date`] as an ISO-8601 `YYYY-MM-DD` string.
+mod review_by_format {
+    use super::*;
+    use serde::{Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(date: &Date, s: S) -> Result<S::Ok, S::Error> {
+        let text = date
+            .format(&Iso8601::DATE)
+            .map_err(serde::ser::Error::custom)?;
+        s.serialize_str(&text)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Date, D::Error> {
+        let text = String::deserialize(d)?;
+        Date::parse(text.trim(), &Iso8601::DATE).map_err(D::Error::custom)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
 
 /// The lifecycle status of an Architecture Decision Record.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumString, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Display,
+    EnumString,
+    Serialize,
+    Deserialize,
 )]
 #[strum(ascii_case_insensitive)]
 pub enum Status {
     #[default]
     Proposed,
     Accepted,
+    Rejected,
     Deprecated,
     Superseded,
+}
+
+impl Status {
+    /// All statuses in lifecycle order. Useful for iterating layout dirs
+    /// and rendering grouped indexes.
+    pub const ALL: [Status; 5] = [
+        Status::Proposed,
+        Status::Accepted,
+        Status::Rejected,
+        Status::Superseded,
+        Status::Deprecated,
+    ];
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +202,8 @@ pub enum Status {
 pub enum AdrError {
     #[error("ADR title must not be empty")]
     EmptyTitle,
+    #[error("invalid review date '{0}', expected ISO-8601 YYYY-MM-DD")]
+    BadReviewDate(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +215,15 @@ pub enum AdrError {
 pub struct Adr {
     /// Canonical unique identifier (UUID v4).
     pub id: AdrId,
-    /// Cosmetic sequential display number. `None` until assigned by the store on write.
+    /// Cosmetic sequential display number. `None` until assigned by the store on
+    /// write — and always `None` under the slug-based (date/uuid) naming schemes.
     pub number: Option<Number>,
+    /// Slug identity for the date / uuid / per-category naming schemes (the
+    /// filename stem, or `category/NNNN`). `None` under the sequential scheme.
+    pub slug: Option<String>,
+    /// Category (the containing subdirectory) under the `by_category` layout.
+    /// `None` under the flat / by-status layouts.
+    pub category: Option<String>,
     /// Short title describing the decision.
     pub title: String,
     /// Current lifecycle status.
@@ -138,6 +235,20 @@ pub struct Adr {
     /// The git commit SHA this ADR was last seen at.
     /// Not persisted to disk — populated at read time from git when available.
     pub git_sha: Option<String>,
+    /// Reference to an ADR that this record supersedes (the older decision).
+    /// Scheme-agnostic ([`AdrRef`]) so it works under date/uuid naming too.
+    pub supersedes: Option<crate::naming::AdrRef>,
+    /// Reference to an ADR that supersedes this record (the newer decision).
+    pub superseded_by: Option<crate::naming::AdrRef>,
+    /// Typed relational links to other ADRs (scheme-agnostic [`AdrRef`]s), which
+    /// flow into the graph as distinct edge kinds. Persisted in the frontmatter
+    /// profile; empty under the markdown profile.
+    pub relates_to: Vec<crate::naming::AdrRef>,
+    pub depends_on: Vec<crate::naming::AdrRef>,
+    pub refines: Vec<crate::naming::AdrRef>,
+    /// Optional review deadline. When a still-`Proposed` ADR is past this date
+    /// it is flagged as review-due by the query layer.
+    pub review_by: Option<ReviewBy>,
 }
 
 impl Adr {
@@ -151,12 +262,31 @@ impl Adr {
         Ok(Self {
             id: AdrId::default(),
             number: None,
+            slug: None,
+            category: None,
             title,
             status: Status::default(),
             created: Created::default(),
             body: String::new(),
             git_sha: None,
+            supersedes: None,
+            superseded_by: None,
+            relates_to: Vec::new(),
+            depends_on: Vec::new(),
+            refines: Vec::new(),
+            review_by: None,
         })
+    }
+
+    /// This ADR's scheme-agnostic display/reference identity. `Number` when a
+    /// sequential number is set, else the `Slug` (date/uuid). An unassigned ADR
+    /// (neither set, before the store writes it) reports `Number(0)`.
+    pub fn reference(&self) -> crate::naming::AdrRef {
+        match (self.number, &self.slug) {
+            (Some(n), _) => crate::naming::AdrRef::Number(n.get()),
+            (None, Some(s)) => crate::naming::AdrRef::Slug(s.clone()),
+            (None, None) => crate::naming::AdrRef::Number(0),
+        }
     }
 }
 
@@ -224,11 +354,25 @@ mod tests {
         assert_eq!("PROPOSED".parse::<Status>().unwrap(), Status::Proposed);
         assert_eq!("Deprecated".parse::<Status>().unwrap(), Status::Deprecated);
         assert_eq!("superseded".parse::<Status>().unwrap(), Status::Superseded);
+        assert_eq!("rejected".parse::<Status>().unwrap(), Status::Rejected);
     }
 
     #[test]
     fn status_parse_invalid() {
         assert!("invalid".parse::<Status>().is_err());
+    }
+
+    #[test]
+    fn review_by_round_trips_iso_date() {
+        let rb: ReviewBy = "2026-06-15".parse().unwrap();
+        assert_eq!(rb.to_string(), "2026-06-15");
+        assert_eq!(rb.get().year(), 2026);
+    }
+
+    #[test]
+    fn review_by_rejects_bad_date() {
+        assert!("not-a-date".parse::<ReviewBy>().is_err());
+        assert!("2026/06/15".parse::<ReviewBy>().is_err());
     }
 
     #[test]

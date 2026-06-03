@@ -1,21 +1,374 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::adr::Status;
+use crate::format::Format;
+use crate::naming::NamingScheme;
+
+/// On-disk directory layout for a store.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum Layout {
+    /// ADRs grouped into per-status subdirectories (status by directory). Default.
+    #[default]
+    ByStatus,
+    /// ADRs grouped into per-**category** subdirectories (the directory is the
+    /// area, not the status). Status lives in the `## Status` section / banner,
+    /// and numbering is per-category (pairs with the `per_category` naming
+    /// scheme). Used for MADR-style category folders.
+    ByCategory,
+    /// All ADRs in one flat directory (the original adroit layout).
+    Flat,
+}
+
+/// Color theme for the TUI markdown preview.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum MarkdownTheme {
+    /// 16-color ANSI palette — respects the user's terminal colors. Default.
+    #[default]
+    Default,
+    /// Gruvbox (true-color), matching the house mdBook/doxygen theme.
+    Gruvbox,
+}
+
+/// Where adroit reads ADR creation / lifecycle dates from.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum DateSource {
+    /// Git history when the ADR dir is a git work tree, else the filesystem.
+    /// Adaptive and silent — the default.
+    #[default]
+    Auto,
+    /// Require git history: warn once (then fall back) when it's unavailable or
+    /// the clone is shallow, so a CI misconfiguration is loud, not silent.
+    Git,
+    /// Filesystem only — never shell `git` (mtime / authored dates, no
+    /// reconstructed lifecycle timeline). Fast and dependency-free.
+    Filesystem,
+}
+
+/// How much a status-change *move* auto-relinks cross-ADR links.
+///
+/// In `by_status`, a status change moves the ADR between directories, which
+/// strands relative links to/from it. The default heals every link immediately.
+/// Concurrent-PR teams instead defer the repo-wide heal to a single
+/// `adroit relink` on `main` (so a status-change PR touches only its own ADR and
+/// two decision PRs never collide on shared neighbors) — see the "heal-on-main"
+/// workflow in the docs. The explicit `adroit relink` command is always
+/// full-scope regardless of this setting.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum RelinkScope {
+    /// Heal every inbound link on a move (today's behavior). Best for a single
+    /// author / no concurrent PRs. Default.
+    #[default]
+    All,
+    /// Fix only the *moved* file's own outbound links — leave neighbors for a
+    /// post-merge `adroit relink`. The moved ADR stays internally valid, and a
+    /// status-change PR touches only that one file. Recommended for branching
+    /// teams. Serialized as `self`.
+    #[strum(serialize = "self")]
+    #[serde(rename = "self")]
+    #[value(name = "self")]
+    SelfOnly,
+    /// Move only — defer all link fixing to a post-merge `adroit relink`.
+    None,
+}
+
 /// Application configuration, persisted as YAML.
-#[derive(Debug, Default, Serialize, Deserialize)]
+///
+/// New keys all carry serde defaults so older config files keep loading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// ADR directory path. Supports `~` and `$ENV_VAR` expansion.
     /// Relative paths resolve from the XDG data directory
     /// (typically `~/.local/share/adroit/`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
 
     /// Preferred editor command (e.g. `"vim"`, `"code --wait"`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+
+    /// On-disk serialization profile (default: markdown).
+    pub format: Format,
+
+    /// On-disk directory layout (default: by_status).
+    pub layout: Layout,
+
+    /// Map from status to the directory name used in `by_status` layout.
+    /// Defaults to lowercase status names.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub status_dirs: BTreeMap<Status, String>,
+
+    /// Template used when scaffolding new ADRs (default: `madr`).
+    pub default_template: String,
+
+    /// Directory of custom named templates (`<name>.md`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub templates_dir: Option<PathBuf>,
+
+    /// Status assigned to newly created ADRs (default: Proposed).
+    pub default_status: Status,
+
+    /// Open `$EDITOR` automatically after `new` (default: true).
+    pub open_on_new: bool,
+
+    /// Path to a SUMMARY.md to regenerate on `index` (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_path: Option<PathBuf>,
+
+    /// Default review period length in business days for `review` (default: 3).
+    pub review_days: u32,
+
+    /// Default quorum (approvals required) for `review` (default: 3).
+    pub review_quorum: u32,
+
+    /// A still-`Proposed` ADR older than this many days (by its creation date)
+    /// is flagged **review-due** even without an explicit `review_by` deadline,
+    /// so an aging backlog surfaces on its own. `0` disables age-based flagging
+    /// (deadline-only). Default: 30.
+    pub review_overdue_days: u32,
+
+    /// Color theme for the TUI markdown preview (default: `default`/ANSI).
+    pub tui_theme: MarkdownTheme,
+
+    /// Where ADR creation / lifecycle dates come from: `auto` (git when
+    /// available, else filesystem), `git` (require git; warn if unavailable or
+    /// shallow), or `filesystem` (never shell git). Default: `auto`.
+    pub date_source: DateSource,
+
+    /// How ADR identifiers / filenames are formed: `sequential` (NNNN, default),
+    /// `date` (YYYYMMDD-title), `uuid`, or `per_category` (per-directory NNNN).
+    pub naming: NamingScheme,
+
+    /// How much a status-change move auto-relinks: `all` (heal every inbound
+    /// link, default), `self` (only the moved file's own links — defer the rest
+    /// to a post-merge `adroit relink`), or `none` (move only). Default: `all`.
+    pub relink_scope: RelinkScope,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            editor: None,
+            format: Format::default(),
+            layout: Layout::default(),
+            status_dirs: BTreeMap::new(),
+            default_template: "madr".to_string(),
+            default_status: Status::default(),
+            open_on_new: true,
+            templates_dir: None,
+            summary_path: None,
+            review_days: 3,
+            review_quorum: 3,
+            review_overdue_days: 30,
+            tui_theme: MarkdownTheme::default(),
+            date_source: DateSource::default(),
+            naming: NamingScheme::default(),
+            relink_scope: RelinkScope::default(),
+        }
+    }
+}
+
+impl Config {
+    /// Return the directory name for a status, honoring `status_dirs`
+    /// overrides and falling back to the lowercase status name.
+    pub fn dir_for(&self, status: Status) -> String {
+        self.status_dirs
+            .get(&status)
+            .cloned()
+            .unwrap_or_else(|| status.to_string().to_lowercase())
+    }
+
+    /// Current value of a scalar config `key` as a string (for `adroit config`),
+    /// or `None` for an unset optional (`dir`/`editor`) or an unknown key.
+    pub fn get_str(&self, key: &str) -> Option<String> {
+        Some(match key {
+            "dir" => self.dir.as_ref()?.to_string_lossy().into_owned(),
+            "editor" => self.editor.clone()?,
+            "format" => self.format.to_string(),
+            "layout" => self.layout.to_string(),
+            "default_template" => self.default_template.clone(),
+            "default_status" => self.default_status.to_string(),
+            "open_on_new" => self.open_on_new.to_string(),
+            "review_days" => self.review_days.to_string(),
+            "review_quorum" => self.review_quorum.to_string(),
+            "review_overdue_days" => self.review_overdue_days.to_string(),
+            "tui_theme" => self.tui_theme.to_string(),
+            "date_source" => self.date_source.to_string(),
+            "naming" => self.naming.to_string(),
+            "relink_scope" => self.relink_scope.to_string(),
+            _ => return None,
+        })
+    }
+
+    /// Set a scalar config `key` from a string, validating the value. Returns a
+    /// human error for an unknown key or an invalid value.
+    pub fn set_str(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let bad = |what: &str| format!("invalid {what} `{value}`");
+        match key {
+            "dir" => self.dir = Some(PathBuf::from(value)),
+            "editor" => self.editor = Some(value.to_string()),
+            "format" => {
+                self.format = value
+                    .parse()
+                    .map_err(|_| bad("format (markdown|frontmatter)"))?
+            }
+            "layout" => {
+                self.layout = value
+                    .parse()
+                    .map_err(|_| bad("layout (by_status|by_category|flat)"))?
+            }
+            "default_template" => self.default_template = value.to_string(),
+            "default_status" => self.default_status = value.parse().map_err(|_| bad("status"))?,
+            "open_on_new" => self.open_on_new = value.parse().map_err(|_| bad("boolean"))?,
+            "review_days" => self.review_days = value.parse().map_err(|_| bad("number"))?,
+            "review_quorum" => self.review_quorum = value.parse().map_err(|_| bad("number"))?,
+            "review_overdue_days" => {
+                self.review_overdue_days = value.parse().map_err(|_| bad("number"))?
+            }
+            "tui_theme" => {
+                self.tui_theme = value.parse().map_err(|_| bad("theme (default|gruvbox)"))?
+            }
+            "date_source" => {
+                self.date_source = value
+                    .parse()
+                    .map_err(|_| bad("date source (auto|git|filesystem)"))?
+            }
+            "naming" => {
+                self.naming = value
+                    .parse()
+                    .map_err(|_| bad("naming scheme (sequential|date|uuid|per_category)"))?
+            }
+            "relink_scope" => {
+                self.relink_scope = value
+                    .parse()
+                    .map_err(|_| bad("relink scope (all|self|none)"))?
+            }
+            _ => return Err(format!("unknown config key `{key}`")),
+        }
+        Ok(())
+    }
+}
+
+/// The scalar config keys `adroit config` shows / gets / sets, in display order.
+pub const CONFIG_KEYS: &[&str] = &[
+    "dir",
+    "editor",
+    "format",
+    "layout",
+    "default_template",
+    "default_status",
+    "open_on_new",
+    "review_days",
+    "review_quorum",
+    "review_overdue_days",
+    "tui_theme",
+    "date_source",
+    "naming",
+    "relink_scope",
+];
+
+/// The environment variable that overrides a config key (for `.env` writes and
+/// source reporting), or `None` for keys with no env override.
+pub fn env_var_for(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "dir" => "ADROIT_DIR",
+        "format" => "ADROIT_FORMAT",
+        "layout" => "ADROIT_LAYOUT",
+        "tui_theme" => "ADROIT_THEME",
+        "default_template" => "ADROIT_TEMPLATE",
+        "review_overdue_days" => "ADROIT_REVIEW_OVERDUE_DAYS",
+        "date_source" => "ADROIT_DATE_SOURCE",
+        "naming" => "ADROIT_NAMING",
+        "relink_scope" => "ADROIT_RELINK_SCOPE",
+        _ => return None,
+    })
+}
+
+/// Upsert `KEY=value` into a `.env`-style file: replace the first active (un-
+/// commented) `KEY=` line, else append. Other lines (incl. comments) are kept.
+/// Creates the file if missing.
+pub fn upsert_env_file(path: &std::path::Path, key: &str, value: &str) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let prefix = format!("{key}=");
+    let new_line = format!("{key}={value}");
+    if let Some(slot) = lines
+        .iter_mut()
+        .find(|l| l.trim_start().starts_with(&prefix))
+    {
+        *slot = new_line;
+    } else {
+        lines.push(new_line);
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    std::fs::write(path, out)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -225,21 +578,30 @@ pub fn default_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".adroit"))
 }
 
+/// Expand a leading `~` and any `$VAR` in a path, falling back to the original
+/// on error. A no-op for a path with neither (e.g. one the shell already
+/// expanded, or a plain relative path).
+fn expand_path(raw: &std::path::Path) -> PathBuf {
+    shellexpand::full(&raw.to_string_lossy())
+        .map(|s| PathBuf::from(s.as_ref()))
+        .unwrap_or_else(|_| raw.to_path_buf())
+}
+
 /// Resolve the ADR directory from the precedence chain:
 /// CLI flag > config file > XDG data directory.
 ///
-/// - **CLI paths** are used as-is (the shell expands `~` and `$VAR` before
-///   we see them, and relative paths are intentionally CWD-relative).
-/// - **Config paths** undergo tilde / env-var expansion, then absolute paths
-///   are used directly while relative paths resolve against [`default_dir`].
+/// - **CLI / env paths** are tilde / env-var expanded, but relative paths stay
+///   CWD-relative. A `--dir` typed at the shell is already expanded, but an
+///   `ADROIT_DIR=~/foo` sourced from a `.env` reaches clap *literally* — without
+///   expanding it here, the `~` becomes a stray directory name.
+/// - **Config paths** undergo the same expansion, then absolute paths are used
+///   directly while relative paths resolve against [`default_dir`].
 pub fn resolve_dir(cli_dir: Option<PathBuf>, config: &Config) -> PathBuf {
     if let Some(dir) = cli_dir {
-        return dir;
+        return expand_path(&dir);
     }
     if let Some(ref raw) = config.dir {
-        let expanded = shellexpand::full(&raw.to_string_lossy())
-            .map(|s| PathBuf::from(s.as_ref()))
-            .unwrap_or_else(|_| raw.clone());
+        let expanded = expand_path(raw);
         if expanded.is_absolute() {
             return expanded;
         }
@@ -320,6 +682,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cli_tilde_expands() {
+        // `ADROIT_DIR=~/foo` from a `.env` reaches clap literally (the shell
+        // never sees it), so resolve_dir must expand the `~` itself — otherwise
+        // it becomes a stray `~` directory.
+        let config = Config::default();
+        let result = resolve_dir(Some(PathBuf::from("~/my-adrs")), &config);
+        assert!(result.is_absolute());
+        assert!(result.ends_with("my-adrs"));
+        assert!(!result.to_string_lossy().contains('~'));
+    }
+
+    #[test]
     fn resolve_falls_back_to_xdg_data_dir() {
         let config = Config::default();
         let result = resolve_dir(None, &config);
@@ -346,11 +720,61 @@ mod tests {
         let config = Config {
             dir: Some(PathBuf::from("my/adrs")),
             editor: Some("vim".to_string()),
+            ..Config::default()
         };
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let parsed: Config = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(parsed.dir, config.dir);
         assert_eq!(parsed.editor, config.editor);
+        assert_eq!(parsed.format, config.format);
+        assert_eq!(parsed.layout, config.layout);
+    }
+
+    #[test]
+    fn defaults_are_markdown_by_status() {
+        let config = Config::default();
+        assert_eq!(config.format, Format::Markdown);
+        assert_eq!(config.layout, Layout::ByStatus);
+        assert_eq!(config.default_template, "madr");
+        assert_eq!(config.default_status, Status::Proposed);
+        assert!(config.open_on_new);
+    }
+
+    #[test]
+    fn dir_for_status_defaults_to_lowercase() {
+        let config = Config::default();
+        assert_eq!(config.dir_for(Status::Proposed), "proposed");
+        assert_eq!(config.dir_for(Status::Superseded), "superseded");
+        assert_eq!(config.dir_for(Status::Rejected), "rejected");
+    }
+
+    #[test]
+    fn missing_keys_use_defaults() {
+        // A legacy config with only dir/editor must still load.
+        let yaml = "dir: ~/old-adrs\neditor: nano\n";
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(config.format, Format::Markdown);
+        assert_eq!(config.layout, Layout::ByStatus);
+        assert_eq!(config.default_template, "madr");
+        // Review keys absent from a legacy config fall back to defaults.
+        assert_eq!(config.review_days, 3);
+        assert_eq!(config.review_quorum, 3);
+    }
+
+    #[test]
+    fn review_defaults() {
+        let config = Config::default();
+        assert_eq!(config.review_days, 3);
+        assert_eq!(config.review_quorum, 3);
+        assert_eq!(config.review_overdue_days, 30);
+    }
+
+    #[test]
+    fn date_source_defaults_to_auto() {
+        assert_eq!(Config::default().date_source, DateSource::Auto);
+        // Legacy configs without the key still load.
+        let cfg: Config = serde_yaml_ng::from_str("dir: ~/x\n").unwrap();
+        assert_eq!(cfg.date_source, DateSource::Auto);
     }
 
     #[test]
@@ -386,5 +810,56 @@ mod tests {
         let config = Config::default();
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         assert!(!yaml.contains("editor"));
+    }
+
+    #[test]
+    fn config_get_set_str_round_trip_and_validation() {
+        let mut c = Config::default();
+        assert_eq!(c.get_str("layout").as_deref(), Some("by_status"));
+        assert_eq!(c.get_str("date_source").as_deref(), Some("auto"));
+        // relink_scope defaults to `all` and round-trips `self`/`none`.
+        assert_eq!(c.get_str("relink_scope").as_deref(), Some("all"));
+        c.set_str("relink_scope", "self").unwrap();
+        assert_eq!(c.get_str("relink_scope").as_deref(), Some("self"));
+        c.set_str("relink_scope", "none").unwrap();
+        assert_eq!(c.get_str("relink_scope").as_deref(), Some("none"));
+        c.set_str("layout", "flat").unwrap();
+        c.set_str("review_overdue_days", "45").unwrap();
+        assert_eq!(c.get_str("layout").as_deref(), Some("flat"));
+        assert_eq!(c.get_str("review_overdue_days").as_deref(), Some("45"));
+        // Validation + unknown keys.
+        assert!(c.set_str("layout", "sideways").is_err());
+        assert!(c.set_str("relink_scope", "partial").is_err());
+        assert!(c.set_str("review_days", "lots").is_err());
+        assert!(c.set_str("bogus", "x").is_err());
+        assert_eq!(c.get_str("bogus"), None);
+        // Unset optionals read as None.
+        assert_eq!(c.get_str("editor"), None);
+    }
+
+    #[test]
+    fn env_var_mapping() {
+        assert_eq!(env_var_for("layout"), Some("ADROIT_LAYOUT"));
+        assert_eq!(env_var_for("date_source"), Some("ADROIT_DATE_SOURCE"));
+        assert_eq!(env_var_for("relink_scope"), Some("ADROIT_RELINK_SCOPE"));
+        assert_eq!(
+            env_var_for("review_overdue_days"),
+            Some("ADROIT_REVIEW_OVERDUE_DAYS")
+        );
+        assert_eq!(env_var_for("editor"), None); // no env override
+    }
+
+    #[test]
+    fn upsert_env_replaces_or_appends_preserving_other_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(".env");
+        std::fs::write(&p, "# keep me\nADROIT_DIR=/x\n").unwrap();
+        upsert_env_file(&p, "ADROIT_LAYOUT", "flat").unwrap(); // append
+        upsert_env_file(&p, "ADROIT_DIR", "/y").unwrap(); // replace
+        let out = std::fs::read_to_string(&p).unwrap();
+        assert!(out.contains("ADROIT_DIR=/y"));
+        assert!(!out.contains("ADROIT_DIR=/x"));
+        assert!(out.contains("ADROIT_LAYOUT=flat"));
+        assert!(out.contains("# keep me"));
     }
 }

@@ -3,26 +3,70 @@ name = "adroit"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "A snappy TUI for managing Architecture Decision Records"
+description = "A snappy tool for managing Architecture Decision Records"
+
+[features]
+# `tui` is on by default so `adroit` (no subcommand) launches the interactive
+# TUI for dogfooding. The core lib + CLI build with `--no-default-features`
+# and pull in NO ratatui/crossterm — the read (`query`/`view`) and write
+# (`store`) layers never depend on the terminal UI.
+default = ["tui"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:the-other-tui-markdown"]
+# `web` is off by default because it needs the Vue build (`just web-build`).
+# It pulls in the async/web stack only when enabled; the core lib + CLI
+# (`--no-default-features`) and the TUI never depend on axum/tokio.
+web = [
+    "dep:axum",
+    "dep:tokio",
+    "dep:tokio-stream",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:pulldown-cmark",
+    "dep:rust-embed",
+    "dep:mime_guess",
+    "dep:serde_json",
+    "dep:notify",
+]
+the-other-tui-markdown = ["dep:the-other-tui-markdown"]
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-crossterm = "0.29"
+clap = { version = "4", features = ["derive", "env"] }
+crossterm = { version = "0.29", optional = true }
 dialoguer = "0.12"
 directories = "6"
+dotenvy = "0.15"
 edit = "0.1"
-ratatui = "0.30"
+ratatui = { version = "0.30", optional = true }
 serde = { version = "1", features = ["derive"] }
 shellexpand = "3"
 serde_yaml_ng = "0.10"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
-time = { version = "0.3", features = ["serde-human-readable", "formatting", "parsing", "macros"] }
+time = { version = "0.3", features = ["serde-human-readable", "formatting", "parsing", "macros", "local-offset"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 which = "8"
+
+# web feature only (read-only dashboard: Axum JSON API + embedded Vue SPA)
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"], optional = true }
+# Bridges the live-reload `broadcast` channel into an SSE response stream.
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+tower-http = { version = "0.6", features = ["trace"], optional = true }
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"], optional = true }
+rust-embed = { version = "8", optional = true }
+mime_guess = { version = "2", optional = true }
+serde_json = { version = "1", optional = true }
+# Filesystem watcher driving auto live-reload (recursive watch on the ADR dir).
+notify = { version = "8", optional = true }
+# tui feature only: renders GitHub-Flavored Markdown into a ratatui Text for the
+# preview pane. Targets ratatui-core 0.1 (the 0.30-era core) — no duplicate ratatui.
+the-other-tui-markdown = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+# Used by the web feature's request-level tests (BodyExt::collect on responses).
+http-body-util = "0.1"

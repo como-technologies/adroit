@@ -1,0 +1,87 @@
+# adroit ADR pipeline (GitLab CI) — copy to your repo root, or `include:` it.
+#
+# Gates the ADR process and generates the review-kickoff brief on decision MRs.
+# See ci-templates/README.md. Two knobs:
+#   1. ADROIT_DIR below — your ADR directory.
+#   2. before_script — how `adroit` is obtained (not on crates.io yet; pin to a
+#      tag / vendor a binary / use a prebuilt image as you prefer).
+
+variables:
+  # Path to your ADR tree (relative to the repo root).
+  ADROIT_DIR: docs/adrs
+
+default:
+  image: rust:latest
+  before_script:
+    - cargo install --git https://gitlab.com/your-org/adroit --locked || true
+    # ^ adjust the source; or `apk add`/`curl` a prebuilt binary into PATH.
+
+stages:
+  - validate
+  - review
+  - relink
+
+# --- Gate every change: structure + index must stay consistent. ------------
+# NOTE: to catch ADR-number collisions BETWEEN branches (two MRs each adding the
+# same NNNN), `adroit check` must run on the *merged* result, not the source
+# branch alone. Enable "Merged results pipelines" (and ideally Merge trains) in
+# Settings → Merge requests. The `main` rule below is the post-merge safety net.
+adr:validate:
+  stage: validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - adroit check          # status↔dir, dup numbers, parse, supersession links
+    - adroit index --check  # SUMMARY.md in sync
+
+# --- On a decision MR: post the review-kickoff as the MR description. --------
+# Heuristic: an MR that moves a file into accepted/ or rejected/ is a decision MR.
+adr:review-brief:
+  stage: review
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - |
+      file=$(git diff --name-only "$CI_MERGE_REQUEST_DIFF_BASE_SHA" HEAD -- \
+             "$ADROIT_DIR/accepted" "$ADROIT_DIR/rejected" | head -n1)
+      if [ -z "$file" ]; then echo "Not a decision MR; skipping."; exit 0; fi
+      num=$(basename "$file" | grep -oE '^[0-9]+' | sed 's/^0*//')
+      adroit review "$num" --output kickoff.md
+      # Post kickoff.md as the MR description via the GitLab API.
+      body=$(cat kickoff.md)
+      curl --fail --silent --request PUT \
+        --header "PRIVATE-TOKEN: $ADR_BOT_TOKEN" \
+        --data-urlencode "description=$body" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID"
+  # Requires a project/group token in $ADR_BOT_TOKEN with api scope.
+
+# --- Heal-on-main: canonicalize cross-ADR links after each merge. -----------
+# The counterpart to `relink_scope = self`/`none`: decision MRs touch only their
+# own ADR (no neighbor rewrites → no conflicts), and this job is the single
+# deterministic place inbound links are recomputed. `adroit relink` is always
+# full-scope and idempotent (a no-op on a tidy repo). `[skip ci]` on the commit
+# prevents a push->relink loop. Requires $ADR_BOT_TOKEN (write_repository scope).
+adr:relink:
+  stage: relink
+  # Serialize: never let two relink runs race (the analog of GitHub's
+  # `concurrency` group) — `main` always converges to one canonical state.
+  resource_group: adr-relink
+  variables:
+    # Full clone so the bot's push isn't rejected as a shallow update.
+    GIT_DEPTH: "0"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_MESSAGE !~ /\[skip ci\]/'
+  script:
+    - adroit relink
+    - |
+      if git status --porcelain -- "$ADROIT_DIR" | grep -q .; then
+        git config user.name  "adroit-bot"
+        git config user.email "adroit-bot@example.com"
+        git add "$ADROIT_DIR"
+        git commit -m "chore(adr): canonicalize cross-ADR links [skip ci]"
+        git push "https://oauth2:$ADR_BOT_TOKEN@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" \
+          "HEAD:$CI_COMMIT_BRANCH"
+      else
+        echo "Links already canonical — nothing to commit."
+      fi

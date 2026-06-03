@@ -46,6 +46,14 @@ release:
 run *ARGS:
     cargo run -- {{ARGS}}
 
+# Build the Vue web dashboard SPA into web/dist (embedded by the `web` feature)
+web-build:
+    cd web && npm install && npm run build
+
+# Build the SPA, then run the read-only web dashboard with live-reload
+serve *ARGS: web-build
+    cargo run --features web -- serve {{ARGS}}
+
 # Check for outdated dependencies
 crate-outdated:
     cargo outdated
@@ -60,7 +68,7 @@ crate-update:
 
 # Audit dependencies for known vulnerabilities
 crate-audit:
-    cargo audit --ignore RUSTSEC-2026-0097
+    cargo audit
 
 # Upgrade deps, update lockfile, audit, and test
 crate-refresh: crate-upgrade crate-update crate-audit test
@@ -79,12 +87,13 @@ doc:
 
 # Build the user manual (mdbook)
 book:
-    mdbook build book
+    mdbook build docs
+    @echo "Book built -> docs/book"
 
 # Serve the book locally with live reload
 book-serve:
-    mdbook serve book --open
+    mdbook serve docs --open
 
 # Clean built book artifacts
 book-clean:
-    rm -rf target/book
+    rm -rf docs/book

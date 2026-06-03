@@ -1,0 +1,474 @@
+# CLI Reference
+
+## Global options
+
+### Repo selection
+
+Global — inherited by every subcommand and shown under **Repo selection** in each
+`--help`. They work before *or* after the subcommand (`adroit --dir X list` and
+`adroit list --dir X` are equivalent).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir <PATH>` / `-d` | `~/.local/share/adroit/` | Path to the ADR directory (env: `ADROIT_DIR`; overrides config) |
+| `--format <markdown\|frontmatter>` | `markdown` | On-disk format profile (env: `ADROIT_FORMAT`; overrides config) |
+| `--layout <by_status\|by_category\|flat>` | `by_status` | Directory layout: `by_status` (status by dir), `by_category` (dir = area, with `per_category` naming), or `flat` (env: `ADROIT_LAYOUT`; overrides config) |
+| `--naming <sequential\|date\|uuid\|per_category>` | `sequential` | How ADR identifiers/filenames are formed (env: `ADROIT_NAMING`; overrides config). See [Naming schemes](./adr-format.md#naming-schemes) |
+| `--date-source <auto\|git\|filesystem>` | `auto` | Where ADR dates/lifecycle come from: `auto` (git when available, else filesystem), `git` (require git; warn if unavailable/shallow), `filesystem` (never shell git) (env: `ADROIT_DATE_SOURCE`; overrides config) |
+| `--relink-scope <all\|self\|none>` | `all` | How much a status-change move auto-relinks: `all` (heal every inbound link), `self` (only the moved file's own links), `none` (move only). `self`/`none` defer the rest to a post-merge `adroit relink` (env: `ADROIT_RELINK_SCOPE`; overrides config). See [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching) |
+
+### Command defaults
+
+Top-level only — pass them *before* the subcommand (e.g. `adroit --theme gruvbox`)
+or, more usually, set them in config / `.env`. The environment variable binds
+everywhere regardless; only the flag is kept off each subcommand's `--help`,
+since just a few commands use each.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme; only the TUI and `serve` use it (env: `ADROIT_THEME`; overrides config) |
+| `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables. Used by `list`/`stats`/`check` (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
+| `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
+
+`--version` / `--help` (`-h` for a short summary) are available everywhere.
+
+Each also reads from an environment variable, so you don't have to pass it on
+every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
+`ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE`, `ADROIT_DATE_SOURCE`,
+`ADROIT_NAMING` (and, for the web dashboard, `ADROIT_HOST` / `ADROIT_PORT`).
+A `.env` file in the current directory (or a parent) is loaded automatically
+at startup, so you can keep your repo location there. Copy the tracked
+`.env.example` to get started (your local `.env` is git-ignored):
+
+```sh
+cp .env.example .env
+# .env
+ADROIT_DIR=/path/to/your-repo/src/adrs
+```
+
+Precedence for the ADR directory, highest first: the `--dir` flag, then the
+`ADROIT_DIR` environment variable (a real shell variable wins over one from a
+`.env` file), then a `dir` entry in `~/.config/adroit/config.yaml`, then the
+default `~/.local/share/adroit/`.
+
+adroit defaults to the **markdown / by-status** profile (status encoded by directory). See [ADR Format](./adr-format.md) for details on both profiles.
+
+**Profile must match the repo.** adroit infers a repo's actual layout/format
+from disk; if that disagrees with your configured `layout`/`format`, every
+command **refuses to run** with a message (rather than silently hiding ADRs or
+corrupting numbering). Either set `--layout`/`--format` (or config/`.env`) to
+match, or run [`adroit migrate`](#adroit-migrate-yes) to convert the repo.
+
+## Commands
+
+### `adroit new <TITLE>`
+
+Create a new ADR with the given title. The ADR directory is created automatically if it doesn't exist. In markdown mode the file is scaffolded from a template and written into the `proposed/` directory, then opened in your editor.
+
+```sh
+adroit new "Use PostgreSQL for primary datastore"
+adroit new "Use Redis" --template nygard   # pick a template by name or path
+adroit new "Use Redis" --no-edit           # skip opening the editor
+```
+
+| Flag | Description |
+|---|---|
+| `--template <name\|path>` | Template to scaffold from (`madr`, `nygard`, or a file path) |
+| `--no-edit` | Do not open the editor after creating the ADR |
+| `--category <name>` / `-c` | Category subdirectory — **required** under the `by_category` layout, rejected otherwise |
+
+### `adroit list [--status <STATUS>]`
+
+List ADRs as a table showing number, status, and title. Recurses into all status directories in by-status mode. Pass `--status` to filter.
+
+```sh
+adroit list
+adroit list --status accepted
+```
+
+### `adroit show <ID>`
+
+Display a single ADR: its status, creation and
+last-modified dates, supersession links, path, body, and — when the repo is a
+git repository — a **History** timeline of its lifecycle (proposed → accepted /
+rejected / superseded), with the date and commit subject of each transition.
+
+`<ID>` is resolved through the configured [naming scheme](./adr-format.md#naming-schemes):
+a number (`9` or `ADR-0009`) under `sequential`, the filename slug under `date`,
+or a unique leading prefix of the UUID under `uuid`.
+
+```sh
+adroit show 1                       # sequential
+adroit show 20260601-adopt-postgresql   # date scheme
+```
+
+Dates and the timeline are read from **git history**, not the file: the first
+commit that added the ADR is its creation, and each status change is a directory
+move git records. Outside a git repository adroit falls back to the file's
+modification time, and the timeline is omitted. See
+[ADR Format](./adr-format.md#dates-come-from-git).
+
+### `adroit status <ID>`
+
+Print an ADR's current status — just the word, **lowercase** (`<ID>` resolved as
+in [`show`](#adroit-show-id)). It's a focused, scriptable getter: the output
+feeds straight into [`set-status`](#adroit-set-status-id-status) or a shell test,
+and matches the by-status directory names. For the full record use
+[`show`](#adroit-show-id) (whose `Status:` line is the capitalized display form).
+
+```sh
+adroit status 1            # -> proposed
+[ "$(adroit status 1)" = accepted ] && echo "ready to publish"
+```
+
+### `adroit set-status <ID> <STATUS>`
+
+Set the lifecycle status of an ADR (`<ID>` resolved as in [`show`](#adroit-show-id)).
+Status names are case-insensitive. In by-status markdown mode this **moves the
+file** to the matching status directory and rewrites the `## Status` section
+(minimal-diff), then reconciles cross-ADR links per
+[`relink_scope`](#configuration). Mirrors [`set-review`](#adroit-set-review-id-date).
+
+Valid statuses: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
+
+```sh
+adroit set-status 1 accepted
+```
+
+### `adroit supersede <NEW> <OLD>`
+
+Mark `<OLD>` as superseded by `<NEW>` in one command (each addressed as in
+[`show`](#adroit-show-id)): moves the old ADR to `superseded/` (or rewrites its
+status in place under `by_category`), writes `Superseded by [<NEW>](...)` into
+its status, and adds a reciprocal `Supersedes [<OLD>](...)` note to the new ADR.
+Works under every naming scheme — the supersession links carry the scheme's
+reference (a number or a slug).
+
+```sh
+adroit supersede 6 2                 # sequential
+adroit supersede 20260601-b 20260515-a   # date scheme
+```
+
+### `adroit set-review <ID> <DATE>`
+
+Set (or clear) an ADR's **review deadline** as an ISO-8601 `YYYY-MM-DD` date. A
+still-`Proposed` ADR whose deadline has passed is flagged **review-due** in
+`stats` and the web dashboard's "Review due" panel.
+
+In markdown mode this writes a `Review by: <date>` line into the `## Status`
+region (format-preserving — only that line changes). In frontmatter mode it sets
+the optional `review_by` field. Pass `--clear` to remove the deadline.
+
+```sh
+adroit set-review 3 2026-07-15   # propose a review by July 15
+adroit set-review 3 --clear      # remove the deadline
+```
+
+| Flag | Description |
+|---|---|
+| `--clear` | Remove the review deadline instead of setting one |
+
+### `adroit link <ID> <--relates-to|--depends-on|--refines> <TARGET>`
+
+Add (or remove with `--remove`) a **typed relational link** from `<ID>` to
+`<TARGET>` (both addressed as in [`show`](#adroit-show-id)). Exactly one of the
+three kind flags names the target. The link is recorded in `<ID>`'s frontmatter,
+listed by `adroit show`, and drawn as a distinct edge in the dashboard's
+relationship graph. Adding validates that the target exists.
+
+This is a **frontmatter-profile** feature; under the markdown profile it errors
+with a hint to run `adroit migrate --format frontmatter`. See
+[ADR Format → Relationships](./adr-format.md#relationships).
+
+```sh
+adroit link 6 --depends-on 2          # ADR-0006 depends on ADR-0002
+adroit link 6 --relates-to 4
+adroit link 6 --refines 3
+adroit link 6 --depends-on 2 --remove
+```
+
+| Flag | Description |
+|---|---|
+| `--relates-to <TARGET>` | A non-directional related link |
+| `--depends-on <TARGET>` | This ADR depends on the target |
+| `--refines <TARGET>` | This ADR refines / elaborates the target |
+| `--remove` | Remove the link instead of adding it |
+
+### `adroit search <TERM>`
+
+Case-insensitive search across ADR titles and bodies (recursive). Prints number, status, and title for each match.
+
+```sh
+adroit search postgres
+```
+
+### `adroit check`
+
+Validate the ADR repo and **exit non-zero if any error-severity problem is
+found** — a structural CI gate. Problems are listed on stderr. A clean repo
+prints `OK: N ADRs, no problems`; a repo with only warnings prints
+`OK: N ADRs, M warning(s)` and still exits 0 (so a deferred-relink PR branch,
+whose inbound links aren't canonicalized yet, isn't blocked). Only **errors**
+fail the build.
+
+It checks for:
+
+1. **Status ↔ directory mismatch** (by-status only): a file's `## Status`
+   section declares a status that disagrees with the directory it lives in. A
+   section with no explicit status word is fine (the directory is the source of
+   truth).
+2. **Duplicate identifiers**: two ADR files sharing the same identity under the
+   configured [naming scheme](./adr-format.md#naming-schemes) — the same `NNNN`
+   for `sequential`, or the same slug/uuid for `date`/`uuid`.
+3. **Unparseable files**: a `.md` ADR with no `# ADR-NNNN: Title` heading.
+4. **Broken supersession links**: a `Supersedes ADR-NNNN` / `Superseded by
+   ADR-NNNN` note referencing a number that doesn't exist in the repo.
+5. **Broken / stale cross-ADR links**: a relative `.md` link that points
+   somewhere other than its ADR's current home. The split is identity-based: if
+   the link names an ADR that still exists in the repo it's a **stale** link (a
+   **warning** — `adroit relink` fixes it); if it names no existing ADR it's a
+   **broken** link (an **error**). External URLs, anchors, and non-ADR links are
+   ignored.
+
+Of these, duplicate identifiers, status↔directory mismatch, unparseable files,
+broken supersession links, and broken links are **errors** (they fail `check`);
+a stale link is a **warning** (reported, but `check` still exits 0).
+
+In the flat / frontmatter profile there is no directory-implied status, so the
+directory-mismatch check is skipped; the others still apply.
+
+```sh
+adroit check
+```
+
+The same validation runs behind the web dashboard's **repo-health panel** (via
+`GET /api/check`), so the issues `check` reports on the command line also show up
+there — see [Web Dashboard](../usage/web.md).
+
+### `adroit relink`
+
+Rewrite every cross-ADR relative link so it points at the ADR's **current**
+location, then write back only the files that changed. Use it to repair links
+left stale by file moves done outside adroit (and as the post-merge "heal-on-main"
+CI step). Status changes (`status` / `supersede`) already relink automatically
+**under the default `relink_scope = all`**, so on a tidy repo this is a no-op
+(`Links already canonical — nothing to relink.`). Under `relink_scope = self` /
+`none` a status move leaves neighbors' inbound links for this command to fix —
+which is the point of running it on `main` after a merge (see
+[Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching)).
+This command is **always full-scope** regardless of `relink_scope`. Idempotent;
+links by external URL, anchor, or to non-ADR files are left untouched; ambiguous
+duplicate numbers are skipped (and flagged by `check`). Pass `--dry-run` to list
+the files/links that would change without writing anything.
+
+```sh
+adroit relink              # rewrite stale links in place
+adroit relink --dry-run    # show what would change, write nothing
+```
+
+### `adroit renumber <OLD> <NEW> [--file <PATH>]`
+
+Renumber a sequential ADR — to resolve a duplicate `NNNN` (e.g. two branches
+that each created `0009`). It renames the file (slug preserved), rewrites its
+`# ADR-NNNN:` heading, and **retargets + relabels every inbound reference**
+(`[ADR-OLD](…)` → `[ADR-NEW](…)`), then relinks. References are matched by
+filename, so a duplicate-numbered sibling with a different slug is left
+untouched.
+
+```sh
+adroit renumber 9 21                       # ADR-0009 -> ADR-0021
+# When two files share 0009, point at the one to move:
+adroit renumber 9 21 --file proposed/0009-adopt-crossplane.md
+```
+
+`<NEW>` must be unused; an ambiguous `<OLD>` (two files) errors unless you pass
+`--file`. (Applies to the sequential / per-category numbering schemes.)
+
+### `adroit migrate [--dry-run] [--yes]`
+
+Convert the repo on disk to the **configured** layout/format. The source profile
+is auto-detected; a layout change moves files between flat / by-status dirs
+(bytes preserved), a format change re-serializes markdown ↔ frontmatter, and
+cross-ADR links are fixed afterward (via `relink`). Filenames are kept as-is.
+
+Set the *target* with `--layout` / `--format` (or config / `.env`), then run
+migrate. It prints a **preview** by default (or with an explicit `--dry-run`);
+pass `--yes` to apply. `--dry-run` overrides `--yes`, so a preview is never
+destructive.
+
+```sh
+# Convert a by-status repo to flat:
+adroit --layout flat migrate          # preview
+adroit --layout flat migrate --yes    # apply
+
+# Convert markdown ADRs to the frontmatter profile:
+adroit --format frontmatter migrate --yes
+```
+
+Because adroit otherwise **refuses to operate** on a repo whose on-disk profile
+doesn't match your config (see below), `migrate` is the supported way to change
+your `layout`/`format` preference on an existing repo. It is idempotent (a repo
+already in the target profile reports nothing to do).
+
+### `adroit index [--check]`
+
+Regenerate the ADR section of `SUMMARY.md`, grouped by status, preserving the non-ADR parts of the file. If no `summary_path` is configured and no `SUMMARY.md` is found next to or one level above the ADR directory, the generated block is printed to stdout.
+
+With `--check`, adroit does **not** write: it compares what it *would* generate
+against the on-disk `SUMMARY.md` and exits non-zero if they differ (printing
+`SUMMARY.md is out of date — run \`adroit index\``), making it a CI gate for
+documentation drift. If no `SUMMARY.md` is found it prints a note and exits 0.
+
+```sh
+adroit index           # regenerate SUMMARY.md (or print the block)
+adroit index --check    # verify SUMMARY.md is up to date; non-zero if stale
+```
+
+| Flag | Description |
+|---|---|
+| `--check` | Verify `SUMMARY.md` is up to date without writing; exit non-zero if stale |
+
+### `adroit review <NUMBER>`
+
+Generate a **review-kickoff** document for an ADR — the doc the team writes when
+opening an ADR for formal review. It mirrors the hand-written artifact: an H1
+with the date and ADR number, a "What you're being asked to do" section, a
+**Key docs** table (the ADR, the ADR README, the review-process guide), the
+review timeline and quorum, what happens on the decision date, and a collapsible
+"What the MR changes" block. Placeholders (`[TODO: ...]`) are left for the
+proposer to fill in.
+
+This is **pure generation** — it performs no git operations and does not modify
+the ADR. The ADR is resolved by number through the store, so it works in
+by-status mode and errors cleanly if the number isn't found. Because the kickoff
+doc is built around the ADR number, `review` is **numeric-only** (requires a
+`sequential`/`per_category` scheme).
+
+Dates are computed from today using business days (weekends skipped):
+the review period runs from today to today + `--days` business days, and the
+decision date is the next business day after that.
+
+```sh
+adroit review 1                              # print to stdout
+adroit review 1 --days 5 --quorum 3          # 5-business-day window, quorum 3
+adroit review 1 --output review-kickoff.md   # write to a file
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--days <N>` | config `review_days` (3) | Review period length in business days |
+| `--quorum <N>` | config `review_quorum` (3) | Number of approvals required |
+| `--output <PATH>` | — | Write the doc to a file instead of stdout |
+
+### `adroit edit <ID>`
+
+Open an ADR in your editor (`<ID>` resolved as in [`show`](#adroit-show-id)).
+
+```sh
+adroit edit 1
+```
+
+adroit finds your editor using this precedence chain:
+
+1. The `$VISUAL` or `$EDITOR` environment variable (session override)
+2. The `editor` field in `config.yaml` (see [Configuration](#configuration))
+3. Auto-detection — probes your PATH for common editors (nano, vim, nvim, VS Code, etc.)
+4. Interactive prompt — if nothing is detected and you're in a terminal, adroit asks you to choose from the editors installed on your system. Your choice is saved to `config.yaml` so you're only asked once.
+
+### `adroit serve` (requires the `web` feature)
+
+Serve the read-only web dashboard (browse, search, stats, relationship graph,
+repo-health checks) over a local HTTP server. Built behind the `web` Cargo feature; without it the
+command prints a rebuild hint and exits. See [Web Dashboard](../usage/web.md).
+
+```sh
+cargo run --features web -- serve                      # http://127.0.0.1:8080
+cargo run --features web -- serve --host 0.0.0.0 --port 9000
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host <ADDR>` | `127.0.0.1` | Interface to bind (env: `ADROIT_HOST`) |
+| `--port <N>` | `8080` | Port to listen on (env: `ADROIT_PORT`) |
+
+### `adroit` (no command)
+
+Launch the interactive TUI (browse, triage, in-terminal body editing). The TUI
+opens the same ADR directory the CLI resolves — `adroit --dir X` launches the
+TUI against `X`. In a non-interactive context (no TTY) it prints a hint and
+exits instead of seizing the terminal. Built behind the `tui` Cargo feature
+(on by default); without it, a hint points you at the CLI subcommands.
+
+### `adroit config [show | get <key> | set <key> <value> [--local]]`
+
+Inspect or change configuration.
+
+- **`adroit config`** (or `config show`) lists every setting with its **resolved
+  value and source** — `flag`, `env`, `config` (set in `config.yaml`), or
+  `default` — which is the quickest way to answer "why is my layout `flat`?"
+  given the precedence chain (flag > env/`.env` > `config.yaml` > default).
+- **`adroit config get <key>`** prints one resolved value (scriptable).
+- **`adroit config set <key> <value>`** persists to `config.yaml` (validated
+  against the key's type). With **`--local`** it instead upserts `KEY=value` into
+  a `.env` in the current directory (a per-project / per-machine override) — only
+  for keys that have an environment variable.
+
+```sh
+adroit config                         # show all settings + where each came from
+adroit config get layout
+adroit config set date_source git     # -> ~/.config/adroit/config.yaml
+adroit config set layout flat --local # -> ./.env  (ADROIT_LAYOUT=flat)
+```
+
+`config` works even when the repo's on-disk profile doesn't match your config
+(it's about settings, not ADRs), so you can use it to diagnose and fix a
+mismatch. `config get`/`set` cover the **scalar** keys in the
+[Configuration](#configuration) table below; `status_dirs`, `templates_dir`, and
+`summary_path` are set by editing `config.yaml` directly.
+
+## Configuration
+
+adroit stores configuration in `~/.config/adroit/config.yaml` (XDG on Linux, platform-appropriate elsewhere). The file is created automatically on first run with your detected editor.
+
+```yaml
+editor: vim
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `dir` | path | XDG data dir | ADR directory. Supports `~` and `$ENV_VAR` expansion. |
+| `editor` | string | auto-detected | Preferred editor command. Include flags if needed (e.g. `code --wait`). |
+| `format` | `markdown`\|`frontmatter` | `markdown` | On-disk serialization profile. |
+| `layout` | `by_status`\|`flat`\|`by_category` | `by_status` | Directory layout. `by_category` makes each subdirectory an area (status lives in `## Status`); pairs with `per_category` naming. |
+| `status_dirs` | map | status name lowercased | Override the directory name for each status (by-status layout). |
+| `default_template` | string | `madr` | Template used by `new`. |
+| `templates_dir` | path | — | Directory of custom named templates (`<name>.md`). |
+| `default_status` | status | `Proposed` | Status assigned to new ADRs. |
+| `open_on_new` | bool | `true` | Open `$EDITOR` automatically after `new`. |
+| `summary_path` | path | discovered | Path to a `SUMMARY.md` to regenerate on `index`. |
+| `review_days` | int | `3` | Default review period (business days) for `review`. |
+| `review_quorum` | int | `3` | Default approvals required for `review`. |
+| `review_overdue_days` | int | `30` | A Proposed ADR older than this many days is flagged review-due even with no `review_by`. `0` disables age-based flagging. |
+| `tui_theme` | `default`\|`gruvbox` | `default` | Color theme for the TUI markdown preview. |
+| `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
+| `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
+| `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |
+
+All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
+
+### Path resolution for `dir`
+
+Relative paths in the config file resolve from the XDG data directory (typically `~/.local/share/adroit/`), not from CWD:
+
+```yaml
+# Relative — resolves to ~/.local/share/adroit/my-project/
+dir: my-project
+
+# Tilde — expands to your home directory
+dir: ~/decisions
+
+# Absolute — used as-is
+dir: /opt/company/adrs
+```
+
+The `--dir` CLI flag is different: it resolves relative paths from your current working directory, as you'd expect from a shell argument.
