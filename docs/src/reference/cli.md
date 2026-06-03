@@ -453,6 +453,18 @@ editor: vim
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 | `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
 | `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |
+| `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Opt-in forge integration (requires the `forge` feature build). `github` drives GitHub PRs + Issues. |
+| `forge.repo` | `owner/repo` | — | The provider slug (GitHub `owner/repo`). Required when a provider is set. |
+| `forge.host` | host | provider default | API host for self-managed / enterprise (`api.github.com` by default). |
+| `forge.branch_prefix` | string | `adr/` | Branch prefix `new --with-forge` generates (`adr/0021-…`). |
+| `forge.base_branch` | string | `main` | Base branch PRs target. |
+| `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. |
+
+Tokens are **never** stored in config — they come from the environment
+(`ADROIT_GITHUB_TOKEN`). The forge integration is opt-in per command via
+`--with-forge` on `new` / `set-status` / `supersede` (with `--dry-run` to preview
+and `--yes` to apply mutations like a PR merge), and the binary must be built
+`--features forge`.
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 

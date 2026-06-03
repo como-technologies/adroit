@@ -328,6 +328,51 @@ directory `main.rs` already resolved from `--dir`/config (same dir `serve`
 receives), so `adroit --dir X` opens the TUI against `X`. The store-opening seam
 is `tui::open_store(cfg, dir)`.
 
+## Forge integration (`forge` feature)
+
+Opt-in adapters that drive the *process* lifecycle (a tracker issue + a
+code-review PR/MR) alongside the ADR's *decision* lifecycle (issue #4). Gated
+behind the `forge` Cargo feature, which adds a small **blocking** HTTP client
+(`ureq`) — the core CLI stays synchronous; `--no-default-features`/`tui`/`web`
+never depend on `forge`.
+
+**Two roles, trait objects.** `src/forge/mod.rs` defines `Forge` (PR/MR host)
+and `Tracker` (issue host). A *same-system* provider implements both over one
+client + one token: `src/forge/github.rs` (`Github` is both, behind `Arc`,
+`ADROIT_GITHUB_TOKEN`); GitLab (`Provider::Gitlab`) is the same shape (Phase
+1b). A *split* setup (GitLab MRs + Jira issues) is reached later via the separate
+`tracker` selection. `src/forge/noop.rs` is the null-object adapter for previews.
+
+**Clean dispatch (two axes).** Compile-time: the `#[cfg(feature="forge")]` lives
+only on the `mod` line in `lib.rs` and on the `src/forge_hook.rs` facade (twin
+defs: real when on, no-op when off), so verbs (`cmd_new`/`cmd_set_status`/
+`cmd_supersede`) call `forge_hook::*` unconditionally — no `#[cfg]`/`if enabled`
+in the main paths. Runtime: `forge::open(&ForgeConfig)` is a **thin dispatcher**
+(`match Provider` → `github::open(cfg)`); each provider module owns its own
+construction (token env var, slug/host). Adding a provider = one match arm + one
+module. HTTP is behind the `HttpTransport` seam so adapters are tested with a
+`FakeTransport` (no network).
+
+**Verbs wired** (all opt-in via `--with-forge`, with migrate-style `--dry-run`/
+`--yes`; graceful-offline = warn + keep the local write; the ADR is the durable
+record): `new` creates the issue + a draft PR off an `adr/NNNN-…` branch
+(`src/git.rs` does branch/commit/push) and records both URLs in a
+format-preserving `## References` section (`format::upsert_reference`);
+`set-status accepted` verifies `review_quorum` approvals + CI then merges the PR
++ closes the issue (refuses if blocked; the whole op previews unless `--yes`);
+`set-status rejected`/`deprecated` close the PR + mark the issue won't-fix;
+`supersede` comments on + closes the old ADR's issue/PR. Each orchestration is
+split into a testable core (`run_new`/`run_status_change`) exercised with mock/
+noop adapters. **Not yet wired** (later phases): `check`/`list`/`stats`
+enrichment, `review`/`set-review` mirroring, `relink` URL patching, the `serve`
+panel, and the cross-cutting `publish`/`notify`/`init`/`auth` verbs.
+
+**Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
+`base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are
+env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
+`get_str`/`set_str`/`CONFIG_KEYS`. `just lint-forge`/`test-forge` (folded into
+`just ci`) cover the feature build.
+
 ## Conventions
 
 - Lib/bin separation: all logic in the library crate, `main.rs` is glue only
