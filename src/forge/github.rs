@@ -101,6 +101,35 @@ fn classify(resp: &HttpResponse) -> Result<(), ForgeError> {
     }
 }
 
+/// Roll up the Checks API `check_runs` array into one [`CiStatus`]. No runs ⇒
+/// `None` (CI isn't configured — don't block an accept on a phantom "pending");
+/// a definitive failing conclusion ⇒ `Failure`; any run not yet completed ⇒
+/// `Pending`; otherwise `Success` (all completed success/neutral/skipped).
+fn classify_check_runs(checks: &Value) -> CiStatus {
+    let runs = match checks["check_runs"].as_array() {
+        Some(r) if !r.is_empty() => r,
+        _ => return CiStatus::None,
+    };
+    let mut any_pending = false;
+    for r in runs {
+        if r["status"].as_str() != Some("completed") {
+            any_pending = true; // queued / in_progress
+            continue;
+        }
+        match r["conclusion"].as_str() {
+            Some("success" | "neutral" | "skipped") => {}
+            // failure / cancelled / timed_out / action_required / startup_failure
+            Some(_) => return CiStatus::Failure,
+            None => any_pending = true,
+        }
+    }
+    if any_pending {
+        CiStatus::Pending
+    } else {
+        CiStatus::Success
+    }
+}
+
 /// Pull GitHub's `{"message": …}` error string out of a body, else the raw text.
 fn message_of(body: &[u8]) -> String {
     serde_json::from_slice::<Value>(body)
@@ -225,16 +254,30 @@ impl Forge for Github {
         let ci = if sha.is_empty() {
             CiStatus::None
         } else {
+            // Legacy *commit statuses* first. The combined endpoint reports
+            // `state: "pending"` with `total_count: 0` for a repo that has no
+            // commit statuses, so only trust `state` when something reported one.
             let st = self.call(
                 "GET",
                 &format!("repos/{}/commits/{sha}/status", self.repo),
                 None,
             )?;
-            match st["state"].as_str() {
-                Some("success") => CiStatus::Success,
-                Some("pending") => CiStatus::Pending,
-                Some("failure" | "error") => CiStatus::Failure,
-                _ => CiStatus::None,
+            if st["total_count"].as_u64().unwrap_or(0) > 0 {
+                match st["state"].as_str() {
+                    Some("success") => CiStatus::Success,
+                    Some("pending") => CiStatus::Pending,
+                    Some("failure" | "error") => CiStatus::Failure,
+                    _ => CiStatus::None,
+                }
+            } else {
+                // No commit statuses — GitHub Actions (and other apps) report via
+                // the Checks API, so consult it; truly no checks ⇒ `None`.
+                let checks = self.call(
+                    "GET",
+                    &format!("repos/{}/commits/{sha}/check-runs", self.repo),
+                    None,
+                )?;
+                classify_check_runs(&checks)
             }
         };
         Ok(PrState {
@@ -385,7 +428,11 @@ mod tests {
                 200,
                 r#"[{"state":"APPROVED"},{"state":"COMMENTED"},{"state":"APPROVED"}]"#,
             ),
-            ("GET /commits/abc/status", 200, r#"{"state":"success"}"#),
+            (
+                "GET /commits/abc/status",
+                200,
+                r#"{"state":"success","total_count":1}"#,
+            ),
             (
                 "GET /pulls/42",
                 200,
@@ -396,5 +443,79 @@ mod tests {
         assert_eq!(st.approvals, 2);
         assert_eq!(st.ci, CiStatus::Success);
         assert!(!st.merged && st.draft);
+    }
+
+    #[test]
+    fn pr_state_maps_no_checks_to_none_not_pending() {
+        // The dogfood case: a repo with no commit statuses and no check runs.
+        // The combined-status endpoint returns pending/total_count:0; we must
+        // fall through to check-runs and report `None`, not a phantom `Pending`.
+        let gh = github(&[
+            ("GET /pulls/9/reviews", 200, r#"[]"#),
+            (
+                "GET /commits/def/status",
+                200,
+                r#"{"state":"pending","total_count":0}"#,
+            ),
+            (
+                "GET /commits/def/check-runs",
+                200,
+                r#"{"total_count":0,"check_runs":[]}"#,
+            ),
+            (
+                "GET /pulls/9",
+                200,
+                r#"{"merged":false,"draft":true,"head":{"sha":"def"}}"#,
+            ),
+        ]);
+        assert_eq!(gh.pr_state("9").unwrap().ci, CiStatus::None);
+    }
+
+    #[test]
+    fn pr_state_reads_ci_from_check_runs_when_no_commit_status() {
+        // GitHub Actions report via the Checks API, not commit statuses.
+        let gh = github(&[
+            ("GET /pulls/9/reviews", 200, r#"[]"#),
+            (
+                "GET /commits/def/status",
+                200,
+                r#"{"state":"pending","total_count":0}"#,
+            ),
+            (
+                "GET /commits/def/check-runs",
+                200,
+                r#"{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}"#,
+            ),
+            (
+                "GET /pulls/9",
+                200,
+                r#"{"merged":false,"draft":false,"head":{"sha":"def"}}"#,
+            ),
+        ]);
+        assert_eq!(gh.pr_state("9").unwrap().ci, CiStatus::Success);
+    }
+
+    #[test]
+    fn classify_check_runs_rolls_up_states() {
+        let none = serde_json::json!({"total_count":0,"check_runs":[]});
+        assert_eq!(classify_check_runs(&none), CiStatus::None);
+
+        let pending = serde_json::json!({"check_runs":[
+            {"status":"completed","conclusion":"success"},
+            {"status":"in_progress","conclusion":null}
+        ]});
+        assert_eq!(classify_check_runs(&pending), CiStatus::Pending);
+
+        let failing = serde_json::json!({"check_runs":[
+            {"status":"completed","conclusion":"success"},
+            {"status":"completed","conclusion":"failure"}
+        ]});
+        assert_eq!(classify_check_runs(&failing), CiStatus::Failure);
+
+        let success = serde_json::json!({"check_runs":[
+            {"status":"completed","conclusion":"success"},
+            {"status":"completed","conclusion":"skipped"}
+        ]});
+        assert_eq!(classify_check_runs(&success), CiStatus::Success);
     }
 }
