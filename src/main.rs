@@ -93,7 +93,30 @@ fn main() -> Result<()> {
         None
     };
 
+    // `open_or_create_with` creates the dir when it's missing. Capture whether
+    // it existed first, so we can flag a freshly-created dir — a typo'd `--dir` /
+    // `ADROIT_DIR` otherwise silently creates a stray empty repo and a read
+    // returns nothing with no error.
+    let dir_existed = dir.is_dir();
     let store = Store::open_or_create_with(&dir, opts)?;
+    if !dir_existed {
+        match &cli.command {
+            // `new` legitimately scaffolds a brand-new repo — a neutral note.
+            Some(Command::New { .. }) => {
+                eprintln!("Created new ADR directory {}", dir.display());
+            }
+            // Any other command against a non-existent dir means we're pointed at
+            // an empty/typo'd path; warn so an empty result isn't mistaken for an
+            // empty repo.
+            _ => {
+                eprintln!(
+                    "warning: ADR directory {} did not exist and was created empty \
+                     — check your --dir / ADROIT_DIR if you expected existing ADRs",
+                    dir.display()
+                );
+            }
+        }
+    }
 
     // Refuse to operate on a repo whose on-disk layout/format doesn't match the
     // configured one — it would silently hide ADRs or corrupt numbering.

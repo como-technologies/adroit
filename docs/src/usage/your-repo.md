@@ -45,6 +45,12 @@ setting has a matching `ADROIT_*` variable that works the same way (`ADROIT_FORM
 `ADROIT_HOST` / `ADROIT_PORT`). A real shell environment variable overrides the
 `.env` file.
 
+> **Heads-up:** `ADROIT_DIR` is tilde / `$VAR`-expanded too, so `ADROIT_DIR=~/repo/adrs`
+> works from a `.env` (the shell never sees it to expand the `~`). And if the
+> resolved directory doesn't already exist, adroit creates it and **prints a
+> warning** — so a typo'd path surfaces loudly instead of silently returning an
+> empty repo.
+
 **Or the user config (global default).** Set `dir` in
 `~/.config/adroit/config.yaml` so plain `adroit` commands target your repo:
 

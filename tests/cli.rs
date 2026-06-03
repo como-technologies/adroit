@@ -1432,6 +1432,44 @@ fn adroit_dir_env_var_sets_directory() {
         .stdout(predicate::str::contains("Env decision"));
 }
 
+#[test]
+fn read_command_warns_when_adr_dir_freshly_created() {
+    let tmp = TempDir::new().unwrap();
+
+    // A read command pointed at a non-existent dir creates it empty AND warns,
+    // so a typo'd --dir / ADROIT_DIR doesn't masquerade as an empty repo.
+    let missing = tmp.path().join("typo-adrs");
+    Command::cargo_bin("adroit")
+        .unwrap()
+        .arg("--dir")
+        .arg(&missing)
+        .env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .arg("list")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "did not exist and was created empty",
+        ));
+
+    // `new`, by contrast, is the expected first-run scaffold — a neutral note,
+    // not a warning.
+    let fresh = tmp.path().join("fresh-adrs");
+    Command::cargo_bin("adroit")
+        .unwrap()
+        .arg("--dir")
+        .arg(&fresh)
+        .env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .args(["new", "First decision", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("Created new ADR directory")
+                .and(predicate::str::contains("did not exist").not()),
+        );
+}
+
 // ---------------------------------------------------------------------------
 // Naming schemes (date / uuid) end-to-end through the naming seam
 // ---------------------------------------------------------------------------
