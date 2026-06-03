@@ -238,6 +238,7 @@ fn main() -> Result<()> {
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
+        Some(Command::Init { print }) => cmd_init(&store, print)?,
         Some(Command::Publish { out, dry_run }) => cmd_publish(&store, &out, dry_run)?,
         Some(Command::Notify { id, dry_run }) => cmd_notify(&store, &cfg, &id, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
@@ -986,6 +987,53 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
         let warnings = report.problems.len();
         println!("OK: {} ADRs, {} warning(s)", report.checked, warnings);
     }
+    Ok(())
+}
+
+/// `adroit init`: detect the forge from the git remote and write the config.
+fn cmd_init(store: &Store, print_only: bool) -> Result<()> {
+    let url = std::process::Command::new("git")
+        .arg("-C")
+        .arg(store.root())
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    let Some((provider, repo, host)) = url.as_deref().and_then(config::parse_remote_url) else {
+        println!("Couldn't detect a GitHub/GitLab `origin` remote. Configure it manually:");
+        println!("  adroit config set forge.provider github   # or gitlab");
+        println!("  adroit config set forge.repo owner/repo");
+        return Ok(());
+    };
+
+    let token_env = match provider {
+        config::Provider::Gitlab => "ADROIT_GITLAB_TOKEN",
+        _ => "ADROIT_GITHUB_TOKEN",
+    };
+    let host_note = host
+        .as_deref()
+        .map(|h| format!(" @ {h}"))
+        .unwrap_or_default();
+    println!("Detected forge: {provider} {repo}{host_note}");
+
+    if print_only {
+        println!("\n(--print: nothing written). To apply:");
+        println!("  adroit config set forge.provider {provider}");
+        println!("  adroit config set forge.repo {repo}");
+        return Ok(());
+    }
+
+    // Load the persisted config (preserving other keys), set the forge block, save.
+    let mut cfg = config::Config::load()?;
+    let f = cfg.forge.get_or_insert_with(Default::default);
+    f.provider = provider;
+    f.repo = Some(repo);
+    f.host = host;
+    cfg.save()?;
+    println!("Wrote forge settings to your config.");
+    println!("Next: export {token_env}=<token>   (tokens come from the environment, never config)");
     Ok(())
 }
 

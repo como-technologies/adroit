@@ -531,6 +531,39 @@ pub fn env_var_for(key: &str) -> Option<&'static str> {
     })
 }
 
+/// Best-effort parse of a git remote URL into `(provider, "owner/repo", host)`
+/// for `adroit init`. Handles `git@host:path.git`, `https://host/path.git`, and
+/// `ssh://git@host/path`. `host` is `Some` only for a non-default host
+/// (self-managed GitLab); `None` for github.com / gitlab.com. Returns `None`
+/// when the host isn't a recognizable GitHub/GitLab.
+pub fn parse_remote_url(url: &str) -> Option<(Provider, String, Option<String>)> {
+    let u = url.trim();
+    let (host, path) = if let Some(rest) = u.strip_prefix("git@") {
+        // scp-style: git@host:owner/repo.git
+        let (h, p) = rest.split_once(':')?;
+        (h.to_string(), p.to_string())
+    } else {
+        let rest = u.split_once("://").map(|(_, r)| r).unwrap_or(u);
+        let rest = rest.rsplit('@').next().unwrap_or(rest); // drop optional user@
+        let (h, p) = rest.split_once('/')?;
+        (h.to_string(), p.to_string())
+    };
+    let repo = path
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_string();
+    if repo.is_empty() {
+        return None;
+    }
+    let (provider, host_opt) = match host.as_str() {
+        "github.com" => (Provider::Github, None),
+        "gitlab.com" => (Provider::Gitlab, None),
+        h if h.contains("gitlab") => (Provider::Gitlab, Some(host)),
+        _ => return None,
+    };
+    Some((provider, repo, host_opt))
+}
+
 /// Upsert `KEY=value` into a `.env`-style file: replace the first active (un-
 /// commented) `KEY=` line, else append. Other lines (incl. comments) are kept.
 /// Creates the file if missing.
@@ -1032,6 +1065,34 @@ mod tests {
         assert_eq!(c.get_str("bogus"), None);
         // Unset optionals read as None.
         assert_eq!(c.get_str("editor"), None);
+    }
+
+    #[test]
+    fn parse_remote_url_handles_common_forms() {
+        let gh = (Provider::Github, "owner/repo".to_string(), None);
+        assert_eq!(
+            parse_remote_url("git@github.com:owner/repo.git"),
+            Some(gh.clone())
+        );
+        assert_eq!(
+            parse_remote_url("https://github.com/owner/repo.git"),
+            Some(gh.clone())
+        );
+        assert_eq!(parse_remote_url("https://github.com/owner/repo"), Some(gh));
+        assert_eq!(
+            parse_remote_url("git@gitlab.com:grp/sub/proj.git"),
+            Some((Provider::Gitlab, "grp/sub/proj".to_string(), None))
+        );
+        assert_eq!(
+            parse_remote_url("https://gitlab.example.com/grp/proj.git"),
+            Some((
+                Provider::Gitlab,
+                "grp/proj".to_string(),
+                Some("gitlab.example.com".to_string())
+            ))
+        );
+        // Unknown host → None (user configures manually).
+        assert_eq!(parse_remote_url("https://bitbucket.org/o/r.git"), None);
     }
 
     #[test]

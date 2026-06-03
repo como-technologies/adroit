@@ -299,6 +299,16 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Set up forge integration by detecting the provider from the git remote.
+    ///
+    /// Writes `forge.provider` / `forge.repo` (+ `forge.host` for self-managed)
+    /// to your config and reminds you which token env var to set. `--print` only
+    /// shows what it detected.
+    Init {
+        /// Show the detected settings without writing them to config.
+        #[arg(long)]
+        print: bool,
+    },
     /// Export the accepted ADR set to a directory (static-dir publisher).
     ///
     /// Sibling to `index`, but for the published-docs side. Copies every
