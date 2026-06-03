@@ -299,6 +299,29 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Export the accepted ADR set to a directory (static-dir publisher).
+    ///
+    /// Sibling to `index`, but for the published-docs side. Copies every
+    /// accepted ADR plus an `index.md` to `--out`. Idempotent.
+    Publish {
+        /// Output directory for the published ADRs.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Preview what would be written without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Post an ADR's current state to a chat webhook (Slack/Teams-compatible).
+    ///
+    /// Reads the incoming-webhook URL from `ADROIT_NOTIFY_WEBHOOK`. Requires the
+    /// `forge` feature build (it uses the bundled HTTP client).
+    Notify {
+        /// ADR identifier to announce (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Preview the message without posting.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Regenerate the ADR section of SUMMARY.md (or print it to stdout).
     Index {
         /// Don't write — just verify SUMMARY.md is up to date (CI gate).

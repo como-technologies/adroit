@@ -630,6 +630,29 @@ pub fn comment(
     Ok(())
 }
 
+/// POST `text` to a Slack/Teams-compatible incoming webhook (the `{ "text": … }`
+/// shape both accept). Best-effort: a non-2xx or offline webhook warns and
+/// returns `Ok` (a notification failure shouldn't fail the command).
+pub fn notify(webhook: &str, text: &str) -> anyhow::Result<()> {
+    let body = serde_json::to_vec(&serde_json::json!({ "text": text })).expect("serialize");
+    match UreqTransport.request(
+        "POST",
+        webhook,
+        &[("Content-Type", "application/json")],
+        Some(&body),
+    ) {
+        Ok(resp) if (200..300).contains(&resp.status) => Ok(()),
+        Ok(resp) => {
+            eprintln!("adroit: notify webhook returned HTTP {}", resp.status);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("adroit: notify webhook unreachable ({e})");
+            Ok(())
+        }
+    }
+}
+
 /// Forge-aware repo checks (issue #4 lifecycle map): flag drift between an ADR
 /// and its linked issue/PR. Network reads degrade gracefully (warn-once offline,
 /// skip). Returns `Warning`-severity problems so `check` reports but doesn't fail.

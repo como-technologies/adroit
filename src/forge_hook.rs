@@ -182,6 +182,22 @@ pub fn comment(
     Ok(())
 }
 
+/// Post a chat notification to `webhook`. `dry_run` prints the message instead.
+#[cfg(feature = "forge")]
+pub fn notify(webhook: &str, text: &str, dry_run: bool) -> Result<()> {
+    if dry_run {
+        println!("Would post to webhook:\n{text}");
+        return Ok(());
+    }
+    crate::forge::notify(webhook, text)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn notify(_webhook: &str, _text: &str, _dry_run: bool) -> Result<()> {
+    eprintln!("adroit: `notify` needs the `forge` feature (rebuild with `--features forge`)");
+    Ok(())
+}
+
 /// Shared "you asked for --with-forge but this build lacks it" notice.
 #[cfg(not(feature = "forge"))]
 fn warn_no_feature() {

@@ -238,6 +238,8 @@ fn main() -> Result<()> {
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
+        Some(Command::Publish { out, dry_run }) => cmd_publish(&store, &out, dry_run)?,
+        Some(Command::Notify { id, dry_run }) => cmd_notify(&store, &cfg, &id, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { id }) => {
             let path = store.find_path_by_ref(&resolve_ref(&cfg, &id)?)?;
@@ -983,6 +985,46 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
     } else {
         let warnings = report.problems.len();
         println!("OK: {} ADRs, {} warning(s)", report.checked, warnings);
+    }
+    Ok(())
+}
+
+/// `adroit publish`: export accepted ADRs to a directory (static-dir publisher).
+fn cmd_publish(store: &Store, out: &std::path::Path, dry_run: bool) -> Result<()> {
+    let report = adroit::publish::publish(store, out, !dry_run)?;
+    if dry_run {
+        println!(
+            "Would publish {} accepted ADR(s) to {}:",
+            report.written,
+            out.display()
+        );
+        for (title, file) in &report.files {
+            println!("  {file}  {title}");
+        }
+        println!("\nDry run — re-run without --dry-run to write.");
+    } else {
+        println!(
+            "Published {} accepted ADR(s) to {}",
+            report.written,
+            out.display()
+        );
+    }
+    Ok(())
+}
+
+/// `adroit notify`: announce an ADR's state to a chat webhook.
+fn cmd_notify(store: &Store, cfg: &Config, id: &str, dry_run: bool) -> Result<()> {
+    let webhook = std::env::var("ADROIT_NOTIFY_WEBHOOK").map_err(|_| {
+        anyhow::anyhow!("set ADROIT_NOTIFY_WEBHOOK to a Slack/Teams incoming-webhook URL")
+    })?;
+    let r = resolve_ref(cfg, id)?;
+    let path = store.find_path_by_ref(&r)?;
+    let detail = query::detail_at(store, &path)?;
+    let s = &detail.summary;
+    let text = format!("*{}: {}* — {}", s.reference, s.title, s.status);
+    adroit::forge_hook::notify(&webhook, &text, dry_run)?;
+    if !dry_run {
+        println!("Notified ({})", s.reference);
     }
     Ok(())
 }
