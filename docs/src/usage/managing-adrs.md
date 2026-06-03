@@ -53,10 +53,47 @@ the `## Status` section, leaving the rest of the file byte-identical.
 > noisy for you, use a layout that keeps each ADR put and records status *in the
 > file* instead: `--layout flat` (one directory) or `--layout by_category`
 > (directory = area/category, status in `## Status`). Cross-ADR links survive
-> moves regardless — `adroit relink` (run automatically on a status change)
+> moves regardless — `adroit relink` (run automatically on a status change by
+> default; see [Concurrent contributors](#concurrent-contributors--branching))
 > retargets them — and ADRs are addressable by number, slug, uuid, or
 > `category/NNNN`, so references don't go stale. See
 > [Naming schemes](../reference/adr-format.md#naming-schemes).
+
+## Concurrent contributors & branching
+
+When several people work the same ADR set on branches, two kinds of
+branch-local state collide on merge — and adroit handles both at the merge
+point rather than asking you to coordinate up front.
+
+**Stale links (the `relink_scope` knob).** By default (`relink_scope = all`) a
+status change heals *every* cross-ADR link repo-wide. With many PRs in flight
+that means two unrelated decisions both rewrite the same neighbor files — false
+merge conflicts. Set `relink_scope = self` (or `none`) so a status-change PR
+touches **only the ADR it is about**:
+
+```sh
+adroit config set relink_scope self   # or: ADROIT_RELINK_SCOPE=self / --relink-scope self
+```
+
+- `self` — fix only the moved file's own links; leave neighbors' inbound links
+  alone (the moved ADR still validates).
+- `none` — move only.
+
+The deferred inbound links are transiently stale — `adroit check` reports them
+as **warnings** (it still exits 0, so PRs aren't blocked) — until a single
+`adroit relink` runs on `main` after each merge and commits the canonicalized
+links. That "propose-on-branch, heal-on-main" split is wired by the CI
+templates; see [CI Integration](./ci-integration.md#stale-links-across-branches).
+
+**Duplicate numbers.** Two branches each running `adroit new` pick the same
+`NNNN`. Keep sequential numbers and catch the collision at the merge queue with
+`adroit check`, then resolve with `adroit renumber` — see
+[CI Integration](./ci-integration.md#concurrent-adr-numbers-across-branches).
+
+**Prefer to avoid collisions by construction?** Use a collision-free identity:
+the `date` or `uuid` [naming scheme](../reference/adr-format.md#naming-schemes)
+(the route log4brains and database-migration tools took), or the `by_category`
+layout for per-area number sequences.
 
 ## Superseding a decision
 

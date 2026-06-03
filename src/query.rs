@@ -386,20 +386,45 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
         for target in crate::links::relative_md_targets(&content) {
             let pathpart = target.split('#').next().unwrap_or(target);
             let resolved = dir.join(pathpart);
+            // The ADR this link names, and where it currently lives (if known).
+            let num = crate::links::number_in_target(target);
+            let canon = num.and_then(|n| by_number_path.get(&n));
+
             if !resolved.exists() {
-                problems.push(Problem {
-                    severity: Severity::Error,
-                    kind: ProblemKind::BrokenLink,
-                    label: rel.clone(),
-                    summary: format!("broken link [{target}] — target file not found"),
-                    paths: Vec::new(),
-                    message: format!("{rel}: broken link [{target}] — target file not found"),
-                });
+                // The literal target is missing. If the link names an ADR that
+                // still exists elsewhere in the repo, it's a STALE link a
+                // `relink` will heal (a warning — so a deferred-relink PR branch,
+                // whose inbound links haven't been canonicalized yet, still
+                // passes `check`). A link that names no existing ADR is truly
+                // BROKEN (an error).
+                if let (Some(num), Some(canon)) = (num, canon) {
+                    let want = crate::links::rel_link(dir, canon);
+                    problems.push(Problem {
+                        severity: Severity::Warning,
+                        kind: ProblemKind::StaleLink,
+                        label: rel.clone(),
+                        summary: format!(
+                            "stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                        ),
+                        paths: Vec::new(),
+                        message: format!(
+                            "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                        ),
+                    });
+                } else {
+                    problems.push(Problem {
+                        severity: Severity::Error,
+                        kind: ProblemKind::BrokenLink,
+                        label: rel.clone(),
+                        summary: format!("broken link [{target}] — target file not found"),
+                        paths: Vec::new(),
+                        message: format!("{rel}: broken link [{target}] — target file not found"),
+                    });
+                }
                 continue;
             }
-            // Stale: resolves, but not to the current home of its ADR number.
-            if let Some(num) = crate::links::number_in_target(target)
-                && let Some(canon) = by_number_path.get(&num)
+            // Resolved file exists: stale only if it isn't the ADR's current home.
+            if let (Some(num), Some(canon)) = (num, canon)
                 && let (Ok(rp), Ok(cp)) = (
                     std::fs::canonicalize(&resolved),
                     std::fs::canonicalize(canon),

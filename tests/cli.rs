@@ -651,14 +651,16 @@ fn status_change_relinks_inbound_links_and_check_passes() {
 }
 
 #[test]
-fn check_flags_broken_link_and_relink_repairs_it() {
+fn check_warns_on_stale_link_and_relink_repairs_it() {
     let dir = TempDir::new().unwrap();
     let proposed = dir.path().join("proposed");
     let accepted = dir.path().join("accepted");
     fs::create_dir_all(&proposed).unwrap();
     fs::create_dir_all(&accepted).unwrap();
     // 0002 lives in accepted/, but 0001 still links to a stale proposed/ path
-    // (as if it had been moved outside adroit) — that target doesn't exist.
+    // (as if 0002 had been moved outside adroit, or by a deferred-relink PR).
+    // The literal target file is gone, but ADR-0002 still exists — so this is a
+    // STALE link a `relink` heals, NOT a hard error.
     fs::write(
         proposed.join("0001-a.md"),
         "# ADR-0001: A\n\n## Status\n\nProposed\n\n## Context\n\nSee [ADR-0002](../proposed/0002-b.md).\n",
@@ -670,12 +672,12 @@ fn check_flags_broken_link_and_relink_repairs_it() {
     )
     .unwrap();
 
-    // check fails: the link target file doesn't exist.
+    // check SUCCEEDS — the stale link is a warning, not an error — but reports it.
     adroit(&dir)
         .arg("check")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("broken link"));
+        .success()
+        .stderr(predicate::str::contains("stale link"));
 
     // relink repairs it to the canonical location.
     adroit(&dir)
@@ -689,8 +691,125 @@ fn check_flags_broken_link_and_relink_repairs_it() {
         "got:\n{one}"
     );
 
-    // check is now clean.
-    adroit(&dir).arg("check").assert().success();
+    // check is now fully clean.
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no problems"));
+}
+
+#[test]
+fn check_fails_on_dangling_link_to_unknown_adr() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    fs::create_dir_all(&proposed).unwrap();
+    // ADR-0001 links to ADR-0099, which exists nowhere in the repo — a truly
+    // dangling link that points at no ADR. This stays a hard error (so genuine
+    // breakage still fails CI even though stale links are now warnings).
+    fs::write(
+        proposed.join("0001-a.md"),
+        "# ADR-0001: A\n\n## Status\n\nProposed\n\n## Context\n\nSee [ADR-0099](./0099-ghost.md).\n",
+    )
+    .unwrap();
+
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("broken link"));
+}
+
+#[test]
+fn self_scope_status_change_defers_inbound_relink_to_explicit_relink() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    fs::create_dir_all(&proposed).unwrap();
+    // Two cross-linked ADRs in proposed/.
+    let one_seed =
+        "# ADR-0001: A\n\n## Status\n\nProposed\n\n## Context\n\nSee [ADR-0002](./0002-b.md).\n";
+    fs::write(proposed.join("0001-a.md"), one_seed).unwrap();
+    fs::write(
+        proposed.join("0002-b.md"),
+        "# ADR-0002: B\n\n## Status\n\nProposed\n\n## Context\n\nRelated to [ADR-0001](./0001-a.md).\n",
+    )
+    .unwrap();
+
+    // Accept 0002 with self-scope: it moves to accepted/ and fixes ITS OWN link,
+    // but must NOT rewrite the inbound link in its neighbor 0001.
+    adroit(&dir)
+        .args(["--relink-scope", "self", "status", "2", "accepted"])
+        .assert()
+        .success();
+
+    assert!(dir.path().join("accepted/0002-b.md").exists());
+    assert!(!proposed.join("0002-b.md").exists());
+
+    // Neighbor 0001 is byte-identical to its seed — a status-change PR under
+    // self-scope touches only the ADR it is about, so two decision PRs never
+    // collide on a shared neighbor.
+    let one = fs::read_to_string(proposed.join("0001-a.md")).unwrap();
+    assert_eq!(one, one_seed, "neighbor must be untouched, got:\n{one}");
+
+    // The moved file's OWN outbound link was fixed (it stays internally valid).
+    let two = fs::read_to_string(dir.path().join("accepted/0002-b.md")).unwrap();
+    assert!(
+        two.contains("[ADR-0001](../proposed/0001-a.md)"),
+        "moved file's own link should be fixed, got:\n{two}"
+    );
+
+    // check still passes: 0001's now-stale inbound link is a warning, not an error.
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("stale link"));
+
+    // The post-merge `adroit relink` (always full-scope) heals the deferred
+    // inbound link — the "heal-on-main" step.
+    adroit(&dir)
+        .arg("relink")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Relinked"));
+    let one = fs::read_to_string(proposed.join("0001-a.md")).unwrap();
+    assert!(
+        one.contains("[ADR-0002](../accepted/0002-b.md)"),
+        "explicit relink should heal the inbound link, got:\n{one}"
+    );
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no problems"));
+}
+
+#[test]
+fn duplicate_number_fails_check() {
+    let dir = TempDir::new().unwrap();
+    let proposed = dir.path().join("proposed");
+    let accepted = dir.path().join("accepted");
+    fs::create_dir_all(&proposed).unwrap();
+    fs::create_dir_all(&accepted).unwrap();
+    // Two ADRs share number 0009 — the collision two branches produce on merge.
+    fs::write(
+        proposed.join("0009-crossplane.md"),
+        "# ADR-0009: Crossplane\n\n## Status\n\nProposed\n",
+    )
+    .unwrap();
+    fs::write(
+        accepted.join("0009-dex.md"),
+        "# ADR-0009: Dex\n\n## Status\n\nAccepted\n",
+    )
+    .unwrap();
+
+    // The merge-queue gate: a duplicate number is an ERROR (not a warning), so
+    // `adroit check` fails — ejecting the second colliding PR from the queue.
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("duplicate number"));
 }
 
 // ---------------------------------------------------------------------------

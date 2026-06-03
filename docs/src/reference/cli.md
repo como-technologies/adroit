@@ -12,6 +12,7 @@
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
 | `--date-source <auto\|git\|filesystem>` | `auto` | Where ADR dates/lifecycle come from: `auto` (git when available, else filesystem), `git` (require git; warn if unavailable/shallow), `filesystem` (never shell git) (env: `ADROIT_DATE_SOURCE`; overrides config) |
 | `--naming <sequential\|date\|uuid\|per_category>` | `sequential` | How ADR identifiers/filenames are formed (env: `ADROIT_NAMING`; overrides config). See [Naming schemes](./adr-format.md#naming-schemes) |
+| `--relink-scope <all\|self\|none>` | `all` | How much a status-change move auto-relinks: `all` (heal every inbound link), `self` (only the moved file's own links), `none` (move only). `self`/`none` defer the rest to a post-merge `adroit relink` (env: `ADROIT_RELINK_SCOPE`; overrides config). See [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching) |
 | `--version` | | Print version information |
 | `--help` | | Print help |
 
@@ -173,9 +174,12 @@ adroit search postgres
 
 ### `adroit check`
 
-Validate the ADR repo and **exit non-zero if any problem is found** — a
-structural CI gate. Problems are listed on stderr; a clean repo prints
-`OK: N ADRs, no problems` and exits 0.
+Validate the ADR repo and **exit non-zero if any error-severity problem is
+found** — a structural CI gate. Problems are listed on stderr. A clean repo
+prints `OK: N ADRs, no problems`; a repo with only warnings prints
+`OK: N ADRs, M warning(s)` and still exits 0 (so a deferred-relink PR branch,
+whose inbound links aren't canonicalized yet, isn't blocked). Only **errors**
+fail the build.
 
 It checks for:
 
@@ -189,10 +193,16 @@ It checks for:
 3. **Unparseable files**: a `.md` ADR with no `# ADR-NNNN: Title` heading.
 4. **Broken supersession links**: a `Supersedes ADR-NNNN` / `Superseded by
    ADR-NNNN` note referencing a number that doesn't exist in the repo.
-5. **Broken / stale cross-ADR links**: a relative `.md` link whose target file
-   doesn't exist (broken), or that resolves to an existing file but not where
-   that ADR number currently lives (stale — `adroit relink` fixes it). External
-   URLs, anchors, and non-ADR links are ignored.
+5. **Broken / stale cross-ADR links**: a relative `.md` link that points
+   somewhere other than its ADR's current home. The split is identity-based: if
+   the link names an ADR that still exists in the repo it's a **stale** link (a
+   **warning** — `adroit relink` fixes it); if it names no existing ADR it's a
+   **broken** link (an **error**). External URLs, anchors, and non-ADR links are
+   ignored.
+
+Of these, duplicate identifiers, status↔directory mismatch, unparseable files,
+broken supersession links, and broken links are **errors** (they fail `check`);
+a stale link is a **warning** (reported, but `check` still exits 0).
 
 In the flat / frontmatter profile there is no directory-implied status, so the
 directory-mismatch check is skipped; the others still apply.
@@ -209,9 +219,14 @@ there — see [Web Dashboard](../usage/web.md).
 
 Rewrite every cross-ADR relative link so it points at the ADR's **current**
 location, then write back only the files that changed. Use it to repair links
-left stale by file moves done outside adroit (and as a CI fix step). Status
-changes (`status` / `supersede`) already relink automatically, so on a tidy repo
-this is a no-op (`Links already canonical — nothing to relink.`). Idempotent;
+left stale by file moves done outside adroit (and as the post-merge "heal-on-main"
+CI step). Status changes (`status` / `supersede`) already relink automatically
+**under the default `relink_scope = all`**, so on a tidy repo this is a no-op
+(`Links already canonical — nothing to relink.`). Under `relink_scope = self` /
+`none` a status move leaves neighbors' inbound links for this command to fix —
+which is the point of running it on `main` after a merge (see
+[Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching)).
+This command is **always full-scope** regardless of `relink_scope`. Idempotent;
 links by external URL, anchor, or to non-ADR files are left untouched; ambiguous
 duplicate numbers are skipped (and flagged by `check`). Pass `--dry-run` to list
 the files/links that would change without writing anything.
@@ -407,6 +422,7 @@ editor: vim
 | `tui_theme` | `default`\|`gruvbox` | `default` | Color theme for the TUI markdown preview. |
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 | `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
+| `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 

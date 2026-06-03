@@ -13,6 +13,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Run in the merge queue's speculative merge too. This is what catches an
+  # ADR-number collision BETWEEN branches: two PRs each adding NNNN are fine on
+  # their own branch, but `adroit check` sees BOTH 0009 files in the merge group
+  # and fails — ejecting the second PR. Enable the merge queue on `main` and mark
+  # "Validate ADRs" a required check for it (Settings → Branches → branch
+  # protection → Require merge queue + required status checks).
+  merge_group:
 
 env:
   # Path to your ADR tree (relative to the repo root).
@@ -30,7 +37,10 @@ jobs:
         run: cargo install --git https://github.com/como-technologies/adroit --locked
 
       - name: Check ADR integrity
-        run: adroit check        # status↔dir, dup numbers, parse, supersession links
+        # status↔dir, dup numbers, parse, supersession links. Exits non-zero on
+        # errors only; a stale link (a deferred-relink PR not yet canonicalized)
+        # is a warning and does not fail the build.
+        run: adroit check
 
       - name: Check SUMMARY.md is in sync
         run: adroit index --check

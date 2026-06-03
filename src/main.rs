@@ -8,7 +8,7 @@ use adroit::format::Format;
 use adroit::naming::AdrRef;
 use adroit::query::{self, Filter};
 use adroit::store::{LinkKind, Store, StoreOptions};
-use adroit::view::{AdrSummary, EdgeKind};
+use adroit::view::{AdrSummary, EdgeKind, Severity};
 
 /// Parse a CLI ADR identifier into an [`AdrRef`] under the configured scheme.
 fn resolve_ref(cfg: &Config, id: &str) -> Result<AdrRef> {
@@ -63,6 +63,11 @@ fn main() -> Result<()> {
     // `--naming` / `ADROIT_NAMING` overrides the identifier/filename scheme.
     if let Some(naming) = cli.naming {
         cfg.naming = naming;
+    }
+    // `--relink-scope` / `ADROIT_RELINK_SCOPE` overrides how much a status-change
+    // move auto-relinks (all/self/none).
+    if let Some(scope) = cli.relink_scope {
+        cfg.relink_scope = scope;
     }
 
     // `config` operates on configuration, not ADRs — handle it before resolving
@@ -245,6 +250,7 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
         review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
         date_source: cfg.date_source,
         naming: cfg.naming,
+        relink_scope: cfg.relink_scope,
     }
 }
 
@@ -593,6 +599,7 @@ fn config_cli_value(cli: &Cli, key: &str) -> Option<String> {
         "default_template" => cli.default_template.clone(),
         "review_overdue_days" => cli.review_overdue_days.map(|n| n.to_string()),
         "date_source" => cli.date_source.map(|d| d.to_string()),
+        "relink_scope" => cli.relink_scope.map(|s| s.to_string()),
         _ => None,
     }
 }
@@ -768,25 +775,39 @@ fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
 
 /// `adroit check`: structural CI gate. Runs [`query::check`] — the shared
 /// validation engine (also behind the web dashboard's repo-health panel) — and
-/// renders its report: bails (non-zero exit) with a summary when any problem
-/// exists, otherwise prints an "OK" line and exits 0.
+/// renders its report. It bails (non-zero exit) only when an **error**-severity
+/// problem exists (duplicate number, broken link, unparseable file, …); a report
+/// with only **warnings** (e.g. a stale-but-resolvable link that a post-merge
+/// `adroit relink` will heal) is printed but exits 0. This lets a status-change
+/// PR branch — which transiently carries stale inbound links under
+/// `relink_scope = self` — pass CI, while a genuine defect still fails it.
 fn cmd_check(store: &Store) -> Result<()> {
     let report = query::check(store)?;
-    if report.problems.is_empty() {
-        println!("OK: {} ADRs, no problems", report.checked);
-        Ok(())
-    } else {
-        let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
-        messages.sort_unstable();
-        for message in &messages {
-            eprintln!("{message}");
-        }
+    // Print every problem (errors and warnings), sorted for stable output.
+    let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
+    messages.sort_unstable();
+    for message in &messages {
+        eprintln!("{message}");
+    }
+    let errors = report
+        .problems
+        .iter()
+        .filter(|p| p.severity == Severity::Error)
+        .count();
+    if errors > 0 {
         anyhow::bail!(
             "{} problem(s) found across {} ADR file(s)",
             report.problems.len(),
             report.checked
         );
     }
+    if report.problems.is_empty() {
+        println!("OK: {} ADRs, no problems", report.checked);
+    } else {
+        let warnings = report.problems.len();
+        println!("OK: {} ADRs, {} warning(s)", report.checked, warnings);
+    }
+    Ok(())
 }
 
 /// Generate a review-kickoff doc for an ADR. Pure generation — no git ops.

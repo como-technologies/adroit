@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::adr::{Adr, Number, Status};
-use crate::config::{DateSource, Layout};
+use crate::config::{DateSource, Layout, RelinkScope};
 use crate::format::{self, Format};
 use crate::naming::{AdrRef, NamingScheme};
 
@@ -98,6 +98,10 @@ pub struct StoreOptions {
     /// How ADR identifiers / filenames are formed (carried from config). Drives
     /// `write`/`read` identity + filename via the `naming` seam.
     pub naming: NamingScheme,
+    /// How much a status-change *move* auto-relinks (carried from config). Only
+    /// `set_status_at` consults this; `relink`/`renumber`/`migrate` are always
+    /// full-scope.
+    pub relink_scope: RelinkScope,
 }
 
 impl StoreOptions {
@@ -110,6 +114,7 @@ impl StoreOptions {
             review_overdue_days: None,
             date_source: DateSource::Auto,
             naming: NamingScheme::Sequential,
+            relink_scope: RelinkScope::All,
         }
     }
 
@@ -447,22 +452,7 @@ impl Store {
     /// what *would* change (for `adroit relink --dry-run`).
     pub fn relink(&self, apply: bool) -> Result<RelinkReport, StoreError> {
         let entries = self.list_with_paths()?;
-        // Map each ADR's scheme identity to its current file, so a link target's
-        // ref (via the seam) resolves to where that ADR now lives. Identities
-        // seen more than once are ambiguous duplicates and are left out (their
-        // links are kept byte-for-byte and flagged by `check`).
-        let mut seen: std::collections::HashMap<AdrRef, usize> = std::collections::HashMap::new();
-        for (_, adr) in &entries {
-            *seen.entry(adr.reference()).or_default() += 1;
-        }
-        let mut by_ref: std::collections::HashMap<AdrRef, PathBuf> =
-            std::collections::HashMap::new();
-        for (path, adr) in &entries {
-            let r = adr.reference();
-            if seen.get(&r) == Some(&1) {
-                by_ref.insert(r, path.clone());
-            }
-        }
+        let by_ref = Self::link_resolver_map(&entries);
 
         let mut report = RelinkReport::default();
         for (path, _) in &entries {
@@ -484,6 +474,51 @@ impl Store {
             }
         }
         Ok(report)
+    }
+
+    /// Map each ADR's scheme identity to its current file, so a link target's
+    /// ref (via the seam) resolves to where that ADR now lives. Identities seen
+    /// more than once are ambiguous duplicates and are left out (their links are
+    /// kept byte-for-byte and flagged by `check`). Shared by [`relink`] and
+    /// [`relink_one`].
+    fn link_resolver_map(entries: &[(PathBuf, Adr)]) -> std::collections::HashMap<AdrRef, PathBuf> {
+        let mut seen: std::collections::HashMap<AdrRef, usize> = std::collections::HashMap::new();
+        for (_, adr) in entries {
+            *seen.entry(adr.reference()).or_default() += 1;
+        }
+        let mut by_ref: std::collections::HashMap<AdrRef, PathBuf> =
+            std::collections::HashMap::new();
+        for (path, adr) in entries {
+            let r = adr.reference();
+            if seen.get(&r) == Some(&1) {
+                by_ref.insert(r, path.clone());
+            }
+        }
+        by_ref
+    }
+
+    /// Relink ONLY `path`'s own outbound links (so the moved file stays
+    /// internally valid), without touching any other file. Returns whether it
+    /// was rewritten. This is the `self`-scoped counterpart to [`relink`]: a
+    /// status-change move under `relink_scope = self` fixes the moved ADR's own
+    /// links but leaves inbound links in neighbors for a post-merge `relink`, so
+    /// a status-change PR touches only the ADR it is about.
+    pub fn relink_one(&self, path: &Path) -> Result<bool, StoreError> {
+        let entries = self.list_with_paths()?;
+        let by_ref = Self::link_resolver_map(&entries);
+        let dir = path.parent().unwrap_or_else(|| Path::new(""));
+        let original = std::fs::read_to_string(path)?;
+        let (rewritten, changed) = crate::links::rewrite_links(&original, dir, |target| {
+            self.opts
+                .naming
+                .ref_in_link(target)
+                .and_then(|r| by_ref.get(&r).cloned())
+        });
+        if changed > 0 && rewritten != original {
+            std::fs::write(path, &rewritten)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Infer the on-disk layout + format from the files actually present,
@@ -608,6 +643,7 @@ impl Store {
                 review_overdue_days: self.opts.review_overdue_days,
                 date_source: self.opts.date_source,
                 naming: self.opts.naming,
+                relink_scope: self.opts.relink_scope,
             },
         };
         let entries = src.list_with_paths()?;
@@ -821,8 +857,8 @@ impl Store {
                 std::fs::write(&new_path, content)?;
                 if new_path != path {
                     std::fs::remove_file(&path)?;
-                    // The file moved dirs — fix every relative link to/from it.
-                    self.relink(true)?;
+                    // The file moved dirs — reconcile relative links per `relink_scope`.
+                    self.relink_after_move(&new_path)?;
                 }
                 Ok(new_path)
             }
@@ -848,12 +884,31 @@ impl Store {
                 std::fs::write(&new_path, rewritten)?;
                 if new_path != path {
                     std::fs::remove_file(&path)?;
-                    // The file moved dirs — fix every relative link to/from it.
-                    self.relink(true)?;
+                    // The file moved dirs — reconcile relative links per `relink_scope`.
+                    self.relink_after_move(&new_path)?;
                 }
                 Ok(new_path)
             }
         }
+    }
+
+    /// Reconcile cross-ADR links after a status-change move, honoring
+    /// `relink_scope`: `all` heals every inbound link (single-author default),
+    /// `self` fixes only the moved file's own links (a status-change PR then
+    /// touches only its own ADR), and `none` defers everything to a later
+    /// `adroit relink` on `main`. The explicit `adroit relink` command and
+    /// `renumber`/`migrate` are always full-scope and never go through here.
+    fn relink_after_move(&self, moved: &Path) -> Result<(), StoreError> {
+        match self.opts.relink_scope {
+            RelinkScope::All => {
+                self.relink(true)?;
+            }
+            RelinkScope::SelfOnly => {
+                self.relink_one(moved)?;
+            }
+            RelinkScope::None => {}
+        }
+        Ok(())
     }
 
     /// Replace ONLY an ADR's markdown body, preserving everything the format

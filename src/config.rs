@@ -94,6 +94,48 @@ pub enum DateSource {
     Filesystem,
 }
 
+/// How much a status-change *move* auto-relinks cross-ADR links.
+///
+/// In `by_status`, a status change moves the ADR between directories, which
+/// strands relative links to/from it. The default heals every link immediately.
+/// Concurrent-PR teams instead defer the repo-wide heal to a single
+/// `adroit relink` on `main` (so a status-change PR touches only its own ADR and
+/// two decision PRs never collide on shared neighbors) — see the "heal-on-main"
+/// workflow in the docs. The explicit `adroit relink` command is always
+/// full-scope regardless of this setting.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    clap::ValueEnum,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum RelinkScope {
+    /// Heal every inbound link on a move (today's behavior). Best for a single
+    /// author / no concurrent PRs. Default.
+    #[default]
+    All,
+    /// Fix only the *moved* file's own outbound links — leave neighbors for a
+    /// post-merge `adroit relink`. The moved ADR stays internally valid, and a
+    /// status-change PR touches only that one file. Recommended for branching
+    /// teams. Serialized as `self`.
+    #[strum(serialize = "self")]
+    #[serde(rename = "self")]
+    #[value(name = "self")]
+    SelfOnly,
+    /// Move only — defer all link fixing to a post-merge `adroit relink`.
+    None,
+}
+
 /// Application configuration, persisted as YAML.
 ///
 /// New keys all carry serde defaults so older config files keep loading.
@@ -161,6 +203,11 @@ pub struct Config {
     /// How ADR identifiers / filenames are formed: `sequential` (NNNN, default),
     /// `date` (YYYYMMDD-title), `uuid`, or `per_category` (per-directory NNNN).
     pub naming: NamingScheme,
+
+    /// How much a status-change move auto-relinks: `all` (heal every inbound
+    /// link, default), `self` (only the moved file's own links — defer the rest
+    /// to a post-merge `adroit relink`), or `none` (move only). Default: `all`.
+    pub relink_scope: RelinkScope,
 }
 
 impl Default for Config {
@@ -182,6 +229,7 @@ impl Default for Config {
             tui_theme: MarkdownTheme::default(),
             date_source: DateSource::default(),
             naming: NamingScheme::default(),
+            relink_scope: RelinkScope::default(),
         }
     }
 }
@@ -213,6 +261,7 @@ impl Config {
             "tui_theme" => self.tui_theme.to_string(),
             "date_source" => self.date_source.to_string(),
             "naming" => self.naming.to_string(),
+            "relink_scope" => self.relink_scope.to_string(),
             _ => return None,
         })
     }
@@ -255,6 +304,11 @@ impl Config {
                     .parse()
                     .map_err(|_| bad("naming scheme (sequential|date|uuid|per_category)"))?
             }
+            "relink_scope" => {
+                self.relink_scope = value
+                    .parse()
+                    .map_err(|_| bad("relink scope (all|self|none)"))?
+            }
             _ => return Err(format!("unknown config key `{key}`")),
         }
         Ok(())
@@ -276,6 +330,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "tui_theme",
     "date_source",
     "naming",
+    "relink_scope",
 ];
 
 /// The environment variable that overrides a config key (for `.env` writes and
@@ -290,6 +345,7 @@ pub fn env_var_for(key: &str) -> Option<&'static str> {
         "review_overdue_days" => "ADROIT_REVIEW_OVERDUE_DAYS",
         "date_source" => "ADROIT_DATE_SOURCE",
         "naming" => "ADROIT_NAMING",
+        "relink_scope" => "ADROIT_RELINK_SCOPE",
         _ => return None,
     })
 }
@@ -740,12 +796,19 @@ mod tests {
         let mut c = Config::default();
         assert_eq!(c.get_str("layout").as_deref(), Some("by_status"));
         assert_eq!(c.get_str("date_source").as_deref(), Some("auto"));
+        // relink_scope defaults to `all` and round-trips `self`/`none`.
+        assert_eq!(c.get_str("relink_scope").as_deref(), Some("all"));
+        c.set_str("relink_scope", "self").unwrap();
+        assert_eq!(c.get_str("relink_scope").as_deref(), Some("self"));
+        c.set_str("relink_scope", "none").unwrap();
+        assert_eq!(c.get_str("relink_scope").as_deref(), Some("none"));
         c.set_str("layout", "flat").unwrap();
         c.set_str("review_overdue_days", "45").unwrap();
         assert_eq!(c.get_str("layout").as_deref(), Some("flat"));
         assert_eq!(c.get_str("review_overdue_days").as_deref(), Some("45"));
         // Validation + unknown keys.
         assert!(c.set_str("layout", "sideways").is_err());
+        assert!(c.set_str("relink_scope", "partial").is_err());
         assert!(c.set_str("review_days", "lots").is_err());
         assert!(c.set_str("bogus", "x").is_err());
         assert_eq!(c.get_str("bogus"), None);
@@ -757,6 +820,7 @@ mod tests {
     fn env_var_mapping() {
         assert_eq!(env_var_for("layout"), Some("ADROIT_LAYOUT"));
         assert_eq!(env_var_for("date_source"), Some("ADROIT_DATE_SOURCE"));
+        assert_eq!(env_var_for("relink_scope"), Some("ADROIT_RELINK_SCOPE"));
         assert_eq!(
             env_var_for("review_overdue_days"),
             Some("ADROIT_REVIEW_OVERDUE_DAYS")

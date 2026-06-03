@@ -203,7 +203,9 @@ opened, so it works on a mismatched repo) shows/gets/sets settings.
 `ADROIT_*` var, and `upsert_env_file` writes `.env`. `config show` reports each
 key's resolved value + source (flag / env / config / default), telling flag from
 env by comparing the env var's value to what clap resolved. `set` writes
-`config.yaml` (via `Config::save`) or, with `--local`, the project `.env`.
+`config.yaml` (via `Config::save`) or, with `--local`, the project `.env`. Keys
+include `relink_scope` (`all`/`self`/`none`, env `ADROIT_RELINK_SCOPE`, global
+flag `--relink-scope`) — see "Cross-ADR link integrity" above.
 
 Templates live in `src/template.rs` (built-in `madr` + `nygard`, plus custom
 file/`templates_dir`, with a repo-local `adr-template.md` preferred). SUMMARY.md
@@ -245,10 +247,33 @@ ambiguous duplicates) and resolves a target via `naming.ref_in_link(target)`, so
 date/uuid slug links relink just like sequential numbers. It writes only files
 that changed (idempotent → no-op on a canonical repo). `relink(apply)` with
 `apply == false` is the dry-run path (`adroit relink --dry-run` reports
-`changed_files` without writing). `set_status_at` calls `relink(true)` after any
-move, so `adroit status`/`supersede` self-heal links; `adroit relink` exposes it
-on demand (repairs repos edited outside adroit); `cmd_check` adds check #5
-(broken target / stale-vs-canonical). `query.rs` reuses
+`changed_files` without writing).
+
+**Relink scope on a status move (`relink_scope`).** After a move, `set_status_at`
+reconciles links via `relink_after_move`, dispatching on the
+`config::RelinkScope` carried on `StoreOptions`: `all` (default) calls
+`relink(true)` to heal every inbound link (`adroit status`/`supersede` self-heal
+the whole repo — best for a single author); `self` calls `relink_one(&new_path)`
+to fix only the moved file's own outbound links (`relink_one` reuses the
+`link_resolver_map` + `links::rewrite_links` on that one file), leaving neighbors'
+inbound links for a later relink; `none` does nothing. `self`/`none` make a
+status-change PR touch only the ADR it is about, so concurrent decision PRs never
+collide on shared neighbors — the inbound links are then canonicalized by a
+post-merge `adroit relink` on `main` (the "heal-on-main" / propose-on-branch
+workflow; see `ci-templates/` and the "Concurrent contributors" manual page).
+**The explicit `adroit relink` command, `renumber`, and `migrate` are always
+full-scope** — only `set_status_at` consults `relink_scope`.
+
+`adroit relink` exposes the full relink on demand (repairs repos edited outside
+adroit, or runs as the post-merge bot); `cmd_check` adds check #5 (broken target
+/ stale-vs-canonical). The broken-vs-stale split is **identity-based**: a link
+whose target file is missing but which names an ADR that still exists elsewhere
+is a **stale** link (`Severity::Warning` — `adroit relink` heals it), while a
+link naming no existing ADR is **broken** (`Severity::Error`). `cmd_check` exits
+non-zero only when an `Error`-severity problem is present (duplicate number,
+broken link, status/dir mismatch, unparseable, broken supersession); a
+warning-only report (e.g. a deferred-relink PR's transiently stale inbound links)
+prints `OK: N ADRs, M warning(s)` and exits 0. `query.rs` reuses
 `links::number_in_target` for its (numeric) graph link parsing.
 
 `Store::renumber` (`adroit renumber <old> <new> [--file]`) resolves a duplicate

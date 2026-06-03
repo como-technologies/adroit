@@ -861,6 +861,7 @@ fn store_options(cfg: &Config) -> StoreOptions {
         review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
         date_source: cfg.date_source,
         naming: cfg.naming,
+        relink_scope: cfg.relink_scope,
     }
 }
 

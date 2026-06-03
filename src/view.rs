@@ -233,10 +233,13 @@ pub struct ProblemFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
-    /// A real defect (duplicate id, status/dir mismatch, unparseable file,
-    /// broken link) — `adroit check` exits non-zero on any of these.
+    /// A real defect (duplicate id, status/dir mismatch, unparseable file, a
+    /// link to a nonexistent ADR) — `adroit check` exits non-zero when any
+    /// error is present.
     Error,
     /// A fixable inconsistency (a stale cross-ADR link `adroit relink` repairs).
+    /// `adroit check` reports warnings but does **not** fail on them, so a
+    /// deferred-relink PR branch still passes CI.
     Warning,
 }
 
@@ -252,9 +255,13 @@ pub enum ProblemKind {
     Unparseable,
     /// A `Supersedes` / `Superseded by` note references a nonexistent ADR.
     BrokenSupersession,
-    /// A relative `.md` link whose target file does not exist.
+    /// A relative `.md` link whose target file is missing and which names no
+    /// existing ADR — it points nowhere. (A missing target that *does* name a
+    /// known ADR is a [`StaleLink`](ProblemKind::StaleLink) instead.)
     BrokenLink,
-    /// A relative `.md` link that resolves but not to the ADR's current home.
+    /// A relative `.md` link that points somewhere other than its ADR's current
+    /// home — the ADR exists, so `adroit relink` repairs it. Covers both a
+    /// wrong-but-present path and a missing path whose ADR lives elsewhere.
     StaleLink,
 }
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::{DateSource, Layout, MarkdownTheme};
+use crate::config::{DateSource, Layout, MarkdownTheme, RelinkScope};
 use crate::format::Format;
 use crate::naming::NamingScheme;
 
@@ -64,6 +64,14 @@ pub struct Cli {
     /// Also settable via `ADROIT_NAMING`.
     #[arg(long, value_enum, global = true, env = "ADROIT_NAMING")]
     pub naming: Option<NamingScheme>,
+
+    /// How much a status-change move auto-relinks: all (heal every inbound link,
+    /// default), self (only the moved file's own links — defer the rest to a
+    /// post-merge `adroit relink`), or none (move only). Overrides config.
+    ///
+    /// Also settable via `ADROIT_RELINK_SCOPE`.
+    #[arg(long, value_enum, global = true, env = "ADROIT_RELINK_SCOPE")]
+    pub relink_scope: Option<RelinkScope>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
