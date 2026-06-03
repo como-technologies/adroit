@@ -484,32 +484,71 @@ fn run_status_change(
             let Some((pr, pr_url)) = refs.pr.clone() else {
                 return Ok(true); // no PR recorded → just move locally
             };
-            let st = match forge.pr_state(&pr) {
-                Ok(s) => s,
+            // Read live PR state to verify quorum + CI. In *preview* mode this is
+            // best-effort: a preview must never require valid credentials, so an
+            // auth/API failure still prints a (credential-free) plan. Only an
+            // actual apply surfaces auth/API errors; offline always degrades to a
+            // local-only change.
+            let state = match forge.pr_state(&pr) {
+                Ok(s) => Some(s),
                 Err(e) if e.is_offline() => {
-                    eprintln!("adroit: forge unreachable ({e}); local status change only.");
-                    return Ok(true);
+                    if apply {
+                        eprintln!("adroit: forge unreachable ({e}); local status change only.");
+                        return Ok(true);
+                    }
+                    None
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    if apply {
+                        return Err(e.into());
+                    }
+                    eprintln!(
+                        "adroit: couldn't read live PR state for the preview ({e}); \
+                         showing the plan without approval/CI status."
+                    );
+                    None
+                }
             };
-            let ok = st.approvals >= quorum && matches!(st.ci, CiStatus::Success | CiStatus::None);
             if !apply {
                 println!("Forge plan (accept):");
-                println!(
-                    "  - PR {pr_url}: {}/{quorum} approvals, CI {:?}{}",
-                    st.approvals,
-                    st.ci,
-                    if st.merged { " (already merged)" } else { "" }
-                );
-                if let Some((_, iu)) = &refs.issue {
-                    println!("  - close issue {iu}");
-                }
-                if !ok && !st.merged {
-                    println!("  (blocked: needs {quorum} approvals + passing CI)");
+                match &state {
+                    Some(st) => {
+                        let ok = st.approvals >= quorum
+                            && matches!(st.ci, CiStatus::Success | CiStatus::None);
+                        println!(
+                            "  - PR {pr_url}: {}/{quorum} approvals, CI {:?}{}",
+                            st.approvals,
+                            st.ci,
+                            if st.merged { " (already merged)" } else { "" }
+                        );
+                        if let Some((_, iu)) = &refs.issue {
+                            println!("  - close issue {iu}");
+                        }
+                        if !ok && !st.merged {
+                            println!("  (blocked: needs {quorum} approvals + passing CI)");
+                        }
+                    }
+                    None => {
+                        println!(
+                            "  - verify PR {pr_url} has >= {quorum} approvals + passing CI, then merge"
+                        );
+                        if let Some((_, iu)) = &refs.issue {
+                            println!("  - close issue {iu}");
+                        }
+                        println!(
+                            "  (live PR state unavailable — set a valid token to see approvals/CI)"
+                        );
+                    }
                 }
                 println!("\nPreview — re-run with --yes to apply.");
                 return Ok(false);
             }
+            // apply == true: offline/auth already returned above, so state is Some;
+            // fall back to a local-only change if it somehow isn't.
+            let Some(st) = state else {
+                return Ok(true);
+            };
+            let ok = st.approvals >= quorum && matches!(st.ci, CiStatus::Success | CiStatus::None);
             if !st.merged {
                 if !ok {
                     anyhow::bail!(
@@ -1021,6 +1060,33 @@ mod tests {
         }
     }
 
+    /// A forge whose PR read fails with an *auth* error — used to prove a
+    /// preview is credential-free, and that an apply still surfaces the error.
+    struct AuthFailForge;
+    impl Forge for AuthFailForge {
+        fn open_pr(&self, _: &PrDraft) -> Result<PrRef, ForgeError> {
+            unreachable!()
+        }
+        fn pr_state(&self, _: &str) -> Result<PrState, ForgeError> {
+            Err(ForgeError::Auth("Bad credentials".into()))
+        }
+        fn merge_pr(&self, _: &str) -> Result<(), ForgeError> {
+            unreachable!("apply must abort before merging on an auth failure")
+        }
+        fn close_pr(&self, _: &str) -> Result<(), ForgeError> {
+            unreachable!()
+        }
+        fn comment_pr(&self, _: &str, _: &str) -> Result<(), ForgeError> {
+            unreachable!()
+        }
+        fn set_pr_body(&self, _: &str, _: &str) -> Result<(), ForgeError> {
+            unreachable!()
+        }
+        fn describe(&self) -> String {
+            "authfail".into()
+        }
+    }
+
     fn refs_with_pr() -> ForgeRefs {
         ForgeRefs {
             issue: Some(("7".into(), "issue-url".into())),
@@ -1094,5 +1160,40 @@ mod tests {
         .unwrap();
         assert!(!proceed); // stop: no local move
         assert!(!forge.merged.get()); // no merge
+    }
+
+    #[test]
+    fn accept_dry_run_preview_is_credential_free() {
+        // `set-status accepted --with-forge --dry-run` (dry_run=true, no --yes):
+        // a bad/missing token must NOT abort the preview — it prints the plan
+        // without live approval/CI status and stops before any local move.
+        let proceed = run_status_change(
+            &AuthFailForge,
+            &noop::NoopTracker,
+            &refs_with_pr(),
+            Status::Accepted,
+            3,
+            true,  // --dry-run
+            false, // no --yes
+        )
+        .unwrap();
+        assert!(!proceed); // preview only: no local move
+    }
+
+    #[test]
+    fn accept_apply_surfaces_auth_error() {
+        // With --yes, an auth failure reading the PR is fatal (you can't merge an
+        // approval-gated PR without credentials) — and must not reach merge_pr.
+        let err = run_status_change(
+            &AuthFailForge,
+            &noop::NoopTracker,
+            &refs_with_pr(),
+            Status::Accepted,
+            3,
+            false,
+            true, // --yes → apply
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("auth"));
     }
 }
