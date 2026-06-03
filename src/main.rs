@@ -76,6 +76,8 @@ fn main() -> Result<()> {
         return cmd_config(action.as_ref(), &cli);
     }
     // `auth` only writes the credential store — no ADR dir/store needed.
+    // Forge-only: the command exists solely in `--features forge` builds.
+    #[cfg(feature = "forge")]
     if let Some(Command::Auth {
         provider,
         token,
@@ -142,7 +144,9 @@ fn main() -> Result<()> {
             template,
             no_edit,
             category,
+            #[cfg(feature = "forge")]
             forge,
+            #[cfg(feature = "forge")]
             dry_run,
         }) => {
             let path = cmd_new(
@@ -153,81 +157,108 @@ fn main() -> Result<()> {
                 category.as_deref(),
             )?;
             println!("Created {}", path.display());
-            // Opt-in forge hook (issue + draft PR + ## References). No-op unless
-            // --forge and the `forge` feature is built in. Runs before the
-            // editor so the populated References are visible.
-            adroit::forge_hook::after_new(
-                &cfg,
-                &path,
-                &title,
-                adroit::forge_hook::ForgeFlags {
-                    enabled: forge,
-                    dry_run,
-                    yes: false,
-                },
-            )?;
+            // Opt-in forge hook (issue + draft PR + ## References). The forge
+            // flags only exist in `--features forge` builds; otherwise the hook
+            // gets disabled flags and no-ops. Runs before the editor so the
+            // populated References are visible.
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes: false,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            adroit::forge_hook::after_new(&cfg, &path, &title, forge_flags)?;
             if cfg.open_on_new && !no_edit {
                 open_in_editor(editor, &path)?;
             }
         }
-        Some(Command::List { status, forge }) => cmd_list(&store, &cfg, status.as_deref(), forge)?,
+        Some(Command::List {
+            status,
+            #[cfg(feature = "forge")]
+            forge,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_on = forge;
+            #[cfg(not(feature = "forge"))]
+            let forge_on = false;
+            cmd_list(&store, &cfg, status.as_deref(), forge_on)?;
+        }
         Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
         Some(Command::SetStatus {
             id,
             status,
+            #[cfg(feature = "forge")]
             forge,
+            #[cfg(feature = "forge")]
             dry_run,
+            #[cfg(feature = "forge")]
             yes,
-        }) => cmd_set_status(
-            &store,
-            &cfg,
-            &id,
-            &status,
-            adroit::forge_hook::ForgeFlags {
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
                 enabled: forge,
                 dry_run,
                 yes,
-            },
-        )?,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            cmd_set_status(&store, &cfg, &id, &status, forge_flags)?;
+        }
         Some(Command::Supersede {
             new,
             old,
+            #[cfg(feature = "forge")]
             forge,
+            #[cfg(feature = "forge")]
             dry_run,
+            #[cfg(feature = "forge")]
             yes,
         }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             cmd_supersede(
                 &store,
                 &cfg,
                 &resolve_ref(&cfg, &new)?,
                 &resolve_ref(&cfg, &old)?,
-                adroit::forge_hook::ForgeFlags {
-                    enabled: forge,
-                    dry_run,
-                    yes,
-                },
+                forge_flags,
             )?;
         }
         Some(Command::SetReview {
             id,
             date,
             clear,
+            #[cfg(feature = "forge")]
             forge,
+            #[cfg(feature = "forge")]
             dry_run,
+            #[cfg(feature = "forge")]
             yes,
         }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             cmd_set_review(
                 &store,
                 &cfg,
                 &resolve_ref(&cfg, &id)?,
                 date.as_deref(),
                 clear,
-                adroit::forge_hook::ForgeFlags {
-                    enabled: forge,
-                    dry_run,
-                    yes,
-                },
+                forge_flags,
             )?;
         }
         Some(Command::Link {
@@ -240,29 +271,44 @@ fn main() -> Result<()> {
             cmd_link(&store, &cfg, &id, relates_to, depends_on, refines, remove)?;
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
-        Some(Command::Check { forge }) => cmd_check(&store, &cfg, forge)?,
+        Some(Command::Check {
+            #[cfg(feature = "forge")]
+            forge,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_on = forge;
+            #[cfg(not(feature = "forge"))]
+            let forge_on = false;
+            cmd_check(&store, &cfg, forge_on)?;
+        }
         Some(Command::Relink {
             dry_run,
+            #[cfg(feature = "forge")]
             forge,
+            #[cfg(feature = "forge")]
             yes,
-        }) => cmd_relink(
-            &store,
-            &cfg,
-            dry_run,
-            adroit::forge_hook::ForgeFlags {
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
                 enabled: forge,
                 dry_run,
                 yes,
-            },
-        )?,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            cmd_relink(&store, &cfg, dry_run, forge_flags)?;
+        }
+        #[cfg(feature = "forge")]
         Some(Command::Sync { id, dry_run, yes }) => cmd_sync(&store, &cfg, &id, dry_run, yes)?,
         Some(Command::Renumber { old, new, file }) => {
             require_numeric_scheme(&cfg, "renumber")?;
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
+        #[cfg(feature = "forge")]
         Some(Command::Init { print }) => cmd_init(&store, print)?,
         Some(Command::Publish { out, dry_run }) => cmd_publish(&store, &out, dry_run)?,
+        #[cfg(feature = "forge")]
         Some(Command::Notify { id, dry_run }) => cmd_notify(&store, &cfg, &id, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { id }) => {
@@ -274,11 +320,22 @@ fn main() -> Result<()> {
             days,
             quorum,
             output,
+            #[cfg(feature = "forge")]
             forge,
+            #[cfg(feature = "forge")]
             dry_run,
+            #[cfg(feature = "forge")]
             yes,
         }) => {
             require_numeric_scheme(&cfg, "review")?;
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             cmd_review(
                 &store,
                 &cfg,
@@ -286,16 +343,13 @@ fn main() -> Result<()> {
                 days,
                 quorum,
                 output.as_deref(),
-                adroit::forge_hook::ForgeFlags {
-                    enabled: forge,
-                    dry_run,
-                    yes,
-                },
+                forge_flags,
             )?;
         }
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
         // `config` returns before the store is opened (see above).
         Some(Command::Config { .. }) => unreachable!("config handled before store open"),
+        #[cfg(feature = "forge")]
         Some(Command::Auth { .. }) => unreachable!("auth handled before store open"),
         None => run_tui(&cfg, &dir)?,
     }
@@ -982,6 +1036,7 @@ fn cmd_relink(
 }
 
 /// `adroit sync`: refresh an ADR's linked PR description from its content.
+#[cfg(feature = "forge")]
 fn cmd_sync(store: &Store, cfg: &Config, id: &str, dry_run: bool, yes: bool) -> Result<()> {
     let r = resolve_ref(cfg, id)?;
     let path = store.find_path_by_ref(&r)?;
@@ -1043,6 +1098,7 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
 }
 
 /// `adroit auth`: save a forge token to the local credential store.
+#[cfg(feature = "forge")]
 fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Result<()> {
     if !matches!(provider, "github" | "gitlab" | "jira") {
         anyhow::bail!("provider must be one of: github, gitlab, jira");
@@ -1068,6 +1124,7 @@ fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Res
 }
 
 /// `adroit init`: detect the forge from the git remote and write the config.
+#[cfg(feature = "forge")]
 fn cmd_init(store: &Store, print_only: bool) -> Result<()> {
     let url = std::process::Command::new("git")
         .arg("-C")
@@ -1138,6 +1195,7 @@ fn cmd_publish(store: &Store, out: &std::path::Path, dry_run: bool) -> Result<()
 }
 
 /// `adroit notify`: announce an ADR's state to a chat webhook.
+#[cfg(feature = "forge")]
 fn cmd_notify(store: &Store, cfg: &Config, id: &str, dry_run: bool) -> Result<()> {
     let webhook = std::env::var("ADROIT_NOTIFY_WEBHOOK").map_err(|_| {
         anyhow::anyhow!("set ADROIT_NOTIFY_WEBHOOK to a Slack/Teams incoming-webhook URL")

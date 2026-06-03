@@ -1778,13 +1778,30 @@ fn new_without_forge_has_no_references_section() {
 
 #[cfg(not(feature = "forge"))]
 #[test]
-fn new_with_forge_warns_when_feature_absent() {
+fn forge_flag_is_absent_without_the_feature() {
+    // A no-forge build doesn't expose `--forge` at all (it's `#[cfg]`-gated), so
+    // passing it is a hard error, not a silent no-op.
     let dir = TempDir::new().unwrap();
     adroit(&dir)
         .args(["new", "X", "--no-edit", "--forge"])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("lacks the `forge` feature"));
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+}
+
+#[cfg(not(feature = "forge"))]
+#[test]
+fn forge_only_commands_are_absent_without_the_feature() {
+    // init/auth/sync/notify are `#[cfg(feature = "forge")]` — a no-forge build
+    // doesn't have them at all (publish stays — it's offline).
+    let dir = TempDir::new().unwrap();
+    for sub in ["auth", "init", "sync", "notify"] {
+        adroit(&dir)
+            .arg(sub)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+    }
 }
 
 #[cfg(feature = "forge")]

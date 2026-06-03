@@ -344,14 +344,21 @@ client + one token: `src/forge/github.rs` (`Github` is both, behind `Arc`,
 `tracker` selection. `src/forge/noop.rs` is the null-object adapter for previews.
 
 **Clean dispatch (two axes).** Compile-time: the `#[cfg(feature="forge")]` lives
-only on the `mod` line in `lib.rs` and on the `src/forge_hook.rs` facade (twin
-defs: real when on, no-op when off), so verbs (`cmd_new`/`cmd_set_status`/
-`cmd_supersede`) call `forge_hook::*` unconditionally — no `#[cfg]`/`if enabled`
-in the main paths. Runtime: `forge::open(&ForgeConfig)` is a **thin dispatcher**
-(`match Provider` → `github::open(cfg)`); each provider module owns its own
-construction (token env var, slug/host). Adding a provider = one match arm + one
-module. HTTP is behind the `HttpTransport` seam so adapters are tested with a
-`FakeTransport` (no network).
+on the `mod` line in `lib.rs`, on the `src/forge_hook.rs` facade (twin defs: real
+when on, no-op when off), and on the **forge CLI surface** in `src/cli.rs` — the
+`--forge`/`--dry-run`/`--yes` opt-in flags on shared verbs *and* the forge-only
+commands (`init`/`auth`/`sync`/`notify`), so a no-forge build doesn't expose them
+at all (no misleading flags or `unrecognized subcommand` no-ops; `publish` stays
+— it's offline). The verb *handlers* (`cmd_new`/`cmd_set_status`/`cmd_supersede`)
+still call `forge_hook::*` unconditionally (no-op twins) — they carry no
+`#[cfg]`; `main`'s dispatch builds the `ForgeFlags` from the gated fields with a
+small `#[cfg]` (`ForgeFlags::default()` when forge is off). The top-level
+`help_template` is `cfg_attr`-selected so the no-forge build's `--help` omits the
+"Forge integration" section. Runtime: `forge::open(&ForgeConfig)` is a **thin
+dispatcher** (`match Provider` → `github::open(cfg)`); each provider module owns
+its own construction (token env var, slug/host). Adding a provider = one match
+arm + one module. HTTP is behind the `HttpTransport` seam so adapters are tested
+with a `FakeTransport` (no network).
 
 **Verbs wired** (all opt-in via `--forge`, with migrate-style `--dry-run`/
 `--yes`; graceful-offline = warn + keep the local write; the ADR is the durable

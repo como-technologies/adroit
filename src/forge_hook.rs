@@ -230,6 +230,8 @@ pub fn sync_pr(_cfg: &Config, _path: &Path, flags: ForgeFlags) -> Result<bool> {
 /// Post a chat notification to `webhook`. `dry_run` prints the message instead.
 /// Returns `true` only when the message was actually delivered (so the caller
 /// doesn't claim success on a dry run, a failed webhook, or a no-forge build).
+// Only ever called by the forge-gated `notify` command, so it exists solely in
+// forge builds (no no-op twin needed).
 #[cfg(feature = "forge")]
 pub fn notify(webhook: &str, text: &str, dry_run: bool) -> Result<bool> {
     if dry_run {
@@ -237,12 +239,6 @@ pub fn notify(webhook: &str, text: &str, dry_run: bool) -> Result<bool> {
         return Ok(false);
     }
     crate::forge::notify(webhook, text)
-}
-
-#[cfg(not(feature = "forge"))]
-pub fn notify(_webhook: &str, _text: &str, _dry_run: bool) -> Result<bool> {
-    eprintln!("adroit: `notify` needs the `forge` feature (rebuild with `--features forge`)");
-    Ok(false)
 }
 
 /// Shared "you asked for --forge but this build lacks it" notice.
