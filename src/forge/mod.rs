@@ -20,6 +20,7 @@ use crate::adr::Status;
 use crate::config::{Config, ForgeConfig, Provider};
 
 pub mod github;
+pub mod gitlab;
 pub mod noop;
 
 // ---------------------------------------------------------------------------
@@ -228,8 +229,7 @@ pub fn open(cfg: &ForgeConfig) -> Adapters {
     match cfg.provider {
         Provider::None => (None, None),
         Provider::Github => github::open(cfg),
-        // Phase 1b: gitlab::open(cfg)
-        Provider::Gitlab => (None, None),
+        Provider::Gitlab => gitlab::open(cfg),
     }
 }
 
