@@ -567,6 +567,57 @@ pub fn on_supersede(
     Ok(true)
 }
 
+/// Post `body` as a comment on an ADR's linked issue **and** PR (shared by
+/// `review` → kickoff and `set-review` → deadline mirror). Opt-in, dry-run/--yes
+/// gated, graceful-offline.
+pub fn comment(
+    cfg: &Config,
+    path: &std::path::Path,
+    body: &str,
+    label: &str,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(());
+    };
+    let (forge, tracker) = open(fcfg);
+    let (Some(forge), Some(tracker)) = (forge, tracker) else {
+        eprintln!(
+            "adroit: --with-forge: `{}` integration inactive; skipping the {label} comment.",
+            fcfg.provider
+        );
+        return Ok(());
+    };
+    let refs = read_refs(path);
+    if refs.issue.is_none() && refs.pr.is_none() {
+        return Ok(()); // nothing linked to comment on
+    }
+    let apply = yes && !dry_run;
+    if !apply {
+        println!("Forge plan ({label}):");
+        if let Some((_, pu)) = &refs.pr {
+            println!("  - comment on PR {pu}");
+        }
+        if let Some((_, iu)) = &refs.issue {
+            println!("  - comment on issue {iu}");
+        }
+        println!("\nPreview — re-run with --yes to apply.");
+        return Ok(());
+    }
+    if let Some((pr, _)) = &refs.pr
+        && let Err(e) = forge.comment_pr(pr, body)
+    {
+        eprintln!("adroit: couldn't comment on PR ({e})");
+    }
+    if let Some((issue, _)) = &refs.issue
+        && let Err(e) = tracker.comment_issue(issue, body)
+    {
+        eprintln!("adroit: couldn't comment on issue ({e})");
+    }
+    Ok(())
+}
+
 /// Forge-aware repo checks (issue #4 lifecycle map): flag drift between an ADR
 /// and its linked issue/PR. Network reads degrade gracefully (warn-once offline,
 /// skip). Returns `Warning`-severity problems so `check` reports but doesn't fail.

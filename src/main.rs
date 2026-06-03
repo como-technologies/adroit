@@ -200,13 +200,25 @@ fn main() -> Result<()> {
                 },
             )?;
         }
-        Some(Command::SetReview { id, date, clear }) => {
+        Some(Command::SetReview {
+            id,
+            date,
+            clear,
+            with_forge,
+            dry_run,
+            yes,
+        }) => {
             cmd_set_review(
                 &store,
                 &cfg,
                 &resolve_ref(&cfg, &id)?,
                 date.as_deref(),
                 clear,
+                adroit::forge_hook::ForgeFlags {
+                    enabled: with_forge,
+                    dry_run,
+                    yes,
+                },
             )?;
         }
         Some(Command::Link {
@@ -236,6 +248,9 @@ fn main() -> Result<()> {
             days,
             quorum,
             output,
+            with_forge,
+            dry_run,
+            yes,
         }) => {
             require_numeric_scheme(&cfg, "review")?;
             cmd_review(
@@ -245,6 +260,11 @@ fn main() -> Result<()> {
                 days,
                 quorum,
                 output.as_deref(),
+                adroit::forge_hook::ForgeFlags {
+                    enabled: with_forge,
+                    dry_run,
+                    yes,
+                },
             )?;
         }
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
@@ -530,6 +550,7 @@ fn cmd_set_review(
     r: &AdrRef,
     date: Option<&str>,
     clear: bool,
+    forge: adroit::forge_hook::ForgeFlags,
 ) -> Result<()> {
     let review_by = if clear {
         None
@@ -546,6 +567,12 @@ fn cmd_set_review(
         Some(rb) => println!("Set {id} review deadline to {rb} ({})", path.display()),
         None => println!("Cleared {id} review deadline ({})", path.display()),
     }
+    // Opt-in: mirror the deadline to the linked issue/PR as a comment.
+    let note = match review_by {
+        Some(rb) => format!("Review deadline for {id} set to **{rb}** (via adroit)."),
+        None => format!("Review deadline for {id} cleared (via adroit)."),
+    };
+    adroit::forge_hook::comment(cfg, &path, &note, "review deadline", forge)?;
     Ok(())
 }
 
@@ -968,6 +995,7 @@ fn cmd_review(
     days: Option<u32>,
     quorum: Option<u32>,
     output: Option<&std::path::Path>,
+    forge: adroit::forge_hook::ForgeFlags,
 ) -> Result<()> {
     use adroit::template;
 
@@ -1014,12 +1042,14 @@ fn cmd_review(
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("could not create directory {}", parent.display()))?;
             }
-            std::fs::write(out, doc)
+            std::fs::write(out, &doc)
                 .with_context(|| format!("could not write {}", out.display()))?;
             println!("Created {}", out.display());
         }
         None => print!("{doc}"),
     }
+    // Opt-in: post the kickoff as a comment on the ADR's linked issue/PR.
+    adroit::forge_hook::comment(cfg, &path, &doc, "review kickoff", forge)?;
     Ok(())
 }
 

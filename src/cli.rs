@@ -235,6 +235,15 @@ pub enum Command {
         /// Remove the review deadline instead of setting one.
         #[arg(long, conflicts_with = "date")]
         clear: bool,
+        /// Also mirror the deadline as a comment on the ADR's linked issue/PR.
+        #[arg(long)]
+        with_forge: bool,
+        /// With `--with-forge`, preview the comment without posting.
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--with-forge`, post the comment (without it, preview).
+        #[arg(long)]
+        yes: bool,
     },
     /// Search ADRs by title and body (case-insensitive).
     Search {
@@ -316,6 +325,15 @@ pub enum Command {
         /// Write the generated doc to this path instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Also post the kickoff as a comment on the ADR's linked issue/PR.
+        #[arg(long)]
+        with_forge: bool,
+        /// With `--with-forge`, preview the comment without posting.
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--with-forge`, post the comment (without it, preview).
+        #[arg(long)]
+        yes: bool,
     },
     /// Serve the read-only web dashboard (requires the `web` feature).
     ///

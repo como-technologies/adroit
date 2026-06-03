@@ -153,6 +153,35 @@ pub fn enrich(
     Ok(())
 }
 
+/// Post a comment to the ADR's linked issue/PR (review kickoff, review deadline).
+#[cfg(feature = "forge")]
+pub fn comment(
+    cfg: &Config,
+    path: &Path,
+    body: &str,
+    label: &str,
+    flags: ForgeFlags,
+) -> Result<()> {
+    if !flags.enabled {
+        return Ok(());
+    }
+    crate::forge::comment(cfg, path, body, label, flags.dry_run, flags.yes)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn comment(
+    _cfg: &Config,
+    _path: &Path,
+    _body: &str,
+    _label: &str,
+    flags: ForgeFlags,
+) -> Result<()> {
+    if flags.enabled {
+        warn_no_feature();
+    }
+    Ok(())
+}
+
 /// Shared "you asked for --with-forge but this build lacks it" notice.
 #[cfg(not(feature = "forge"))]
 fn warn_no_feature() {
