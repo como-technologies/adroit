@@ -75,6 +75,15 @@ fn main() -> Result<()> {
     if let Some(Command::Config { action }) = &cli.command {
         return cmd_config(action.as_ref(), &cli);
     }
+    // `auth` only writes the credential store — no ADR dir/store needed.
+    if let Some(Command::Auth {
+        provider,
+        token,
+        email,
+    }) = &cli.command
+    {
+        return cmd_auth(provider, token.clone(), email.clone());
+    }
 
     let dir = config::resolve_dir(cli.dir, &cfg);
 
@@ -287,6 +296,7 @@ fn main() -> Result<()> {
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
         // `config` returns before the store is opened (see above).
         Some(Command::Config { .. }) => unreachable!("config handled before store open"),
+        Some(Command::Auth { .. }) => unreachable!("auth handled before store open"),
         None => run_tui(&cfg, &dir)?,
     }
 
@@ -1029,6 +1039,31 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
         let warnings = report.problems.len();
         println!("OK: {} ADRs, {} warning(s)", report.checked, warnings);
     }
+    Ok(())
+}
+
+/// `adroit auth`: save a forge token to the local credential store.
+fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Result<()> {
+    if !matches!(provider, "github" | "gitlab" | "jira") {
+        anyhow::bail!("provider must be one of: github, gitlab, jira");
+    }
+    let token = match token {
+        Some(t) => t,
+        None => dialoguer::Password::new()
+            .with_prompt(format!("{provider} API token"))
+            .interact()
+            .context("reading token")?,
+    };
+    config::store_credential(provider, &token)?;
+    if provider == "jira"
+        && let Some(e) = email
+    {
+        config::store_credential("jira_email", &e)?;
+    }
+    let path = config::credentials_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    println!("Saved {provider} token to {path} (environment variables still take precedence).");
     Ok(())
 }
 

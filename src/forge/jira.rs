@@ -88,8 +88,12 @@ impl Jira {
 pub fn open(cfg: &crate::config::ForgeConfig) -> Option<Box<dyn Tracker>> {
     let host = cfg.tracker_host.clone()?;
     let project = cfg.tracker_project.clone()?;
-    let email = std::env::var("ADROIT_JIRA_EMAIL").ok()?;
-    let token = std::env::var("ADROIT_JIRA_TOKEN").ok()?;
+    let email = std::env::var("ADROIT_JIRA_EMAIL")
+        .ok()
+        .or_else(|| crate::config::load_credential("jira_email"))?;
+    let token = std::env::var("ADROIT_JIRA_TOKEN")
+        .ok()
+        .or_else(|| crate::config::load_credential("jira"))?;
     Some(Box::new(Jira::new(host, project, &email, &token)))
 }
 

@@ -78,7 +78,8 @@ pub fn open(cfg: &crate::config::ForgeConfig) -> super::Adapters {
     let token = cfg
         .token
         .clone()
-        .or_else(|| std::env::var("ADROIT_GITHUB_TOKEN").ok());
+        .or_else(|| std::env::var("ADROIT_GITHUB_TOKEN").ok())
+        .or_else(|| crate::config::load_credential("github"));
     match (token, cfg.repo.clone()) {
         (Some(token), Some(repo)) => {
             let gh = Github::new(cfg.host.clone(), repo, token);

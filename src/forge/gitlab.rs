@@ -79,7 +79,8 @@ pub fn open(cfg: &crate::config::ForgeConfig) -> super::Adapters {
     let token = cfg
         .token
         .clone()
-        .or_else(|| std::env::var("ADROIT_GITLAB_TOKEN").ok());
+        .or_else(|| std::env::var("ADROIT_GITLAB_TOKEN").ok())
+        .or_else(|| crate::config::load_credential("gitlab"));
     match (token, cfg.repo.clone()) {
         (Some(token), Some(project)) => {
             let gl = Gitlab::new(cfg.host.clone(), project, token);

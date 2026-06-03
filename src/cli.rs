@@ -320,6 +320,20 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Save a forge token to the local credential store (used after env vars).
+    ///
+    /// A dependency-free `0600` file next to the config — no env-var copy-paste.
+    /// (OAuth device-flow + OS keychain are future enhancements.)
+    Auth {
+        /// Which token to store: `github`, `gitlab`, or `jira`.
+        provider: String,
+        /// The token value (omit to be prompted, hidden).
+        #[arg(long)]
+        token: Option<String>,
+        /// For `jira`: the account email saved alongside the token.
+        #[arg(long)]
+        email: Option<String>,
+    },
     /// Set up forge integration by detecting the provider from the git remote.
     ///
     /// Writes `forge.provider` / `forge.repo` (+ `forge.host` for self-managed)

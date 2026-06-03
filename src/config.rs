@@ -621,6 +621,51 @@ pub fn config_file_exists() -> bool {
     config_path().is_some_and(|p| p.exists())
 }
 
+/// The forge-token store (`adroit auth`) — a `provider: token` YAML map next to
+/// the config, created `0600`. A dependency-free, persistent, CI-safe credential
+/// store (an OS-keychain backend could be added later behind its own feature).
+pub fn credentials_path() -> Option<PathBuf> {
+    Some(
+        ProjectDirs::from("", "", "adroit")?
+            .config_dir()
+            .join("credentials.yaml"),
+    )
+}
+
+/// Load the saved token for `key` (e.g. `"github"`), if any.
+pub fn load_credential(key: &str) -> Option<String> {
+    let map: BTreeMap<String, String> =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(credentials_path()?).ok()?).ok()?;
+    map.get(key).cloned()
+}
+
+/// Save `token` for `key`, preserving other entries; the file is created `0600`.
+pub fn store_credential(key: &str, token: &str) -> Result<(), ConfigError> {
+    let path = credentials_path().ok_or(ConfigError::NoConfigDir)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+            path: path.clone(),
+            source,
+        })?;
+    }
+    let mut map: BTreeMap<String, String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_yaml_ng::from_str(&c).ok())
+        .unwrap_or_default();
+    map.insert(key.to_string(), token.to_string());
+    let yaml = serde_yaml_ng::to_string(&map).expect("serialize credentials");
+    std::fs::write(&path, yaml).map_err(|source| ConfigError::Write {
+        path: path.clone(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 impl Config {
     /// Load config from the XDG config file.
     ///
