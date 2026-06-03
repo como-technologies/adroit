@@ -8,7 +8,7 @@ init:
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
 # Run all CI checks (used by .github/workflows/ci.yml)
-ci: fmt-check lint test book crate-outdated crate-audit
+ci: fmt-check lint lint-forge test test-forge book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -22,9 +22,17 @@ fmt-check:
 lint:
     cargo clippy -- -D warnings
 
+# Run clippy with the forge feature (GitHub/GitLab adapters)
+lint-forge:
+    cargo clippy --features forge -- -D warnings
+
 # Run all tests
 test *ARGS:
     cargo test {{ARGS}}
+
+# Run tests with the forge feature enabled
+test-forge *ARGS:
+    cargo test --features forge {{ARGS}}
 
 # Run only unit tests (skip integration tests)
 unit:

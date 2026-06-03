@@ -136,6 +136,101 @@ pub enum RelinkScope {
     None,
 }
 
+/// The code-review host (and, by default, its native issue tracker) that the
+/// opt-in forge integration drives. `none` disables it.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    /// Forge integration off (the default).
+    #[default]
+    None,
+    /// GitHub (Pull Requests + GitHub Issues).
+    Github,
+    /// GitLab (Merge Requests + GitLab Issues).
+    Gitlab,
+}
+
+/// Which issue tracker the forge integration files to. `native` = the forge's
+/// own issues (GitHub/GitLab Issues); the others split the tracker off the forge
+/// (e.g. GitLab MRs + Jira issues).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackerProvider {
+    /// The forge's own issue tracker (default).
+    #[default]
+    Native,
+    Jira,
+    Linear,
+    GhIssues,
+    GlIssues,
+}
+
+/// Opt-in forge/tracker integration config. Tokens are **never** stored here —
+/// they come from the environment (`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN`
+/// / `ADROIT_JIRA_TOKEN`), read at construction time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ForgeConfig {
+    /// Code-review host (`none` disables the integration).
+    pub provider: Provider,
+    /// Provider slug — GitHub `owner/repo`, GitLab `group/project` (or numeric
+    /// project id). Defaults to the git remote when unset (future `init`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// API host for self-managed / enterprise instances (defaults per provider:
+    /// `api.github.com` / `gitlab.com`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Branch name prefix for `new`'s generated branch (default `adr/`).
+    pub branch_prefix: String,
+    /// Base branch PRs/MRs target (default `main`).
+    pub base_branch: String,
+    /// Issue tracker (default `native` = the forge's own issues).
+    pub tracker: TrackerProvider,
+    /// API token — env-only, never persisted (`#[serde(skip)]`). Populated at
+    /// construction from `ADROIT_*_TOKEN`.
+    #[serde(skip)]
+    pub token: Option<String>,
+}
+
+impl Default for ForgeConfig {
+    fn default() -> Self {
+        Self {
+            provider: Provider::default(),
+            repo: None,
+            host: None,
+            branch_prefix: "adr/".to_string(),
+            base_branch: "main".to_string(),
+            tracker: TrackerProvider::default(),
+            token: None,
+        }
+    }
+}
+
 /// Application configuration, persisted as YAML.
 ///
 /// New keys all carry serde defaults so older config files keep loading.
@@ -208,6 +303,11 @@ pub struct Config {
     /// link, default), `self` (only the moved file's own links — defer the rest
     /// to a post-merge `adroit relink`), or `none` (move only). Default: `all`.
     pub relink_scope: RelinkScope,
+
+    /// Opt-in forge/tracker integration (issue + PR/MR creation, etc.).
+    /// Absent by default — bare `adroit` never touches a forge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forge: Option<ForgeConfig>,
 }
 
 impl Default for Config {
@@ -230,6 +330,7 @@ impl Default for Config {
             date_source: DateSource::default(),
             naming: NamingScheme::default(),
             relink_scope: RelinkScope::default(),
+            forge: None,
         }
     }
 }
@@ -262,6 +363,27 @@ impl Config {
             "date_source" => self.date_source.to_string(),
             "naming" => self.naming.to_string(),
             "relink_scope" => self.relink_scope.to_string(),
+            // Forge sub-keys read through the (optional) `forge` block, falling
+            // back to ForgeConfig defaults when it's unset. `repo`/`host` are
+            // genuinely optional → `None` when unset.
+            "forge.provider" => self.forge.as_ref().map_or_else(
+                || Provider::default().to_string(),
+                |f| f.provider.to_string(),
+            ),
+            "forge.repo" => self.forge.as_ref().and_then(|f| f.repo.clone())?,
+            "forge.host" => self.forge.as_ref().and_then(|f| f.host.clone())?,
+            "forge.branch_prefix" => self.forge.as_ref().map_or_else(
+                || ForgeConfig::default().branch_prefix,
+                |f| f.branch_prefix.clone(),
+            ),
+            "forge.base_branch" => self.forge.as_ref().map_or_else(
+                || ForgeConfig::default().base_branch,
+                |f| f.base_branch.clone(),
+            ),
+            "forge.tracker" => self.forge.as_ref().map_or_else(
+                || TrackerProvider::default().to_string(),
+                |f| f.tracker.to_string(),
+            ),
             _ => return None,
         })
     }
@@ -309,6 +431,33 @@ impl Config {
                     .parse()
                     .map_err(|_| bad("relink scope (all|self|none)"))?
             }
+            // Forge sub-keys lazily create the `forge` block, then set one field.
+            "forge.provider" => {
+                self.forge.get_or_insert_with(ForgeConfig::default).provider = value
+                    .parse()
+                    .map_err(|_| bad("forge provider (none|github|gitlab)"))?
+            }
+            "forge.repo" => {
+                self.forge.get_or_insert_with(ForgeConfig::default).repo = Some(value.to_string())
+            }
+            "forge.host" => {
+                self.forge.get_or_insert_with(ForgeConfig::default).host = Some(value.to_string())
+            }
+            "forge.branch_prefix" => {
+                self.forge
+                    .get_or_insert_with(ForgeConfig::default)
+                    .branch_prefix = value.to_string()
+            }
+            "forge.base_branch" => {
+                self.forge
+                    .get_or_insert_with(ForgeConfig::default)
+                    .base_branch = value.to_string()
+            }
+            "forge.tracker" => {
+                self.forge.get_or_insert_with(ForgeConfig::default).tracker = value
+                    .parse()
+                    .map_err(|_| bad("tracker (native|jira|linear|gh_issues|gl_issues)"))?
+            }
             _ => return Err(format!("unknown config key `{key}`")),
         }
         Ok(())
@@ -331,6 +480,12 @@ pub const CONFIG_KEYS: &[&str] = &[
     "date_source",
     "naming",
     "relink_scope",
+    "forge.provider",
+    "forge.repo",
+    "forge.host",
+    "forge.branch_prefix",
+    "forge.base_branch",
+    "forge.tracker",
 ];
 
 /// The environment variable that overrides a config key (for `.env` writes and
@@ -823,6 +978,22 @@ mod tests {
         assert_eq!(c.get_str("relink_scope").as_deref(), Some("self"));
         c.set_str("relink_scope", "none").unwrap();
         assert_eq!(c.get_str("relink_scope").as_deref(), Some("none"));
+        // Forge sub-keys: lazily create the block, round-trip, validate.
+        assert_eq!(c.get_str("forge.provider").as_deref(), Some("none"));
+        assert_eq!(c.get_str("forge.branch_prefix").as_deref(), Some("adr/"));
+        assert_eq!(c.get_str("forge.repo"), None); // optional, unset
+        c.set_str("forge.provider", "github").unwrap();
+        c.set_str("forge.repo", "como-technologies/adroit").unwrap();
+        c.set_str("forge.tracker", "jira").unwrap();
+        assert_eq!(c.get_str("forge.provider").as_deref(), Some("github"));
+        assert_eq!(
+            c.get_str("forge.repo").as_deref(),
+            Some("como-technologies/adroit")
+        );
+        assert_eq!(c.get_str("forge.tracker").as_deref(), Some("jira"));
+        assert!(c.set_str("forge.provider", "bitbucket").is_err());
+        // The token is never a config key (env-only).
+        assert!(c.set_str("forge.token", "secret").is_err());
         c.set_str("layout", "flat").unwrap();
         c.set_str("review_overdue_days", "45").unwrap();
         assert_eq!(c.get_str("layout").as_deref(), Some("flat"));
