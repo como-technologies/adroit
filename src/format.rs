@@ -216,11 +216,19 @@ fn parse_status_line(line: &str, region: &mut StatusRegion) {
         return;
     }
     // A bare status word (e.g. "Accepted", "Proposed") sets the status if we
-    // have not already inferred one from a supersession note.
-    if region.status.is_none()
-        && let Ok(status) = v.parse::<Status>()
-    {
-        region.status = Some(status);
+    // have not already inferred one from a supersession note. Try the whole line
+    // first, then its first word — so a qualified status line like
+    // "Proposed — implementation approach evolving based on spike" still resolves
+    // to Proposed instead of falling through to the default.
+    if region.status.is_none() {
+        let status = v.parse::<Status>().ok().or_else(|| {
+            v.split_whitespace()
+                .next()
+                .and_then(|word| word.parse::<Status>().ok())
+        });
+        if let Some(status) = status {
+            region.status = Some(status);
+        }
     }
 }
 
@@ -648,5 +656,22 @@ We need a consistent way to capture architectural decisions.\n";
         assert!(region.supersedes.is_none());
         assert!(region.superseded_by.is_none());
         assert!(region.review_by.is_none());
+    }
+
+    #[test]
+    fn qualified_status_line_resolves_via_first_word() {
+        // A real-repo status line with trailing qualification resolves to the
+        // bare status via its first word (the whole line doesn't parse).
+        let doc = "# ADR-0003: X\n\n## Status\n\nProposed — implementation approach evolving based on spike\n";
+        assert_eq!(parse_markdown_section_status(doc), Some(Status::Proposed));
+
+        // A plain status word still works.
+        let plain = "# ADR-0004: X\n\n## Status\n\nAccepted\n";
+        assert_eq!(parse_markdown_section_status(plain), Some(Status::Accepted));
+
+        // A section whose first word is not a status stays None (the directory
+        // remains the source of truth — not a mismatch).
+        let prose = "# ADR-0005: X\n\n## Status\n\nSee the discussion thread.\n";
+        assert_eq!(parse_markdown_section_status(prose), None);
     }
 }

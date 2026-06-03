@@ -578,21 +578,30 @@ pub fn default_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".adroit"))
 }
 
+/// Expand a leading `~` and any `$VAR` in a path, falling back to the original
+/// on error. A no-op for a path with neither (e.g. one the shell already
+/// expanded, or a plain relative path).
+fn expand_path(raw: &std::path::Path) -> PathBuf {
+    shellexpand::full(&raw.to_string_lossy())
+        .map(|s| PathBuf::from(s.as_ref()))
+        .unwrap_or_else(|_| raw.to_path_buf())
+}
+
 /// Resolve the ADR directory from the precedence chain:
 /// CLI flag > config file > XDG data directory.
 ///
-/// - **CLI paths** are used as-is (the shell expands `~` and `$VAR` before
-///   we see them, and relative paths are intentionally CWD-relative).
-/// - **Config paths** undergo tilde / env-var expansion, then absolute paths
-///   are used directly while relative paths resolve against [`default_dir`].
+/// - **CLI / env paths** are tilde / env-var expanded, but relative paths stay
+///   CWD-relative. A `--dir` typed at the shell is already expanded, but an
+///   `ADROIT_DIR=~/foo` sourced from a `.env` reaches clap *literally* — without
+///   expanding it here, the `~` becomes a stray directory name.
+/// - **Config paths** undergo the same expansion, then absolute paths are used
+///   directly while relative paths resolve against [`default_dir`].
 pub fn resolve_dir(cli_dir: Option<PathBuf>, config: &Config) -> PathBuf {
     if let Some(dir) = cli_dir {
-        return dir;
+        return expand_path(&dir);
     }
     if let Some(ref raw) = config.dir {
-        let expanded = shellexpand::full(&raw.to_string_lossy())
-            .map(|s| PathBuf::from(s.as_ref()))
-            .unwrap_or_else(|_| raw.clone());
+        let expanded = expand_path(raw);
         if expanded.is_absolute() {
             return expanded;
         }
@@ -670,6 +679,18 @@ mod tests {
         let config = Config::default();
         let result = resolve_dir(Some(PathBuf::from("local-adrs")), &config);
         assert_eq!(result, PathBuf::from("local-adrs"));
+    }
+
+    #[test]
+    fn resolve_cli_tilde_expands() {
+        // `ADROIT_DIR=~/foo` from a `.env` reaches clap literally (the shell
+        // never sees it), so resolve_dir must expand the `~` itself — otherwise
+        // it becomes a stray `~` directory.
+        let config = Config::default();
+        let result = resolve_dir(Some(PathBuf::from("~/my-adrs")), &config);
+        assert!(result.is_absolute());
+        assert!(result.ends_with("my-adrs"));
+        assert!(!result.to_string_lossy().contains('~'));
     }
 
     #[test]
