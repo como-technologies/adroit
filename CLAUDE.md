@@ -377,9 +377,16 @@ pairs with Jira issues — `forge::open` chooses forge and tracker independently
 `config::parse_remote_url` → write `forge.*`), `adroit publish` (export accepted
 ADRs to a dir — `src/publish.rs`, core/offline; Confluence/Notion adapters are
 future), `adroit notify <id>` (POST to a Slack/Teams webhook via
-`forge::notify`). **Still future:** `adroit auth` (OAuth device-flow + keychain),
-forge artifact templates, MR-description sync, the `serve` dashboard forge panel,
-and `relink` patching forge-side URLs.
+`forge::notify`), and `adroit auth <github|gitlab|jira> [--token] [--email]`
+(save a token to a dependency-free 0600 `credentials.yaml` next to the config —
+`config::store_credential`/`load_credential`; `{github,gitlab,jira}::open`
+resolve the token env → credential store → none). **Read-only dashboard panel.**
+`serve` exposes `GET /api/adrs/{id}/forge` (the only forge-aware route; built on
+the always-compiled `forge_hook::enrich_one` so a `web`-only build returns JSON
+`null`), which `DetailView.vue` fetches on demand to show the linked issue/PR +
+PR approvals/CI/merged — the dashboard never *writes* to the forge. **Still
+future:** OAuth device-flow + OS-keychain credential storage, and
+Confluence/Notion `publish` adapters.
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
 `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are

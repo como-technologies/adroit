@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowLeft, GitBranch, Link2, Clock, CalendarDays, History } from 'lucide-vue-next'
-import { getAdr, type AdrDetail, type RelatedLink } from '@/api'
+import {
+  ArrowLeft,
+  GitBranch,
+  Link2,
+  Clock,
+  CalendarDays,
+  History,
+  GitPullRequest,
+  CircleDot,
+  ExternalLink,
+  Check,
+} from 'lucide-vue-next'
+import { getAdr, getAdrForge, type AdrDetail, type ForgeData, type RelatedLink } from '@/api'
 import { shortDate } from '@/util'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
@@ -12,6 +23,7 @@ const props = defineProps<{ id: string }>()
 const adr = ref<AdrDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
+const forge = ref<ForgeData | null>(null)
 
 async function load() {
   loading.value = true
@@ -26,10 +38,49 @@ async function load() {
   }
 }
 
-onMounted(load)
-watch(() => props.id, load)
+// Read-only forge enrichment (issue/PR links + PR state) — separate, best-effort,
+// and non-fatal: a missing/disabled forge just hides the panel, never blocks the
+// ADR. Fetched on mount / id change only (not on every live-reload tick) to avoid
+// hammering the remote forge API.
+async function loadForge() {
+  try {
+    forge.value = await getAdrForge(props.id)
+  } catch {
+    forge.value = null
+  }
+}
+
+onMounted(() => {
+  load()
+  loadForge()
+})
+watch(() => props.id, () => {
+  load()
+  loadForge()
+})
 // Re-fetch this ADR when files change on disk.
 useLiveReload(load)
+
+// Show the panel only when there's actual forge state to show.
+const hasForge = computed(() => !!(forge.value && (forge.value.issue_url || forge.value.pr_url)))
+
+// Map a CI status string ("success"/"pending"/"failure"/"none") to a label +
+// pill classes; `undefined`/"none" render nothing.
+const CI_STYLES: Record<string, { label: string; cls: string }> = {
+  success: {
+    label: 'CI passing',
+    cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+  },
+  pending: {
+    label: 'CI running',
+    cls: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  },
+  failure: {
+    label: 'CI failing',
+    cls: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+  },
+}
+const ciStyle = computed(() => (forge.value?.pr_ci ? CI_STYLES[forge.value.pr_ci] : undefined))
 
 // `kind` only marks an edge as a supersession; the direction relative to *this*
 // ADR comes from its own superseded_by / supersedes fields. So an edge to the
@@ -144,6 +195,56 @@ const relatedSorted = computed(() =>
           <span class="font-mono">{{ link.reference }}</span>
         </RouterLink>
       </nav>
+
+      <!-- Forge state (read-only enrichment: linked issue + PR review state) -->
+      <section v-if="hasForge" class="card-glass px-6 py-5">
+        <h2
+          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+        >
+          <GitPullRequest :size="13" /> Forge
+        </h2>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <a
+            v-if="forge?.issue_url"
+            :href="forge.issue_url"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-brand-300 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:text-brand-300"
+          >
+            <CircleDot :size="12" class="text-emerald-500" /> Issue
+            <ExternalLink :size="11" class="text-slate-400" />
+          </a>
+          <a
+            v-if="forge?.pr_url"
+            :href="forge.pr_url"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-brand-300 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:text-brand-300"
+          >
+            <GitPullRequest :size="12" class="text-violet-500" /> Pull request
+            <ExternalLink :size="11" class="text-slate-400" />
+          </a>
+          <span
+            v-if="forge?.pr_merged"
+            class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-800 dark:bg-violet-900/40 dark:text-violet-300"
+          >
+            <GitBranch :size="12" /> merged
+          </span>
+          <span
+            v-if="ciStyle"
+            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+            :class="ciStyle.cls"
+          >
+            {{ ciStyle.label }}
+          </span>
+          <span
+            v-if="forge?.pr_approvals != null && forge.pr_approvals > 0"
+            class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+          >
+            <Check :size="12" /> {{ forge.pr_approvals }} approval{{ forge.pr_approvals === 1 ? '' : 's' }}
+          </span>
+        </div>
+      </section>
 
       <!-- Body (server-rendered markdown) -->
       <div class="card-glass px-6 py-6 sm:px-8 sm:py-7">

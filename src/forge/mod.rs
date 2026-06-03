@@ -829,6 +829,17 @@ pub fn enrich(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(());
     };
+    enrich_with(fcfg, store, summaries)
+}
+
+/// As [`enrich`], but driven by a [`ForgeConfig`] directly — the dashboard's
+/// read-only forge panel uses this to enrich one ADR on demand without holding
+/// a whole [`Config`].
+pub fn enrich_with(
+    fcfg: &crate::config::ForgeConfig,
+    store: &crate::store::Store,
+    summaries: &mut [crate::view::AdrSummary],
+) -> anyhow::Result<()> {
     let (forge, _tracker) = open(fcfg);
     let Some(forge) = forge else {
         return Ok(());

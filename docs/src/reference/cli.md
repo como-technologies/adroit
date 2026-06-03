@@ -462,10 +462,10 @@ editor: vim
 | `forge.tracker_project` | string | — | Split-tracker project key (e.g. the Jira project `OPS`). |
 | `forge.tracker_host` | host | — | Split-tracker API host (e.g. `your-site.atlassian.net`). |
 
-Tokens are **never** stored in config — they come from the environment
+Tokens are **never** stored in config. They resolve in order: the environment
 (`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +
-`ADROIT_JIRA_EMAIL`). The binary must be built `--features forge`. The
-integration is opt-in per command:
+`ADROIT_JIRA_EMAIL`), then a local credential file written by `adroit auth`. The
+binary must be built `--features forge`. The integration is opt-in per command:
 
 - `new` / `set-status` / `supersede` / `review` / `set-review` take `--with-forge`
   (+ `--dry-run` to preview, `--yes` to apply a mutation like a PR merge).
@@ -474,6 +474,14 @@ integration is opt-in per command:
 - `adroit init` detects the forge from the git remote and writes `forge.*`;
   `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
   `adroit notify <id>` posts to a Slack/Teams webhook (`ADROIT_NOTIFY_WEBHOOK`).
+- `adroit auth <github|gitlab|jira> [--token <T>] [--email <E>]` saves a token to
+  a `0600` `credentials.yaml` beside the config (prompts if `--token` is omitted),
+  so you don't have to re-export an env var each session. Environment variables
+  still take precedence; `--email` stores the Jira account email.
+- The `serve` dashboard shows a **read-only** Forge panel on each ADR's detail
+  page (linked issue + PR, with PR approvals / CI / merged state), fetched from
+  `GET /api/adrs/{id}/forge`. It only *reads* the forge — authoring stays in the
+  CLI — and renders nothing unless a provider is configured and the ADR is linked.
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 

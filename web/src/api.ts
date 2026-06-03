@@ -23,6 +23,17 @@ export interface AdrSummary {
   review_due: boolean
 }
 
+// Live forge state for an ADR (issue/PR links + PR review state), served by the
+// opt-in read-only `/api/adrs/:id/forge` endpoint. Every field is optional —
+// the endpoint returns `null` (→ no panel) when no provider is configured.
+export interface ForgeData {
+  issue_url?: string
+  pr_url?: string
+  pr_approvals?: number
+  pr_ci?: string
+  pr_merged?: boolean
+}
+
 export interface RelatedLink {
   reference: string
   address: string
@@ -133,6 +144,12 @@ export function listAdrs(opts: { status?: string; sort?: string } = {}): Promise
 
 export function getAdr(id: string): Promise<AdrDetail> {
   return getJson<AdrDetail>(`/api/adrs/${encodeURIComponent(id)}`)
+}
+
+// Live forge state for one ADR, or `null` when no provider is configured (or
+// the build lacks the `forge` feature, or the ADR has no linked issue/PR).
+export function getAdrForge(id: string): Promise<ForgeData | null> {
+  return getJson<ForgeData | null>(`/api/adrs/${encodeURIComponent(id)}/forge`)
 }
 
 export function search(q: string): Promise<AdrSummary[]> {

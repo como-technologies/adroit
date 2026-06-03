@@ -153,6 +153,31 @@ pub fn enrich(
     Ok(())
 }
 
+/// Enrich a single summary in place with live forge state (issue/PR links + PR
+/// approvals/CI/merged) for the read-only `serve` dashboard panel. A no-op (the
+/// summary's `forge_data` stays `None`) unless built with `forge` *and* a forge
+/// provider is configured. Read-only: it never writes to the forge.
+#[cfg(feature = "forge")]
+pub fn enrich_one(
+    forge: Option<&crate::config::ForgeConfig>,
+    store: &crate::store::Store,
+    summary: &mut crate::view::AdrSummary,
+) -> Result<()> {
+    let Some(fcfg) = forge else {
+        return Ok(());
+    };
+    crate::forge::enrich_with(fcfg, store, std::slice::from_mut(summary))
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn enrich_one(
+    _forge: Option<&crate::config::ForgeConfig>,
+    _store: &crate::store::Store,
+    _summary: &mut crate::view::AdrSummary,
+) -> Result<()> {
+    Ok(())
+}
+
 /// Post a comment to the ADR's linked issue/PR (review kickoff, review deadline).
 #[cfg(feature = "forge")]
 pub fn comment(

@@ -74,6 +74,10 @@ struct AppState {
     dir: Arc<RwLock<PathBuf>>,
     options: Arc<StoreOptions>,
     watcher: Option<Arc<Watcher>>,
+    /// Forge config (if any), for the opt-in read-only `/api/adrs/{id}/forge`
+    /// enrichment panel. `None` when no provider is configured; enrichment is
+    /// also a no-op unless the binary was built with the `forge` feature.
+    forge: Option<crate::config::ForgeConfig>,
 }
 
 impl AppState {
@@ -84,6 +88,7 @@ impl AppState {
             dir: Arc::new(RwLock::new(dir)),
             options: Arc::new(store_options(cfg)),
             watcher: None,
+            forge: cfg.forge.clone(),
         }
     }
 
@@ -94,6 +99,7 @@ impl AppState {
             dir: Arc::new(RwLock::new(dir)),
             options: Arc::new(store_options(cfg)),
             watcher: Some(Arc::new(watcher)),
+            forge: cfg.forge.clone(),
         })
     }
 
@@ -165,6 +171,7 @@ fn router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/api/adrs", get(list_adrs))
         .route("/api/adrs/{id}", get(get_adr))
+        .route("/api/adrs/{id}/forge", get(get_adr_forge))
         .route("/api/search", get(search_adrs))
         .route("/api/stats", get(get_stats))
         .route("/api/graph", get(get_graph))
@@ -274,6 +281,42 @@ async fn get_adr(
     // relative links is deferred (noted in the README / report).
     detail.body_html = Some(render_markdown(&detail.body));
     Ok(Json(detail))
+}
+
+/// `GET /api/adrs/{id}/forge` → live forge state for one ADR (issue/PR links +
+/// PR approvals/CI/merged) as a `ForgeData`, or JSON `null` when the build has
+/// no `forge` feature, the repo configures no provider, or the ADR has no
+/// linked issue/PR. **Read-only** — it only *reads* forge state (the panel
+/// never writes; authoring stays in the CLI). The (blocking) forge HTTP call
+/// runs on a blocking thread so it never stalls the async reactor.
+async fn get_adr_forge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let forge_data = tokio::task::spawn_blocking(move || forge_state_for(&state, &id))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(forge_data))
+}
+
+/// Resolve `id` to an ADR and enrich its summary with live forge state. Blocking
+/// (filesystem + a forge HTTP call); call from `spawn_blocking`.
+fn forge_state_for(state: &AppState, id: &str) -> Result<Option<crate::view::ForgeData>, ApiError> {
+    let store = state.store()?;
+    let r = store
+        .options()
+        .naming
+        .parse_ref(id)
+        .ok_or_else(|| ApiError::NotFound(format!("ADR {id} not found")))?;
+    let path = store
+        .find_path_by_ref(&r)
+        .map_err(|_| ApiError::NotFound(format!("ADR {id} not found")))?;
+    let mut summary = query::detail_at(&store, &path)
+        .map_err(ApiError::internal)?
+        .summary;
+    crate::forge_hook::enrich_one(state.forge.as_ref(), &store, &mut summary)
+        .map_err(ApiError::internal)?;
+    Ok(summary.forge_data)
 }
 
 /// `GET /api/search?q=` → `Vec<AdrSummary>`.
@@ -600,6 +643,23 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         assert!(v.is_array());
         assert_eq!(v.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn forge_endpoint_returns_null_without_provider() {
+        // No `forge:` configured (and the default test build lacks the feature),
+        // so the read-only panel endpoint resolves the ADR but reports no state.
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/adrs/1/forge").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, "null");
+    }
+
+    #[tokio::test]
+    async fn forge_endpoint_404s_for_unknown_adr() {
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/adrs/999/forge").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
