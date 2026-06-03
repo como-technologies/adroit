@@ -839,7 +839,7 @@ fn config_show(cli: &Cli) -> Result<()> {
     println!("{:<21}{:<30} SOURCE", "KEY", "VALUE");
     for &key in config::CONFIG_KEYS {
         let value = config_effective(cli, &cfg, key);
-        let source = config_source(cli, key, raw.get(key).is_some());
+        let source = config_source(cli, key, config::yaml_has_key(&raw, key));
         // The literal space guarantees a gap even when `value` exceeds the pad.
         println!("{key:<21}{value:<30} {source}");
     }

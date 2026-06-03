@@ -608,6 +608,21 @@ pub enum ConfigError {
 
 /// Return the path to the config file, or `None` if the home directory
 /// cannot be determined.
+/// Is `key` present in raw config YAML? Walks a dotted key (`forge.provider`)
+/// into the nested map it serializes to, so `config show` can tell a file-set
+/// forge key from a defaulted one (a flat `raw.get("forge.provider")` always
+/// misses the nested `forge:` block and would mislabel it `default`).
+pub fn yaml_has_key(raw: &serde_yaml_ng::Value, key: &str) -> bool {
+    let mut node = raw;
+    for part in key.split('.') {
+        match node.get(part) {
+            Some(v) => node = v,
+            None => return false,
+        }
+    }
+    true
+}
+
 pub fn config_path() -> Option<PathBuf> {
     Some(
         ProjectDirs::from("", "", "adroit")?
@@ -1110,6 +1125,22 @@ mod tests {
         assert_eq!(c.get_str("bogus"), None);
         // Unset optionals read as None.
         assert_eq!(c.get_str("editor"), None);
+    }
+
+    #[test]
+    fn yaml_has_key_walks_dotted_keys() {
+        let raw: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("layout: flat\nforge:\n  provider: github\n  repo: o/r\n")
+                .unwrap();
+        // Flat key present / absent.
+        assert!(yaml_has_key(&raw, "layout"));
+        assert!(!yaml_has_key(&raw, "format"));
+        // Nested (dotted) keys: present ones resolve, unset ones don't — the bug
+        // was a flat lookup labeling every `forge.*` key `default`.
+        assert!(yaml_has_key(&raw, "forge.provider"));
+        assert!(yaml_has_key(&raw, "forge.repo"));
+        assert!(!yaml_has_key(&raw, "forge.host"));
+        assert!(!yaml_has_key(&raw, "forge.tracker"));
     }
 
     #[test]
