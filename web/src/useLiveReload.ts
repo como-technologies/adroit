@@ -11,7 +11,8 @@
 // exposes a small reactive `connected`/`updatedAt` state for an optional
 // "updated" indicator in the UI.
 
-import { onMounted, onUnmounted, ref, type Ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import { workspaceChanged } from '@/composables/useWorkspace'
 
 export interface LiveReload {
   // True while the SSE connection is open.
@@ -29,6 +30,13 @@ export function useLiveReload(onChange: () => void): LiveReload {
   const connected = ref(false)
   const updatedAt = ref<number | null>(null)
   let source: EventSource | null = null
+
+  // Reload immediately when the dashboard switches ADR directory — a
+  // client-initiated change shouldn't wait on the server's SSE round-trip.
+  watch(workspaceChanged, () => {
+    updatedAt.value = Date.now()
+    onChange()
+  })
 
   onMounted(() => {
     // Guard for non-browser/test environments without EventSource.
