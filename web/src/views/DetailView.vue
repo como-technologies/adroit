@@ -24,6 +24,7 @@ const adr = ref<AdrDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
 const forge = ref<ForgeData | null>(null)
+const forgeLoading = ref(false)
 
 async function load() {
   loading.value = true
@@ -43,10 +44,14 @@ async function load() {
 // ADR. Fetched on mount / id change only (not on every live-reload tick) to avoid
 // hammering the remote forge API.
 async function loadForge() {
+  forgeLoading.value = true
+  forge.value = null // clear stale data so the panel shows its skeleton while loading
   try {
     forge.value = await getAdrForge(props.id)
   } catch {
     forge.value = null
+  } finally {
+    forgeLoading.value = false
   }
 }
 
@@ -158,8 +163,8 @@ const relatedSorted = computed(() =>
 
       <!-- Timeline + Forge — side by side when both are present -->
       <div
-        v-if="adr.history.length || hasForge"
-        :class="['grid gap-6', adr.history.length && hasForge ? 'lg:grid-cols-2' : '']"
+        v-if="adr.history.length || hasForge || forgeLoading"
+        :class="['grid gap-6', adr.history.length && (hasForge || forgeLoading) ? 'lg:grid-cols-2' : '']"
       >
         <!-- Lifecycle timeline (git-derived: proposed → accepted/rejected/…) -->
         <section v-if="adr.history.length" class="card-glass px-6 py-5">
@@ -187,17 +192,30 @@ const relatedSorted = computed(() =>
           </ol>
         </section>
 
-        <!-- Forge state (read-only) — rows mirror the Timeline layout -->
-        <section v-if="hasForge" class="card-glass px-6 py-5">
+        <!-- Forge state (read-only) — rows mirror the Timeline layout. Shown
+             with a skeleton while the (async, possibly networked) fetch is in
+             flight, then either the table or nothing if the ADR has no links. -->
+        <section v-if="hasForge || forgeLoading" class="card-glass px-6 py-5">
           <h2
             class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
           >
             <GitPullRequest :size="13" /> Forge
           </h2>
-          <dl class="mt-3 space-y-3">
-            <div v-if="forge?.issue_url" class="flex items-center gap-3">
-              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Issue</dt>
-              <dd class="min-w-0 flex-1">
+
+          <!-- Loading splash (matches the dashboard skeletons) -->
+          <dl v-if="forgeLoading" class="mt-3 space-y-3" aria-hidden="true">
+            <div v-for="n in 3" :key="n" class="flex items-center justify-between gap-3">
+              <span class="h-3.5 w-20 animate-pulse rounded bg-slate-200/60 dark:bg-slate-800/50" />
+              <span class="h-3.5 w-28 animate-pulse rounded-full bg-slate-200/60 dark:bg-slate-800/50" />
+            </div>
+          </dl>
+
+          <!-- Loaded: label (left) / value (right-aligned), like the Timeline's
+               right column — justify-between spaces the two ends apart. -->
+          <dl v-else class="mt-3 space-y-3">
+            <div v-if="forge?.issue_url" class="flex items-center justify-between gap-3">
+              <dt class="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Issue</dt>
+              <dd class="min-w-0 text-right">
                 <a
                   :href="forge.issue_url"
                   target="_blank"
@@ -209,9 +227,9 @@ const relatedSorted = computed(() =>
                 </a>
               </dd>
             </div>
-            <div v-if="forge?.pr_url" class="flex items-center gap-3">
-              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Pull request</dt>
-              <dd class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <div v-if="forge?.pr_url" class="flex items-center justify-between gap-3">
+              <dt class="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Pull request</dt>
+              <dd class="flex min-w-0 flex-wrap items-center justify-end gap-2">
                 <a
                   :href="forge.pr_url"
                   target="_blank"
@@ -229,18 +247,18 @@ const relatedSorted = computed(() =>
                 </span>
               </dd>
             </div>
-            <div v-if="ciStyle" class="flex items-center gap-3">
-              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">CI</dt>
-              <dd class="min-w-0 flex-1">
+            <div v-if="ciStyle" class="flex items-center justify-between gap-3">
+              <dt class="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">CI</dt>
+              <dd>
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
                   :class="ciStyle.cls"
                 >{{ ciStyle.label }}</span>
               </dd>
             </div>
-            <div v-if="forge?.pr_approvals != null" class="flex items-center gap-3">
-              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Reviews</dt>
-              <dd class="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300">
+            <div v-if="forge?.pr_approvals != null" class="flex items-center justify-between gap-3">
+              <dt class="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Reviews</dt>
+              <dd class="inline-flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300">
                 <Check :size="13" class="text-emerald-500" /> {{ forge.pr_approvals }} approval{{ forge.pr_approvals === 1 ? '' : 's' }}
               </dd>
             </div>
