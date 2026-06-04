@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   ArrowRight,
@@ -21,6 +21,7 @@ import {
   type ForgeSummary,
 } from '@/api'
 import { useLiveReload } from '@/useLiveReload'
+import { workspaceChanged } from '@/composables/useWorkspace'
 import StatusPill from '@/components/StatusPill.vue'
 import StatTile from '@/components/StatTile.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -78,6 +79,12 @@ onMounted(() => {
 })
 // Recompute stats when ADR files change on disk.
 useLiveReload(load)
+// Switching the ADR directory can change which repo (and forge) we're looking
+// at, so re-fetch the forge tiles too — but only on an actual workspace switch,
+// not on every live-reload tick (which would hammer the remote forge API).
+watch(workspaceChanged, () => {
+  loadForge()
+})
 
 function countOf(status: Status): number {
   return stats.value?.by_status.find((s) => s.status === status)?.count ?? 0
