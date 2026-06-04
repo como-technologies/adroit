@@ -133,7 +133,10 @@ byte-identical. `e` remains the external-`$EDITOR` escape hatch.
 picker) and serves
 an embedded Vue 3 SPA (`web/dist`, embedded via `rust-embed`). The store is
 reopened per request, so every response reflects current on-disk state.
-Markdown→HTML rendering is server-side (`pulldown-cmark`). No endpoint writes
+Markdown→HTML rendering is server-side (`pulldown-cmark`); `render_markdown`
+post-processes the event stream to **autolink bare `http(s)://` URLs** (e.g. the
+`## References` issue/PR links — CommonMark only autolinks `<url>`), skipping code
+blocks and existing links. No endpoint writes
 ADRs — authoring stays in CLI/TUI; the one mutating route, `POST /api/workspace`,
 only switches which directory the dashboard views (re-pointing the watcher), and
 the ADR side imports only the read path.

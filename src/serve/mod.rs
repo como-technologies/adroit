@@ -559,15 +559,102 @@ async fn events(
 
 /// Render an ADR markdown body to HTML.
 fn render_markdown(md: &str) -> String {
-    use pulldown_cmark::{Options, Parser, html};
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(md, options);
+
+    // CommonMark only autolinks angle-bracketed `<url>`, so bare URLs (e.g. the
+    // `## References` issue/PR links) render as plain text. Walk the event stream
+    // and turn bare `http(s)://` URLs in text into links — skipping code blocks
+    // and the inside of existing links so we never double-wrap or touch code.
+    let mut events: Vec<Event> = Vec::new();
+    let mut in_code = 0u32;
+    let mut in_link = 0u32;
+    for ev in Parser::new_ext(md, options) {
+        match &ev {
+            Event::Start(Tag::CodeBlock(_)) => in_code += 1,
+            Event::End(TagEnd::CodeBlock) => in_code = in_code.saturating_sub(1),
+            Event::Start(Tag::Link { .. }) => in_link += 1,
+            Event::End(TagEnd::Link) => in_link = in_link.saturating_sub(1),
+            Event::Text(t) if in_code == 0 && in_link == 0 => {
+                push_autolinked(&mut events, t);
+                continue;
+            }
+            _ => {}
+        }
+        events.push(ev);
+    }
+
     let mut out = String::new();
-    html::push_html(&mut out, parser);
+    html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Split a text run into plain-text + autolink events for bare `http(s)://`
+/// URLs. Text with no URL is pushed unchanged.
+fn push_autolinked<'a>(
+    events: &mut Vec<pulldown_cmark::Event<'a>>,
+    text: &pulldown_cmark::CowStr<'a>,
+) {
+    use pulldown_cmark::{CowStr, Event, LinkType, Tag, TagEnd};
+    let s: &str = text;
+    let mut last = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let Some((rel_start, rel_end)) = next_url(&s[i..]) else {
+            break;
+        };
+        let (start, end) = (i + rel_start, i + rel_end);
+        if start > last {
+            events.push(Event::Text(CowStr::from(s[last..start].to_string())));
+        }
+        let url = s[start..end].to_string();
+        events.push(Event::Start(Tag::Link {
+            link_type: LinkType::Inline,
+            dest_url: CowStr::from(url.clone()),
+            title: CowStr::from(""),
+            id: CowStr::from(""),
+        }));
+        events.push(Event::Text(CowStr::from(url)));
+        events.push(Event::End(TagEnd::Link));
+        last = end;
+        i = end;
+    }
+    if last < s.len() {
+        events.push(Event::Text(CowStr::from(s[last..].to_string())));
+    }
+}
+
+/// Byte span `(start, end)` of the first bare `http(s)://` URL in `s`, with
+/// trailing sentence punctuation / closing brackets trimmed off.
+fn next_url(s: &str) -> Option<(usize, usize)> {
+    let http = s.find("http://");
+    let https = s.find("https://");
+    let start = match (http, https) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => return None,
+    };
+    let bytes = s.as_bytes();
+    let mut end = start;
+    while end < s.len()
+        && !bytes[end].is_ascii_whitespace()
+        && !matches!(bytes[end], b'<' | b'>' | b'"' | b'`')
+    {
+        end += 1;
+    }
+    while end > start
+        && matches!(
+            bytes[end - 1],
+            b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']' | b'}' | b'\'' | b'"'
+        )
+    {
+        end -= 1;
+    }
+    Some((start, end))
 }
 
 /// Map a `?status=` string to `Option<Status>`, rejecting unknown values (400).
@@ -698,6 +785,27 @@ mod tests {
         let resp = get(&root, "/api/adrs/1/forge").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_string(resp).await, "null");
+    }
+
+    #[test]
+    fn render_markdown_autolinks_bare_urls() {
+        let html = render_markdown("See https://example.com/issues/7 for details.");
+        assert!(
+            html.contains(r#"<a href="https://example.com/issues/7""#),
+            "{html}"
+        );
+        // The trailing period stays as text, not part of the link.
+        assert!(html.contains("for details."), "{html}");
+    }
+
+    #[test]
+    fn render_markdown_leaves_code_and_existing_links_alone() {
+        // A URL in a fenced code block is not linkified.
+        let code = render_markdown("```\nhttps://example.com/x\n```");
+        assert!(!code.contains("<a "), "{code}");
+        // An existing markdown link isn't double-wrapped.
+        let linked = render_markdown("[label](https://example.com/y)");
+        assert_eq!(linked.matches("<a ").count(), 1, "{linked}");
     }
 
     #[tokio::test]
