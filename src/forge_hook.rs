@@ -74,6 +74,32 @@ pub fn before_status_change(
     Ok(true)
 }
 
+/// Forge actions after a `set-status` move: on an applied `accepted`, commit the
+/// `proposed/ → accepted/` move + relink and push it to the base branch (#4's
+/// "push the relink commit"). No-op unless `--forge` + the feature build.
+#[cfg(feature = "forge")]
+pub fn after_status_change(
+    cfg: &Config,
+    new_path: &Path,
+    new_status: Status,
+    flags: ForgeFlags,
+) -> Result<()> {
+    if !flags.enabled {
+        return Ok(());
+    }
+    crate::forge::after_status_change(cfg, new_path, new_status, flags.dry_run, flags.yes)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn after_status_change(
+    _cfg: &Config,
+    _new_path: &Path,
+    _new_status: Status,
+    _flags: ForgeFlags,
+) -> Result<()> {
+    Ok(())
+}
+
 /// Forge actions before a `supersede` (comment + close the old ADR's issue/PR).
 #[cfg(feature = "forge")]
 pub fn on_supersede(

@@ -564,6 +564,9 @@ fn cmd_set_status(
         return Ok(());
     }
     let path = store.set_status_ref(&r, new_status)?;
+    // On an applied `accepted --forge`, commit the move + relink onto the base
+    // branch and push it (no-op otherwise). Runs after the local move.
+    adroit::forge_hook::after_status_change(cfg, &path, new_status, forge)?;
     println!(
         "Updated {} status to {new_status} ({})",
         cfg.naming.display(&r),

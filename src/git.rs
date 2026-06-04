@@ -41,6 +41,13 @@ pub fn current_branch(dir: &Path) -> Result<String, GitError> {
     run(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
 }
 
+/// The repository's top-level working-tree directory. Stable across branch
+/// switches (a status subdir like `proposed/` can vanish when switching), so use
+/// it as the `-C` dir for a sequence of git ops that includes a `switch`.
+pub fn toplevel(dir: &Path) -> Result<std::path::PathBuf, GitError> {
+    run(dir, &["rev-parse", "--show-toplevel"]).map(std::path::PathBuf::from)
+}
+
 /// The default branch of `remote` (e.g. `main`), read from `remote`'s `HEAD`.
 /// `None` when there's no such remote or HEAD ref (e.g. a repo with no remote).
 pub fn default_remote_branch(dir: &Path, remote: &str) -> Option<String> {
@@ -78,6 +85,24 @@ pub fn push(dir: &Path, remote: &str, branch: &str) -> Result<(), GitError> {
     run(dir, &["push", "--set-upstream", remote, branch]).map(drop)
 }
 
+/// Fetch refs from `remote` (so `<remote>/<branch>` reflects its latest tip).
+pub fn fetch(dir: &Path, remote: &str) -> Result<(), GitError> {
+    run(dir, &["fetch", remote]).map(drop)
+}
+
+/// Fast-forward the current branch to `<remote>/<branch>`. Fails (never forces)
+/// if the local branch has diverged — the caller degrades to a local-only change.
+pub fn merge_ff_only(dir: &Path, remote: &str, branch: &str) -> Result<(), GitError> {
+    let r#ref = format!("{remote}/{branch}");
+    run(dir, &["merge", "--ff-only", &r#ref]).map(drop)
+}
+
+/// True when the working tree + index are clean (no staged/unstaged changes), so
+/// it's safe to switch branches. Untracked files don't count as dirty.
+pub fn is_clean(dir: &Path) -> Result<bool, GitError> {
+    Ok(run(dir, &["status", "--porcelain", "--untracked-files=no"])?.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +135,63 @@ mod tests {
         // The commit landed on the new branch, not on the default branch.
         let log = run(dir, &["log", "--oneline"]).unwrap();
         assert!(log.contains("ADR-0001"));
+    }
+
+    #[test]
+    fn is_clean_reflects_working_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        add(dir, &dir.join("a.txt")).unwrap();
+        commit(dir, "seed").unwrap();
+        assert!(is_clean(dir).unwrap());
+        std::fs::write(dir.join("a.txt"), "changed\n").unwrap();
+        assert!(!is_clean(dir).unwrap());
+    }
+
+    #[test]
+    fn fetch_then_fast_forward_pulls_remote_commits() {
+        let root = tempfile::tempdir().unwrap();
+        let bare = root.path().join("origin.git");
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&bare)
+            .output()
+            .unwrap();
+        // Clone A: seed + push.
+        let a = root.path().join("a");
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&bare)
+            .arg(&a)
+            .output()
+            .unwrap();
+        run(&a, &["config", "user.email", "t@example.com"]).unwrap();
+        run(&a, &["config", "user.name", "Tester"]).unwrap();
+        std::fs::write(a.join("seed.txt"), "seed\n").unwrap();
+        add(&a, &a.join("seed.txt")).unwrap();
+        commit(&a, "seed").unwrap();
+        let branch = current_branch(&a).unwrap();
+        push(&a, "origin", &branch).unwrap();
+        // Clone B (has seed, not the next commit yet).
+        let b = root.path().join("b");
+        Command::new("git")
+            .args(["clone", "-q"])
+            .arg(&bare)
+            .arg(&b)
+            .output()
+            .unwrap();
+        // A adds a commit and pushes.
+        std::fs::write(a.join("next.txt"), "next\n").unwrap();
+        add(&a, &a.join("next.txt")).unwrap();
+        commit(&a, "next").unwrap();
+        push(&a, "origin", &branch).unwrap();
+        // B fetches + fast-forwards to pick it up.
+        assert!(!b.join("next.txt").exists());
+        fetch(&b, "origin").unwrap();
+        merge_ff_only(&b, "origin", &branch).unwrap();
+        assert!(b.join("next.txt").exists());
     }
 
     #[test]

@@ -366,8 +366,15 @@ record): `new` creates the issue + a draft PR off an `adr/NNNN-…` branch
 (`src/git.rs` does branch/commit/push) and records both URLs in a
 format-preserving `## References` section (`format::upsert_reference`);
 `set-status accepted` verifies `review_quorum` approvals + CI then merges the PR
-+ closes the issue (refuses if blocked; the whole op previews unless `--yes`);
-`set-status rejected`/`deprecated` close the PR + mark the issue won't-fix;
++ closes the issue (refuses if blocked; the whole op previews unless `--yes`),
+and then **"pushes the relink commit"** (#4): `before_status_change` fast-forwards
+the base branch to the merge, the local move relocates `proposed/ → accepted/` +
+relinks on it, and `after_status_change` (in `forge_hook`) commits + pushes that —
+so `accepted/` lands on `main` in one command. Best-effort: a dirty tree /
+diverged base / rejected push restores the branch and leaves the move local with
+a warning (`git.rs` gained `fetch`/`merge_ff_only`/`is_clean`/`toplevel`).
+`set-status rejected`/`deprecated` close the PR + mark the issue won't-fix (no
+relink commit — those don't merge);
 `supersede` comments on + closes the old ADR's issue/PR. Each orchestration is
 split into a testable core (`run_new`/`run_status_change`/`comment`) exercised
 with mock/noop adapters. Read-side: `check --forge` appends

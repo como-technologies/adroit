@@ -457,7 +457,7 @@ pub fn before_status_change(
         );
         return Ok(true);
     };
-    run_status_change(
+    let proceed = run_status_change(
         forge.as_ref(),
         tracker.as_ref(),
         &read_refs(path),
@@ -465,7 +465,101 @@ pub fn before_status_change(
         cfg.review_quorum,
         dry_run,
         yes,
-    )
+    )?;
+    // On an *applied* `accepted` the proposal PR just merged, landing the ADR in
+    // `proposed/` on the base branch. Fast-forward the local base so the upcoming
+    // move + relink can be committed onto it — #4's "push the relink commit"
+    // (with [`after_status_change`] doing the commit/push). Best-effort.
+    if proceed && yes && !dry_run && new_status == Status::Accepted {
+        sync_base_for_heal(fcfg, path);
+    }
+    Ok(proceed)
+}
+
+/// Fast-forward the base branch to the just-merged remote tip so the heal commit
+/// (`proposed/ → accepted/` + relink) can land on it. Best-effort: it skips on a
+/// dirty tree (don't clobber edits) or no/​diverged remote, warning so the user
+/// knows to commit the local move themselves. Never fails the status change.
+fn sync_base_for_heal(fcfg: &ForgeConfig, path: &std::path::Path) {
+    let start = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let base = &fcfg.base_branch;
+    // Resolve the repo top-level *before* switching — a status subdir like
+    // `proposed/` can disappear on the target branch, breaking later `-C` ops.
+    let Ok(top) = crate::git::toplevel(start) else {
+        return; // not a work tree → nothing to heal; the move stays local
+    };
+    if !matches!(crate::git::is_clean(&top), Ok(true)) {
+        eprintln!(
+            "adroit: merged the PR, but the working tree isn't clean — left the \
+             accepted/ move local (commit + push it to {base} yourself)."
+        );
+        return;
+    }
+    let orig = crate::git::current_branch(&top).ok();
+    let synced = crate::git::fetch(&top, "origin")
+        .and_then(|()| crate::git::switch(&top, base))
+        .and_then(|()| crate::git::merge_ff_only(&top, "origin", base));
+    if let Err(e) = synced {
+        // Restore the original branch so the local move still applies there.
+        if let Some(orig) = &orig {
+            let _ = crate::git::switch(&top, orig);
+        }
+        eprintln!(
+            "adroit: merged the PR, but couldn't fast-forward {base} ({e}) — left \
+             the accepted/ move local."
+        );
+    }
+}
+
+/// Forge actions for `set-status`, run **after** the local move. On an applied
+/// `accepted` where [`before_status_change`] put us on the (fast-forwarded) base
+/// branch, this commits the move + relink and pushes it — #4's "push the relink
+/// commit", so `accepted/` lands on `main` in one command. No-op otherwise;
+/// best-effort (a rejected push leaves the move committed locally).
+pub fn after_status_change(
+    cfg: &Config,
+    new_path: &std::path::Path,
+    new_status: Status,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    if !(yes && !dry_run && new_status == Status::Accepted) {
+        return Ok(());
+    }
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(());
+    };
+    // The ADR dir root (e.g. `<repo>/adrs`): the moved file is `<root>/<status>/<file>`.
+    let status_dir = new_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let adr_root = status_dir.parent().unwrap_or(status_dir);
+    let base = &fcfg.base_branch;
+    let Ok(top) = crate::git::toplevel(adr_root) else {
+        return Ok(());
+    };
+    // Only heal when before_status_change left us on the synced base branch;
+    // otherwise the move is on the proposal branch — leave it local.
+    if crate::git::current_branch(&top).ok().as_deref() != Some(base.as_str()) {
+        return Ok(());
+    }
+    let label = new_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("adr");
+    let heal = (|| -> Result<(), crate::git::GitError> {
+        crate::git::add(&top, adr_root)?; // stages the move + relinks (ADR dir only)
+        crate::git::commit(&top, &format!("ADR: accept {label}"))?;
+        crate::git::push(&top, "origin", base)
+    })();
+    match heal {
+        Ok(()) => println!("Forge: pushed the accepted/ relink commit to {base}"),
+        Err(e) => eprintln!(
+            "adroit: committed the accepted/ move locally but couldn't push {base} \
+             ({e}) — push it yourself."
+        ),
+    }
+    Ok(())
 }
 
 /// Provider-agnostic `set-status` orchestration (testable with mock adapters).

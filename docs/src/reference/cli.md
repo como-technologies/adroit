@@ -509,6 +509,13 @@ self-hosted — only `forge.host` changes. The integration is opt-in per command
 
 - `new` / `set-status` / `supersede` / `review` / `set-review` take `--forge`
   (+ `--dry-run` to preview, `--yes` to apply a mutation like a PR merge).
+- `set-status <id> accepted --forge --yes` does the whole accept in one command:
+  verify approvals/CI → merge the PR → close the issue → fast-forward the base
+  branch → move `proposed/ → accepted/` + relink → **commit and push that relink
+  commit to the base branch**, so `accepted/` lands on `main`. If the tree is
+  dirty, the base diverged, or the push is rejected, it warns and leaves the move
+  committed/uncommitted locally for you to push (`rejected`/`deprecated` close the
+  PR instead, so they don't produce a relink commit).
 - `check --forge` and `list --forge` add read-only forge awareness (drift checks
   / live PR state).
 - `adroit init` detects the forge from the git remote and writes `forge.*`;
