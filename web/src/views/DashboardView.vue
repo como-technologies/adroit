@@ -11,7 +11,15 @@ import {
   CircleAlert,
   CalendarClock,
 } from 'lucide-vue-next'
-import { getStats, getCheck, type Stats, type Status, type CheckReport } from '@/api'
+import {
+  getStats,
+  getCheck,
+  getForgeSummary,
+  type Stats,
+  type Status,
+  type CheckReport,
+  type ForgeSummary,
+} from '@/api'
 import { useLiveReload } from '@/useLiveReload'
 import StatusPill from '@/components/StatusPill.vue'
 import StatTile from '@/components/StatTile.vue'
@@ -21,6 +29,23 @@ const stats = ref<Stats | null>(null)
 const check = ref<CheckReport | null>(null)
 const loading = ref(false)
 const error = ref('')
+const forgeSummary = ref<ForgeSummary | null>(null)
+const forgeLoading = ref(false)
+
+// Forge tiles are a separate, best-effort fetch (live PR reads, so possibly
+// slow / networked). Fetched on mount only — not on every live-reload tick — so
+// the dashboard doesn't hammer the forge API.
+async function loadForge() {
+  forgeLoading.value = true
+  forgeSummary.value = null
+  try {
+    forgeSummary.value = await getForgeSummary()
+  } catch {
+    forgeSummary.value = null
+  } finally {
+    forgeLoading.value = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -47,7 +72,10 @@ function fmtBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadForge()
+})
 // Recompute stats when ADR files change on disk.
 useLiveReload(load)
 
@@ -121,6 +149,29 @@ function monthLabel(month: string): string {
         <StatTile label="Accepted" :value="countOf('Accepted')" tone="emerald" />
         <StatTile label="Proposed" :value="countOf('Proposed')" tone="amber" />
         <StatTile label="Issues" :value="issueCount" tone="rose" />
+      </div>
+
+      <!-- Forge tiles (read-only; only when a forge is configured + reachable) -->
+      <!-- Skeleton mirrors a StatTile loading its content: card + label + value
+           bars, so it doesn't read as two blank slabs while the (possibly slow,
+           networked) summary loads. -->
+      <div v-if="forgeLoading" class="grid grid-cols-2 gap-3">
+        <div v-for="i in 2" :key="i" class="card-glass p-5">
+          <div class="h-2.5 w-32 animate-pulse rounded bg-slate-200/70 dark:bg-slate-800/60" />
+          <div class="mt-2.5 h-7 w-10 animate-pulse rounded bg-slate-200/70 dark:bg-slate-800/60" />
+        </div>
+      </div>
+      <div v-else-if="forgeSummary" class="grid grid-cols-2 gap-3">
+        <StatTile
+          label="Proposed without an MR"
+          :value="forgeSummary.proposed_without_pr"
+          tone="amber"
+        />
+        <StatTile
+          label="MR approved · waiting on author"
+          :value="forgeSummary.approved_unmerged"
+          tone="emerald"
+        />
       </div>
 
       <div class="grid gap-4 lg:grid-cols-2">

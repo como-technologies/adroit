@@ -152,6 +152,17 @@ export function getAdrForge(id: string): Promise<ForgeData | null> {
   return getJson<ForgeData | null>(`/api/adrs/${encodeURIComponent(id)}/forge`)
 }
 
+// Aggregate forge counts for the dashboard tiles, or `null` when there's no
+// active forge (unconfigured / no token / no `forge` feature).
+export interface ForgeSummary {
+  proposed_without_pr: number
+  approved_unmerged: number
+}
+
+export function getForgeSummary(): Promise<ForgeSummary | null> {
+  return getJson<ForgeSummary | null>('/api/forge/summary')
+}
+
 export function search(q: string): Promise<AdrSummary[]> {
   return getJson<AdrSummary[]>(`/api/search?q=${encodeURIComponent(q)}`)
 }

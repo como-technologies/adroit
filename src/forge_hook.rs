@@ -204,6 +204,31 @@ pub fn enrich_one(
     Ok(())
 }
 
+/// Dashboard forge tiles: `(proposed_without_pr, approved_unmerged)`, or `None`
+/// when no provider is configured / built (so the dashboard hides the tiles).
+#[cfg(feature = "forge")]
+pub fn dashboard_summary(
+    forge: Option<&crate::config::ForgeConfig>,
+    store: &crate::store::Store,
+    summaries: &[crate::view::AdrSummary],
+    quorum: u32,
+) -> Result<Option<(u32, u32)>> {
+    let Some(fcfg) = forge else {
+        return Ok(None);
+    };
+    crate::forge::dashboard_summary(fcfg, store, summaries, quorum)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn dashboard_summary(
+    _forge: Option<&crate::config::ForgeConfig>,
+    _store: &crate::store::Store,
+    _summaries: &[crate::view::AdrSummary],
+    _quorum: u32,
+) -> Result<Option<(u32, u32)>> {
+    Ok(None)
+}
+
 /// Post a comment to the ADR's linked issue/PR (review kickoff, review deadline).
 #[cfg(feature = "forge")]
 pub fn comment(

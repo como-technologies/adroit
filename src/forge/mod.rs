@@ -1119,6 +1119,55 @@ fn run_reconcile(
     Ok(())
 }
 
+/// Dashboard aggregate counts: `(proposed_without_pr, approved_unmerged)`.
+/// `None` when the forge is inactive (no token) so the caller hides the tiles.
+/// `proposed_without_pr` (a Proposed ADR with no PR in `## References`) is local;
+/// `approved_unmerged` (a PR with >= `quorum` approvals that isn't merged) reads
+/// live PR state — offline ADRs are skipped.
+pub fn dashboard_summary(
+    fcfg: &ForgeConfig,
+    store: &crate::store::Store,
+    summaries: &[crate::view::AdrSummary],
+    quorum: u32,
+) -> anyhow::Result<Option<(u32, u32)>> {
+    let (forge, _tracker) = open(fcfg);
+    let Some(forge) = forge else {
+        return Ok(None);
+    };
+    let naming = store.options().naming;
+    let mut proposed_without_pr = 0u32;
+    let mut approved_unmerged = 0u32;
+    let mut warned = false;
+    for s in summaries {
+        let Some(r) = naming.parse_ref(&s.address) else {
+            continue;
+        };
+        let Ok(path) = store.find_path_by_ref(&r) else {
+            continue;
+        };
+        let refs = read_refs(&path);
+        if s.status == Status::Proposed && refs.pr.is_none() {
+            proposed_without_pr += 1;
+        }
+        if let Some((pr, _)) = &refs.pr {
+            match forge.pr_state(pr) {
+                Ok(st) if !st.merged && st.approvals >= quorum => approved_unmerged += 1,
+                Ok(_) => {}
+                Err(e) if e.is_offline() => {
+                    if !warned {
+                        eprintln!(
+                            "adroit: forge unreachable ({e}); approval counts may be partial."
+                        );
+                        warned = true;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    Ok(Some((proposed_without_pr, approved_unmerged)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -78,6 +78,9 @@ struct AppState {
     /// enrichment panel. `None` when no provider is configured; enrichment is
     /// also a no-op unless the binary was built with the `forge` feature.
     forge: Option<crate::config::ForgeConfig>,
+    /// Required approvals (config `review_quorum`), for the dashboard's
+    /// "MR approved · waiting on author" forge tile.
+    review_quorum: u32,
 }
 
 impl AppState {
@@ -89,6 +92,7 @@ impl AppState {
             options: Arc::new(store_options(cfg)),
             watcher: None,
             forge: cfg.forge.clone(),
+            review_quorum: cfg.review_quorum,
         }
     }
 
@@ -100,6 +104,7 @@ impl AppState {
             options: Arc::new(store_options(cfg)),
             watcher: Some(Arc::new(watcher)),
             forge: cfg.forge.clone(),
+            review_quorum: cfg.review_quorum,
         })
     }
 
@@ -172,6 +177,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/api/adrs", get(list_adrs))
         .route("/api/adrs/{id}", get(get_adr))
         .route("/api/adrs/{id}/forge", get(get_adr_forge))
+        .route("/api/forge/summary", get(get_forge_summary))
         .route("/api/search", get(search_adrs))
         .route("/api/stats", get(get_stats))
         .route("/api/graph", get(get_graph))
@@ -317,6 +323,45 @@ fn forge_state_for(state: &AppState, id: &str) -> Result<Option<crate::view::For
     crate::forge_hook::enrich_one(state.forge.as_ref(), &store, &mut summary)
         .map_err(ApiError::internal)?;
     Ok(summary.forge_data)
+}
+
+/// Dashboard forge tiles. `null` when no provider is configured / built.
+#[derive(Debug, Serialize)]
+struct ForgeSummary {
+    /// Proposed ADRs with no PR recorded in `## References`.
+    proposed_without_pr: u32,
+    /// PRs with the required approvals that haven't been merged yet.
+    approved_unmerged: u32,
+}
+
+/// `GET /api/forge/summary` → aggregate counts for the dashboard's forge tiles,
+/// or JSON `null` when there's no active forge. **Read-only**; the (blocking)
+/// live PR reads run on a blocking thread.
+async fn get_forge_summary(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let summary = tokio::task::spawn_blocking(move || forge_summary_for(&state))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(summary))
+}
+
+/// Compute the dashboard forge counts. Blocking (filesystem + live PR reads);
+/// call from `spawn_blocking`.
+fn forge_summary_for(state: &AppState) -> Result<Option<ForgeSummary>, ApiError> {
+    let store = state.store()?;
+    let summaries = query::summaries(&store, &Filter::default()).map_err(ApiError::internal)?;
+    let counts = crate::forge_hook::dashboard_summary(
+        state.forge.as_ref(),
+        &store,
+        &summaries,
+        state.review_quorum,
+    )
+    .map_err(ApiError::internal)?;
+    Ok(
+        counts.map(|(proposed_without_pr, approved_unmerged)| ForgeSummary {
+            proposed_without_pr,
+            approved_unmerged,
+        }),
+    )
 }
 
 /// `GET /api/search?q=` → `Vec<AdrSummary>`.
@@ -651,6 +696,14 @@ mod tests {
         // so the read-only panel endpoint resolves the ADR but reports no state.
         let (_tmp, root) = seed();
         let resp = get(&root, "/api/adrs/1/forge").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, "null");
+    }
+
+    #[tokio::test]
+    async fn forge_summary_is_null_without_provider() {
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/forge/summary").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_string(resp).await, "null");
     }

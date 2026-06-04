@@ -402,13 +402,15 @@ resolve the token env → credential store → none). `adroit reconcile` syncs l
 status to the forge after out-of-band changes (a merged MR / closed issue):
 reports drift, and with `--yes` moves a merged PR's ADR to `accepted/`
 (read-only on the forge; `forge::run_reconcile` is the testable core).
-**Read-only dashboard panel.**
-`serve` exposes `GET /api/adrs/{id}/forge` (the only forge-aware route; built on
-the always-compiled `forge_hook::enrich_one` so a `web`-only build returns JSON
-`null`), which `DetailView.vue` fetches on demand to show the linked issue/PR +
-PR approvals/CI/merged — the dashboard never *writes* to the forge. **Still
-future:** OAuth device-flow + OS-keychain credential storage, and
-Confluence/Notion `publish` adapters.
+**Read-only dashboard.** Two forge-aware routes, both read-only and `null`/empty
+without an active forge (built on always-compiled `forge_hook::*` twins so a
+`web`-only build degrades cleanly): `GET /api/adrs/{id}/forge` (per-ADR, via
+`enrich_one`) feeds `DetailView.vue`'s issue/PR panel; `GET /api/forge/summary`
+(via `dashboard_summary`, with `AppState.review_quorum`) feeds the dashboard
+tiles "Proposed without an MR" (local) + "MR approved · waiting on author"
+(live). The dashboard never *writes* to the forge (the one-click "create MR"
+button remains out of scope). **Still future:** OAuth device-flow + OS-keychain
+credential storage, and Confluence/Notion `publish` adapters.
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
 `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are
