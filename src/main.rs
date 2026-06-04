@@ -309,6 +309,8 @@ fn main() -> Result<()> {
         }
         #[cfg(feature = "forge")]
         Some(Command::Sync { id, dry_run, yes }) => cmd_sync(&store, &cfg, &id, dry_run, yes)?,
+        #[cfg(feature = "forge")]
+        Some(Command::Reconcile { yes }) => cmd_reconcile(&store, &cfg, yes)?,
         Some(Command::Renumber { old, new, file }) => {
             require_numeric_scheme(&cfg, "renumber")?;
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
@@ -1047,6 +1049,14 @@ fn cmd_relink(
     if dry_run {
         println!("\nDry run — no files written. Re-run without `--dry-run` to apply.");
     }
+    Ok(())
+}
+
+/// `adroit reconcile`: sync local ADR status with the forge after out-of-band changes.
+#[cfg(feature = "forge")]
+fn cmd_reconcile(store: &Store, cfg: &Config, apply: bool) -> Result<()> {
+    let summaries = query::summaries(store, &Filter::default())?;
+    adroit::forge::reconcile(cfg, store, &summaries, apply)?;
     Ok(())
 }
 

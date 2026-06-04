@@ -1795,7 +1795,7 @@ fn forge_only_commands_are_absent_without_the_feature() {
     // init/auth/sync/notify are `#[cfg(feature = "forge")]` — a no-forge build
     // doesn't have them at all (publish stays — it's offline).
     let dir = TempDir::new().unwrap();
-    for sub in ["auth", "init", "sync", "notify"] {
+    for sub in ["auth", "init", "sync", "notify", "reconcile"] {
         adroit(&dir)
             .arg(sub)
             .assert()

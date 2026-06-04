@@ -398,7 +398,11 @@ future), `adroit notify <id>` (POST to a Slack/Teams webhook via
 `forge::notify`), and `adroit auth <github|gitlab|jira> [--token] [--email]`
 (save a token to a dependency-free 0600 `credentials.yaml` next to the config —
 `config::store_credential`/`load_credential`; `{github,gitlab,jira}::open`
-resolve the token env → credential store → none). **Read-only dashboard panel.**
+resolve the token env → credential store → none). `adroit reconcile` syncs local
+status to the forge after out-of-band changes (a merged MR / closed issue):
+reports drift, and with `--yes` moves a merged PR's ADR to `accepted/`
+(read-only on the forge; `forge::run_reconcile` is the testable core).
+**Read-only dashboard panel.**
 `serve` exposes `GET /api/adrs/{id}/forge` (the only forge-aware route; built on
 the always-compiled `forge_hook::enrich_one` so a `web`-only build returns JSON
 `null`), which `DetailView.vue` fetches on demand to show the linked issue/PR +

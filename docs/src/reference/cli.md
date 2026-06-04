@@ -518,6 +518,12 @@ self-hosted — only `forge.host` changes. The integration is opt-in per command
   PR instead, so they don't produce a relink commit).
 - `check --forge` and `list --forge` add read-only forge awareness (drift checks
   / live PR state).
+- `adroit reconcile` syncs local status with the forge after **out-of-band**
+  changes (an MR merged or a tracker issue closed *outside* adroit): it reports
+  drift, and with `--yes` fixes the clear case — a merged PR whose ADR isn't
+  accepted — by moving it to `accepted/` (+ relink). It's **read-only on the
+  forge** (never merges/closes); a closed issue on a still-proposed ADR is
+  reported, not auto-fixed (accept vs won't-fix is ambiguous).
 - `adroit init` detects the forge from the git remote and writes `forge.*`;
   `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
   `adroit notify <id>` posts to a Slack/Teams webhook (`ADROIT_NOTIFY_WEBHOOK`).

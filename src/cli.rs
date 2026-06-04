@@ -51,6 +51,7 @@ Forge integration:
   init          Detect the forge from the git remote and configure it
   auth          Store a forge token in the local credential store
   sync          Refresh a linked PR/MR description from the ADR
+  reconcile     Sync local status with the forge after out-of-band changes
   notify        Post an ADR's state to a chat webhook
 
 Configuration:
@@ -397,6 +398,18 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Apply the change (without it, preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Reconcile local ADR status with the forge after out-of-band changes.
+    ///
+    /// Scans linked PRs/issues and reports drift (an MR merged or a tracker
+    /// issue closed *outside* adroit). With `--yes`, fixes the clear case — a
+    /// merged PR whose ADR isn't accepted — by moving it to `accepted/`.
+    /// Read-only on the forge.
+    #[cfg(feature = "forge")]
+    Reconcile {
+        /// Apply the fixable drift (default: report only).
         #[arg(long)]
         yes: bool,
     },

@@ -1021,6 +1021,104 @@ pub fn enrich_with(
     Ok(())
 }
 
+/// Reconcile local ADR status with the forge after an out-of-band change (an MR
+/// merged or a tracker issue closed *outside* adroit). Reports drift; with
+/// `apply`, fixes the unambiguous case — a **merged PR whose ADR isn't accepted**
+/// — by moving it to `accepted/` locally (+ relink). A closed issue on a
+/// still-proposed ADR is reported only (accepted vs won't-fix is ambiguous).
+/// **Read-only on the forge** — it never merges/closes anything; it only syncs
+/// the local record to forge reality.
+pub fn reconcile(
+    cfg: &Config,
+    store: &crate::store::Store,
+    summaries: &[crate::view::AdrSummary],
+    apply: bool,
+) -> anyhow::Result<()> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        eprintln!("adroit: reconcile needs a configured forge (set forge.provider + forge.repo).");
+        return Ok(());
+    };
+    let (forge, tracker) = open(fcfg);
+    let Some(forge) = forge else {
+        eprintln!(
+            "adroit: --forge: `{}` integration inactive (set forge.repo + a token).",
+            fcfg.provider
+        );
+        return Ok(());
+    };
+    run_reconcile(forge.as_ref(), tracker.as_deref(), store, summaries, apply)
+}
+
+/// Provider-agnostic reconcile core (testable with mock adapters + a scratch store).
+fn run_reconcile(
+    forge: &dyn Forge,
+    tracker: Option<&dyn Tracker>,
+    store: &crate::store::Store,
+    summaries: &[crate::view::AdrSummary],
+    apply: bool,
+) -> anyhow::Result<()> {
+    let naming = store.options().naming;
+    let mut warned = false;
+    let mut drift = 0u32;
+    let mut fixed = 0u32;
+    for s in summaries {
+        let Some(r) = naming.parse_ref(&s.address) else {
+            continue;
+        };
+        let Ok(path) = store.find_path_by_ref(&r) else {
+            continue;
+        };
+        let refs = read_refs(&path);
+        // 1. A merged PR whose ADR isn't accepted — the clear out-of-band case.
+        if let Some((pr, pr_url)) = &refs.pr {
+            match forge.pr_state(pr) {
+                Ok(st) if st.merged && s.status != Status::Accepted => {
+                    drift += 1;
+                    println!(
+                        "{}: PR {pr_url} is merged but status is {} -> accepted",
+                        s.reference, s.status
+                    );
+                    if apply {
+                        store.set_status_ref(&r, Status::Accepted)?;
+                        fixed += 1;
+                    }
+                    continue; // resolved by the PR; don't double-report on the issue
+                }
+                Ok(_) => {}
+                Err(e) if e.is_offline() => {
+                    if !warned {
+                        eprintln!("adroit: forge unreachable ({e}); skipping live checks.");
+                        warned = true;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        // 2. A closed issue on a still-proposed ADR — report only (direction is
+        //    ambiguous: a closed issue could mean accepted *or* won't-fix).
+        if s.status == Status::Proposed
+            && let Some((issue, issue_url)) = &refs.issue
+            && let Some(tracker) = tracker
+            && let Ok(state) = tracker.issue_state(issue)
+            && !state.open
+        {
+            drift += 1;
+            println!(
+                "{}: issue {issue_url} is closed but status is still proposed (resolve: set-status accepted|rejected)",
+                s.reference
+            );
+        }
+    }
+    match (drift, apply) {
+        (0, _) => println!("Reconcile: no drift — local statuses match the forge."),
+        (_, true) => println!("\nReconcile: {fixed} fixed, {} reported.", drift - fixed),
+        (_, false) => println!(
+            "\nReconcile: {drift} drift item(s). Re-run with --yes to apply the fixable ones."
+        ),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1257,6 +1355,47 @@ mod tests {
         .unwrap();
         assert!(!proceed); // stop: no local move
         assert!(!forge.merged.get()); // no merge
+    }
+
+    #[test]
+    fn run_reconcile_accepts_a_merged_pr_locally() {
+        use crate::config::Layout;
+        use crate::format::Format;
+        use crate::store::{Store, StoreOptions};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // A proposed ADR (flat layout) carrying a PR reference.
+        std::fs::write(
+            dir.join("0001-x.md"),
+            "# ADR-0001: X\n\n## Status\n\nProposed\n\n## References\n\n- Pull Request: https://example.com/pull/1\n",
+        )
+        .unwrap();
+        let store = Store::open_or_create_with(
+            dir,
+            StoreOptions {
+                layout: Layout::Flat,
+                format: Format::Markdown,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let summaries = crate::query::summaries(&store, &crate::query::Filter::default()).unwrap();
+        assert_eq!(summaries[0].status, Status::Proposed);
+
+        // The PR reads as merged → reconcile moves the ADR to accepted locally.
+        let forge = MockForge {
+            state: PrState {
+                approvals: 0,
+                ci: CiStatus::None,
+                merged: true,
+                draft: false,
+            },
+            merged: false.into(),
+        };
+        run_reconcile(&forge, None, &store, &summaries, true).unwrap();
+
+        let after = crate::query::summaries(&store, &crate::query::Filter::default()).unwrap();
+        assert_eq!(after[0].status, Status::Accepted);
     }
 
     #[test]
