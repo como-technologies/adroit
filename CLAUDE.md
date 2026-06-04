@@ -421,15 +421,19 @@ credential storage, and Confluence/Notion `publish` adapters.
 **Forge config is repo-scoped, not just global.** `forge.*` is one (global)
 config, but the dashboard can switch ADR directories at runtime and the CLI runs
 anywhere — so the active dir may belong to a *different* repo than `forge.repo`.
-The read paths (`enrich_with`, `dashboard_summary`, `reconcile`) open adapters via
-`forge::open_for_dir(fcfg, store.root())` instead of `open(fcfg)`:
-`dir_matches_forge` compares the dir's `origin` remote to `forge.repo` and returns
-no adapters on a definite mismatch (different provider/slug), so the forge cells
-hide rather than cross-wire another repo's state. Undeterminable cases (no `repo`
-set, or no recognizable remote) assume it applies — non-git ADR dirs aren't
-blocked. `DetailView.vue` re-fetches its forge panel on `workspaceChanged` (not on
-every live-reload tick). The mutating verbs (`new`/`set-status --forge`) aren't
-guarded yet — a known follow-up.
+`dir_matches_forge(fcfg, dir)` compares the dir's `origin` remote to `forge.repo`;
+a definite mismatch (different provider/slug) means the config doesn't apply here.
+**Every** forge entry point guards on it — both reads (`enrich_with`,
+`dashboard_summary`, `reconcile`, `check_repo`) and writes (`after_new`,
+`before_status_change`, `on_supersede`, `comment`, `sync_pr`) call
+`skip_dir_mismatch` (dir) / `skip_path_mismatch` (file → its dir) right after the
+`cfg.forge` check, before `open(fcfg)`. On mismatch they warn once and skip the
+forge side: the dashboard hides its cells, `list`/`check --forge` omit
+enrichment, and the mutating verbs keep the local ADR record while creating /
+merging *nothing* in the wrong repo. Undeterminable cases (no `repo` set, or no
+recognizable remote) assume it applies — non-git ADR dirs aren't blocked.
+`DetailView.vue` re-fetches its forge panel on `workspaceChanged` (not on every
+live-reload tick).
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
 `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are

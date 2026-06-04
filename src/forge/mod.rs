@@ -267,20 +267,29 @@ fn dir_matches_forge(fcfg: &ForgeConfig, dir: &std::path::Path) -> bool {
     }
 }
 
-/// [`open`], but scoped to an ADR directory: if `dir` definitely belongs to a
-/// different repo than `forge.repo`, the config doesn't apply here, so return
-/// no adapters (the caller then skips forge — hiding the dashboard's forge
-/// cells / omitting CLI enrichment rather than showing another repo's state).
-fn open_for_dir(fcfg: &ForgeConfig, dir: &std::path::Path) -> Adapters {
-    if !dir_matches_forge(fcfg, dir) {
-        eprintln!(
-            "adroit: forge.repo is `{}` but this directory's `origin` is a different repo — \
-             skipping forge for it (configure forge for this repo to enable it).",
-            fcfg.repo.as_deref().unwrap_or("")
-        );
-        return (None, None);
+/// Whether a `--forge` operation should be skipped because the ADR directory
+/// belongs to a *different* repo than `forge.repo` (warns with the reason when
+/// so). `forge.*` is a single global config but ADR directories vary — the
+/// dashboard switches them at runtime and the CLI runs anywhere — so this is the
+/// guard that keeps forge reads *and writes* from cross-wiring another repo's
+/// issues/PRs. Callers keep their local ADR record either way; an undeterminable
+/// case (no `repo` configured, or no recognizable remote) is *not* skipped.
+fn skip_dir_mismatch(fcfg: &ForgeConfig, dir: &std::path::Path) -> bool {
+    if dir_matches_forge(fcfg, dir) {
+        return false;
     }
-    open(fcfg)
+    eprintln!(
+        "adroit: forge.repo is `{}` but this directory's `origin` is a different repo — \
+         skipping forge here (configure forge for this repo to enable it).",
+        fcfg.repo.as_deref().unwrap_or("")
+    );
+    true
+}
+
+/// [`skip_dir_mismatch`] for a verb that operates on an ADR *file* — the repo is
+/// resolved from the file's directory.
+fn skip_path_mismatch(fcfg: &ForgeConfig, path: &std::path::Path) -> bool {
+    skip_dir_mismatch(fcfg, path.parent().unwrap_or(std::path::Path::new(".")))
 }
 
 /// Orchestrate the forge side of `adroit new`: create the tracker issue, base a
@@ -299,6 +308,9 @@ pub fn after_new(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(());
     };
+    if skip_path_mismatch(fcfg, path) {
+        return Ok(());
+    }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
@@ -484,6 +496,9 @@ pub fn before_status_change(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(true);
     };
+    if skip_path_mismatch(fcfg, path) {
+        return Ok(true);
+    }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
@@ -754,6 +769,9 @@ pub fn on_supersede(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(true);
     };
+    if skip_path_mismatch(fcfg, old_path) {
+        return Ok(true);
+    }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
@@ -801,6 +819,9 @@ pub fn comment(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(());
     };
+    if skip_path_mismatch(fcfg, path) {
+        return Ok(());
+    }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         eprintln!(
@@ -851,6 +872,9 @@ pub fn sync_pr(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(true);
     };
+    if skip_path_mismatch(fcfg, path) {
+        return Ok(true);
+    }
     let (forge, _tracker) = open(fcfg);
     let Some(forge) = forge else {
         eprintln!(
@@ -926,6 +950,13 @@ pub fn check_repo(
     let Some(fcfg) = cfg.forge.as_ref() else {
         return Ok(vec![]);
     };
+    let dir = entries
+        .first()
+        .and_then(|(p, _)| p.parent())
+        .unwrap_or(std::path::Path::new("."));
+    if skip_dir_mismatch(fcfg, dir) {
+        return Ok(vec![]);
+    }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
         return Ok(vec![]);
@@ -1012,7 +1043,10 @@ pub fn enrich_with(
     store: &crate::store::Store,
     summaries: &mut [crate::view::AdrSummary],
 ) -> anyhow::Result<()> {
-    let (forge, _tracker) = open_for_dir(fcfg, store.root());
+    if skip_dir_mismatch(fcfg, store.root()) {
+        return Ok(());
+    }
+    let (forge, _tracker) = open(fcfg);
     let Some(forge) = forge else {
         return Ok(());
     };
@@ -1074,7 +1108,10 @@ pub fn reconcile(
         eprintln!("adroit: reconcile needs a configured forge (set forge.provider + forge.repo).");
         return Ok(());
     };
-    let (forge, tracker) = open_for_dir(fcfg, store.root());
+    if skip_dir_mismatch(fcfg, store.root()) {
+        return Ok(());
+    }
+    let (forge, tracker) = open(fcfg);
     let Some(forge) = forge else {
         eprintln!(
             "adroit: --forge: `{}` integration inactive (set forge.repo + a token).",
@@ -1166,7 +1203,10 @@ pub fn dashboard_summary(
     summaries: &[crate::view::AdrSummary],
     quorum: u32,
 ) -> anyhow::Result<Option<(u32, u32)>> {
-    let (forge, _tracker) = open_for_dir(fcfg, store.root());
+    if skip_dir_mismatch(fcfg, store.root()) {
+        return Ok(None);
+    }
+    let (forge, _tracker) = open(fcfg);
     let Some(forge) = forge else {
         return Ok(None);
     };
@@ -1282,6 +1322,12 @@ mod tests {
         assert!(dir_matches_forge(&gh(None), dir));
         let bare = tempfile::tempdir().unwrap();
         assert!(dir_matches_forge(&gh(Some("acme/widgets")), bare.path()));
+
+        // The file-path wrapper the mutating verbs use resolves the repo from the
+        // file's directory: skip == true means "don't touch this repo's forge".
+        let file = dir.join("0001-x.md");
+        assert!(!skip_path_mismatch(&gh(Some("acme/widgets")), &file));
+        assert!(skip_path_mismatch(&gh(Some("acme/other")), &file));
     }
 
     #[test]
