@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 use crate::config::{DateSource, Layout, MarkdownTheme, RelinkScope};
 use crate::format::Format;
@@ -8,7 +9,99 @@ use crate::naming::NamingScheme;
 
 /// A snappy tool for managing Architecture Decision Records.
 #[derive(Debug, Parser)]
+// clap 4 can't group subcommands under headings, so the command list is
+// hand-curated into workflow categories via help_template. The forge build adds
+// a "Forge integration" section; the no-forge build omits it (those commands are
+// `#[cfg]`-gated away). The `commands_are_all_grouped` test guards against drift
+// in whichever build runs it.
 #[command(name = "adroit", version, about)]
+#[cfg_attr(
+    feature = "forge",
+    command(help_template = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+Authoring:
+  new           Create a new ADR
+  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  link          Add or remove a typed link between two ADRs
+
+Browse & inspect:
+  list          List ADRs
+  show          Show one ADR by its identifier
+  status        Print an ADR's status (lowercase, scriptable)
+  search        Search ADRs by title and body
+  serve         Serve the read-only web dashboard
+
+Repo health:
+  check         Validate the repo (exits non-zero on problems)
+  relink        Rewrite cross-ADR links to current locations
+  renumber      Renumber an ADR to resolve a number collision
+  migrate       Convert the repo to the configured layout/format
+
+Publishing:
+  index         Regenerate the ADR section of SUMMARY.md
+  publish       Export the accepted ADR set to a directory
+
+Forge integration:
+  init          Detect the forge from the git remote and configure it
+  auth          Store a forge token in the local credential store
+  sync          Refresh a linked PR/MR description from the ADR
+  reconcile     Sync local status with the forge after out-of-band changes
+  notify        Post an ADR's state to a chat webhook
+
+Configuration:
+  config        Inspect or change configuration
+  completions   Print a shell completion script (bash/zsh/fish/…)
+  help          Print help for a command
+
+Options:
+{options}{after-help}")
+)]
+#[cfg_attr(
+    not(feature = "forge"),
+    command(help_template = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+Authoring:
+  new           Create a new ADR
+  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  link          Add or remove a typed link between two ADRs
+
+Browse & inspect:
+  list          List ADRs
+  show          Show one ADR by its identifier
+  status        Print an ADR's status (lowercase, scriptable)
+  search        Search ADRs by title and body
+  serve         Serve the read-only web dashboard
+
+Repo health:
+  check         Validate the repo (exits non-zero on problems)
+  relink        Rewrite cross-ADR links to current locations
+  renumber      Renumber an ADR to resolve a number collision
+  migrate       Convert the repo to the configured layout/format
+
+Publishing:
+  index         Regenerate the ADR section of SUMMARY.md
+  publish       Export the accepted ADR set to a directory
+
+Configuration:
+  config        Inspect or change configuration
+  completions   Print a shell completion script (bash/zsh/fish/…)
+  help          Print help for a command
+
+Options:
+{options}{after-help}")
+)]
 pub struct Cli {
     // --- Repo selection (global: inherited by every subcommand) -------------
     /// ADR directory (overrides config; default `~/.local/share/adroit/`).
@@ -136,12 +229,26 @@ pub enum Command {
         /// layout; rejected by the others).
         #[arg(short, long)]
         category: Option<String>,
+        /// Also create the linked tracker issue + a draft PR and record their
+        /// URLs in `## References` (opt-in; requires a configured `forge`).
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+        /// With `--forge`, preview the forge actions without performing them.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List existing ADRs.
     List {
         /// Only show ADRs with this status.
         #[arg(short, long)]
         status: Option<String>,
+        /// Enrich each row with live forge state (PR approvals/CI). Reads the
+        /// forge; requires a configured `forge` + the feature build.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
     },
     /// Show a single ADR by its identifier.
     Show {
@@ -161,6 +268,20 @@ pub enum Command {
         id: String,
         /// New status (proposed, accepted, rejected, deprecated, superseded).
         status: String,
+        /// Also drive the forge: on `accepted` verify approvals/CI then merge the
+        /// PR + close the issue; on `rejected`/`deprecated` close them. Opt-in;
+        /// requires a configured `forge`.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+        /// With `--forge`, preview the forge actions and make no changes.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--forge`, apply (e.g. merge the PR). Without it, preview.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        yes: bool,
     },
     /// Mark an older ADR as superseded by a newer one.
     Supersede {
@@ -168,6 +289,18 @@ pub enum Command {
         new: String,
         /// The old (superseded) ADR identifier (number, slug, or uuid prefix).
         old: String,
+        /// Also comment on + close the superseded ADR's forge issue/PR. Opt-in.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+        /// With `--forge`, preview the forge actions and make no changes.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--forge`, apply. Without it, preview.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        yes: bool,
     },
     /// Add (or remove with `--remove`) a typed relational link between two ADRs.
     ///
@@ -204,6 +337,18 @@ pub enum Command {
         /// Remove the review deadline instead of setting one.
         #[arg(long, conflicts_with = "date")]
         clear: bool,
+        /// Also mirror the deadline as a comment on the ADR's linked issue/PR.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+        /// With `--forge`, preview the comment without posting.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--forge`, post the comment (without it, preview).
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        yes: bool,
     },
     /// Search ADRs by title and body (case-insensitive).
     Search {
@@ -215,7 +360,13 @@ pub enum Command {
     /// A structural CI gate: checks for status/directory mismatches,
     /// duplicate numbers, unparseable files, broken supersession links, and
     /// broken/stale cross-ADR relative links.
-    Check,
+    Check {
+        /// Also run forge-aware checks (issue/PR drift). Reads the forge over
+        /// the network; requires a configured `forge` + the feature build.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+    },
     /// Rewrite cross-ADR relative links to each ADR's current location.
     ///
     /// Fixes links left stale by status-change file moves (run by hand or in
@@ -225,6 +376,42 @@ pub enum Command {
         /// Show which files/links would change without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Also refresh each linked PR's description to the current ADR (patches
+        /// forge-side links after status moves). Requires a configured `forge`.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+        /// With `--forge`, apply the PR updates (without it, preview).
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Refresh an ADR's linked PR description from its content (MR-desc sync).
+    ///
+    /// Writes the ADR (with a `<!-- adroit:adr=… -->` marker) into the PR body so
+    /// reviewers always see the latest text. Requires a configured `forge`.
+    #[cfg(feature = "forge")]
+    Sync {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Preview without changing the PR.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply the change (without it, preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Reconcile local ADR status with the forge after out-of-band changes.
+    ///
+    /// Scans linked PRs/issues and reports drift (an MR merged or a tracker
+    /// issue closed *outside* adroit). With `--yes`, fixes the clear case — a
+    /// merged PR whose ADR isn't accepted — by moving it to `accepted/`.
+    /// Read-only on the forge.
+    #[cfg(feature = "forge")]
+    Reconcile {
+        /// Apply the fixable drift (default: report only).
+        #[arg(long)]
+        yes: bool,
     },
     /// Renumber an ADR (sequential scheme) to resolve a collision.
     ///
@@ -254,6 +441,61 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Save a forge token to the local credential store (used after env vars).
+    ///
+    /// A dependency-free `0600` file next to the config — no env-var copy-paste.
+    /// (OAuth device-flow + OS keychain are future enhancements.)
+    #[cfg(feature = "forge")]
+    Auth {
+        /// Which token to store: `github`, `gitlab`, or `jira`.
+        provider: String,
+        /// The token value (omit to be prompted, hidden).
+        #[arg(long)]
+        token: Option<String>,
+        /// For `jira`: the account email saved alongside the token.
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// Interactive wizard to set up forge integration.
+    ///
+    /// Detects the provider/repo from the git remote (confirm or override),
+    /// asks for the issue tracker, writes `forge.*` to config, and optionally
+    /// writes `./.env` (ADROIT_DIR), drops a repo-local `adr-template.md`, and
+    /// installs a pre-commit hook running `adroit check`. `--print` previews
+    /// without writing; `--yes` does the full setup non-interactively.
+    #[cfg(feature = "forge")]
+    Init {
+        /// Show the detected settings + planned steps without writing anything.
+        #[arg(long)]
+        print: bool,
+        /// Non-interactive: use the detected forge + defaults and do the full setup.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Export the accepted ADR set to a directory (static-dir publisher).
+    ///
+    /// Sibling to `index`, but for the published-docs side. Copies every
+    /// accepted ADR plus an `index.md` to `--out`. Idempotent.
+    Publish {
+        /// Output directory for the published ADRs.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Preview what would be written without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Post an ADR's current state to a chat webhook (Slack/Teams-compatible).
+    ///
+    /// Reads the incoming-webhook URL from `ADROIT_NOTIFY_WEBHOOK`. Requires the
+    /// `forge` feature build (it uses the bundled HTTP client).
+    #[cfg(feature = "forge")]
+    Notify {
+        /// ADR identifier to announce (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Preview the message without posting.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Regenerate the ADR section of SUMMARY.md (or print it to stdout).
     Index {
         /// Don't write — just verify SUMMARY.md is up to date (CI gate).
@@ -280,6 +522,18 @@ pub enum Command {
         /// Write the generated doc to this path instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Also post the kickoff as a comment on the ADR's linked issue/PR.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        forge: bool,
+        /// With `--forge`, preview the comment without posting.
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        dry_run: bool,
+        /// With `--forge`, post the comment (without it, preview).
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        yes: bool,
     },
     /// Serve the read-only web dashboard (requires the `web` feature).
     ///
@@ -302,6 +556,16 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
+    },
+    /// Print a shell completion script to stdout (bash, zsh, fish, …).
+    ///
+    /// Generated from the command tree, so it always matches this build (a
+    /// no-forge build omits the forge commands). Load it with e.g.
+    /// `. <(adroit completions bash)` or save it onto your shell's fpath.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -335,5 +599,37 @@ mod tests {
     #[test]
     fn cli_parses_without_errors() {
         Cli::command().debug_assert();
+    }
+
+    /// The top-level command list is hand-curated into workflow categories in
+    /// `Cli`'s `help_template` (clap 4 can't group subcommands). This guards
+    /// against drift: every real subcommand must appear in that grouped help, so
+    /// adding a command without categorizing it fails the build.
+    #[test]
+    fn completions_generate_for_every_shell() {
+        use clap::ValueEnum;
+        for &shell in Shell::value_variants() {
+            let mut cmd = Cli::command();
+            let mut out = Vec::new();
+            clap_complete::generate(shell, &mut cmd, "adroit", &mut out);
+            assert!(!out.is_empty(), "{shell} completion script was empty");
+        }
+    }
+
+    #[test]
+    fn commands_are_all_grouped() {
+        let help = Cli::command().render_help().to_string();
+        for sub in Cli::command().get_subcommands() {
+            let name = sub.get_name();
+            // Match the command at the start of its listing line ("  <name>  …"),
+            // so `status` isn't satisfied by `set-status`, nor `link` by `relink`.
+            let listed = help
+                .lines()
+                .any(|l| l.trim_start().starts_with(&format!("{name} ")));
+            assert!(
+                listed,
+                "subcommand `{name}` is missing from Cli's grouped help_template — add it to a category"
+            );
+        }
     }
 }

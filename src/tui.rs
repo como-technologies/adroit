@@ -1717,6 +1717,7 @@ mod tests {
             supersedes: Vec::new(),
             superseded_by: None,
             review_due: false,
+            forge_data: None,
         }
     }
 

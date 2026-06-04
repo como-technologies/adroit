@@ -426,6 +426,42 @@ mismatch. `config get`/`set` cover the **scalar** keys in the
 [Configuration](#configuration) table below; `status_dirs`, `templates_dir`, and
 `summary_path` are set by editing `config.yaml` directly.
 
+### `adroit completions <SHELL>`
+
+Print a shell completion script to stdout, generated from adroit's command tree
+(so it always matches your installed version — and a build without the `forge`
+feature omits the forge commands/flags). `<SHELL>` is `bash`, `zsh`, `fish`,
+`powershell`, or `elvish`.
+
+The quickest way (kubectl-style) — source it from your shell's startup file so
+it loads every session:
+
+```sh
+# ~/.bashrc
+. <(adroit completions bash)
+
+# ~/.zshrc   (ensure `autoload -U compinit && compinit` runs after)
+. <(adroit completions zsh)
+
+# fish
+adroit completions fish | source
+```
+
+Or install the script to the location your shell scans, which is faster to load
+and survives without adroit on `PATH` at startup:
+
+```sh
+# bash (system-wide)
+adroit completions bash | sudo tee /etc/bash_completion.d/adroit > /dev/null
+# zsh (a dir on your $fpath, e.g.)
+adroit completions zsh > ~/.zfunc/_adroit
+# fish
+adroit completions fish > ~/.config/fish/completions/adroit.fish
+```
+
+Completion covers subcommands, flags, and enum values (e.g. `--format
+markdown|frontmatter`, `set-status <TAB>` → the status names).
+
 ## Configuration
 
 adroit stores configuration in `~/.config/adroit/config.yaml` (XDG on Linux, platform-appropriate elsewhere). The file is created automatically on first run with your detected editor.
@@ -453,6 +489,57 @@ editor: vim
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 | `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
 | `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |
+| `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Opt-in forge integration (requires the `forge` feature build). `github` drives GitHub PRs + Issues. |
+| `forge.repo` | `owner/repo` | — | The provider slug (GitHub `owner/repo`). Required when a provider is set. |
+| `forge.host` | host | provider default | API host for self-managed / enterprise. GitLab self-hosted: the host (`gitlab.example.com`); GitHub Enterprise: the host incl. base path (`ghe.example.com/api/v3`). Same token auth as the cloud version. |
+| `forge.branch_prefix` | string | `adr/` | Branch prefix `new --forge` generates (`adr/0021-…`). |
+| `forge.base_branch` | string | `main` | Base branch PRs target. |
+| `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. `jira` pairs a GitHub/GitLab forge with Jira. |
+| `forge.tracker_project` | string | — | Split-tracker project key (e.g. the Jira project `OPS`). |
+| `forge.tracker_host` | host | — | Split-tracker API host: `your-site.atlassian.net` for Jira Cloud, or a self-hosted host (`jira.example.com`) for Jira Server/Data Center. |
+
+Tokens are **never** stored in config. They resolve in order: the environment
+(`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +
+`ADROIT_JIRA_EMAIL`), then a local credential file written by `adroit auth`. The
+binary must be built `--features forge`. **Jira auth follows the deployment:**
+set `ADROIT_JIRA_EMAIL` for Jira **Cloud** (Basic `email:token`); omit it for
+Jira **Server/Data Center** and supply a Personal Access Token as
+`ADROIT_JIRA_TOKEN` (Bearer). GitHub/GitLab use the same token whether cloud or
+self-hosted — only `forge.host` changes. The integration is opt-in per command:
+
+- `new` / `set-status` / `supersede` / `review` / `set-review` take `--forge`
+  (+ `--dry-run` to preview, `--yes` to apply a mutation like a PR merge).
+- `set-status <id> accepted --forge --yes` does the whole accept in one command:
+  verify approvals/CI → merge the PR → close the issue → fast-forward the base
+  branch → move `proposed/ → accepted/` + relink → **commit and push that relink
+  commit to the base branch**, so `accepted/` lands on `main`. If the tree is
+  dirty, the base diverged, or the push is rejected, it warns and leaves the move
+  committed/uncommitted locally for you to push (`rejected`/`deprecated` close the
+  PR instead, so they don't produce a relink commit).
+- `check --forge` and `list --forge` add read-only forge awareness (drift checks
+  / live PR state).
+- `adroit reconcile` syncs local status with the forge after **out-of-band**
+  changes (an MR merged or a tracker issue closed *outside* adroit): it reports
+  drift, and with `--yes` fixes the clear case — a merged PR whose ADR isn't
+  accepted — by moving it to `accepted/` (+ relink). It's **read-only on the
+  forge** (never merges/closes); a closed issue on a still-proposed ADR is
+  reported, not auto-fixed (accept vs won't-fix is ambiguous).
+- `adroit init` is an interactive setup wizard: it detects the provider/repo
+  from the git remote (confirm or override), asks for the issue tracker, writes
+  `forge.*`, and optionally writes `./.env` (ADROIT_DIR — the token stays in your
+  shell), drops a repo-local `adr-template.md` (MADR), and installs a pre-commit
+  hook running `adroit check`. `--print` previews; `--yes` does the full setup
+  non-interactively (detected forge + native tracker).
+- `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
+  `adroit notify <id>` posts to a Slack/Teams webhook (`ADROIT_NOTIFY_WEBHOOK`).
+- `adroit auth <github|gitlab|jira> [--token <T>] [--email <E>]` saves a token to
+  a `0600` `credentials.yaml` beside the config (prompts if `--token` is omitted),
+  so you don't have to re-export an env var each session. Environment variables
+  still take precedence; `--email` stores the Jira account email.
+- The `serve` dashboard shows a **read-only** Forge panel on each ADR's detail
+  page (linked issue + PR, with PR approvals / CI / merged state), fetched from
+  `GET /api/adrs/{id}/forge`. It only *reads* the forge — authoring stays in the
+  CLI — and renders nothing unless a provider is configured and the ADR is linked.
 
 All keys are optional; missing keys fall back to their defaults, so older config files keep working. You can edit this file at any time to change your defaults. Set `$VISUAL` or `$EDITOR` to override the editor for a single session.
 

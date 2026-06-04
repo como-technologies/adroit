@@ -8,6 +8,11 @@ import { getWorkspace, switchWorkspace } from '@/api'
 const dir = ref<string>('')
 let started = false
 
+// Bumped on every successful directory switch. Views subscribe via
+// `useLiveReload` so switching the workspace reloads their data immediately,
+// without depending on the server's change-event round-trip.
+export const workspaceChanged = ref(0)
+
 async function refresh() {
   try {
     const w = await getWorkspace()
@@ -30,6 +35,7 @@ export function useWorkspace() {
     async switchTo(path: string): Promise<void> {
       const r = await switchWorkspace(path)
       dir.value = r.dir
+      workspaceChanged.value++ // tell every view to reload its data now
     },
   }
 }

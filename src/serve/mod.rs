@@ -74,6 +74,13 @@ struct AppState {
     dir: Arc<RwLock<PathBuf>>,
     options: Arc<StoreOptions>,
     watcher: Option<Arc<Watcher>>,
+    /// Forge config (if any), for the opt-in read-only `/api/adrs/{id}/forge`
+    /// enrichment panel. `None` when no provider is configured; enrichment is
+    /// also a no-op unless the binary was built with the `forge` feature.
+    forge: Option<crate::config::ForgeConfig>,
+    /// Required approvals (config `review_quorum`), for the dashboard's
+    /// "MR approved · waiting on author" forge tile.
+    review_quorum: u32,
 }
 
 impl AppState {
@@ -84,6 +91,8 @@ impl AppState {
             dir: Arc::new(RwLock::new(dir)),
             options: Arc::new(store_options(cfg)),
             watcher: None,
+            forge: cfg.forge.clone(),
+            review_quorum: cfg.review_quorum,
         }
     }
 
@@ -94,6 +103,8 @@ impl AppState {
             dir: Arc::new(RwLock::new(dir)),
             options: Arc::new(store_options(cfg)),
             watcher: Some(Arc::new(watcher)),
+            forge: cfg.forge.clone(),
+            review_quorum: cfg.review_quorum,
         })
     }
 
@@ -165,6 +176,8 @@ fn router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/api/adrs", get(list_adrs))
         .route("/api/adrs/{id}", get(get_adr))
+        .route("/api/adrs/{id}/forge", get(get_adr_forge))
+        .route("/api/forge/summary", get(get_forge_summary))
         .route("/api/search", get(search_adrs))
         .route("/api/stats", get(get_stats))
         .route("/api/graph", get(get_graph))
@@ -274,6 +287,81 @@ async fn get_adr(
     // relative links is deferred (noted in the README / report).
     detail.body_html = Some(render_markdown(&detail.body));
     Ok(Json(detail))
+}
+
+/// `GET /api/adrs/{id}/forge` → live forge state for one ADR (issue/PR links +
+/// PR approvals/CI/merged) as a `ForgeData`, or JSON `null` when the build has
+/// no `forge` feature, the repo configures no provider, or the ADR has no
+/// linked issue/PR. **Read-only** — it only *reads* forge state (the panel
+/// never writes; authoring stays in the CLI). The (blocking) forge HTTP call
+/// runs on a blocking thread so it never stalls the async reactor.
+async fn get_adr_forge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let forge_data = tokio::task::spawn_blocking(move || forge_state_for(&state, &id))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(forge_data))
+}
+
+/// Resolve `id` to an ADR and enrich its summary with live forge state. Blocking
+/// (filesystem + a forge HTTP call); call from `spawn_blocking`.
+fn forge_state_for(state: &AppState, id: &str) -> Result<Option<crate::view::ForgeData>, ApiError> {
+    let store = state.store()?;
+    let r = store
+        .options()
+        .naming
+        .parse_ref(id)
+        .ok_or_else(|| ApiError::NotFound(format!("ADR {id} not found")))?;
+    let path = store
+        .find_path_by_ref(&r)
+        .map_err(|_| ApiError::NotFound(format!("ADR {id} not found")))?;
+    let mut summary = query::detail_at(&store, &path)
+        .map_err(ApiError::internal)?
+        .summary;
+    crate::forge_hook::enrich_one(state.forge.as_ref(), &store, &mut summary)
+        .map_err(ApiError::internal)?;
+    Ok(summary.forge_data)
+}
+
+/// Dashboard forge tiles. `null` when no provider is configured / built.
+#[derive(Debug, Serialize)]
+struct ForgeSummary {
+    /// Proposed ADRs with no PR recorded in `## References`.
+    proposed_without_pr: u32,
+    /// PRs with the required approvals that haven't been merged yet.
+    approved_unmerged: u32,
+}
+
+/// `GET /api/forge/summary` → aggregate counts for the dashboard's forge tiles,
+/// or JSON `null` when there's no active forge. **Read-only**; the (blocking)
+/// live PR reads run on a blocking thread.
+async fn get_forge_summary(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let summary = tokio::task::spawn_blocking(move || forge_summary_for(&state))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(summary))
+}
+
+/// Compute the dashboard forge counts. Blocking (filesystem + live PR reads);
+/// call from `spawn_blocking`.
+fn forge_summary_for(state: &AppState) -> Result<Option<ForgeSummary>, ApiError> {
+    let store = state.store()?;
+    let summaries = query::summaries(&store, &Filter::default()).map_err(ApiError::internal)?;
+    let counts = crate::forge_hook::dashboard_summary(
+        state.forge.as_ref(),
+        &store,
+        &summaries,
+        state.review_quorum,
+    )
+    .map_err(ApiError::internal)?;
+    Ok(
+        counts.map(|(proposed_without_pr, approved_unmerged)| ForgeSummary {
+            proposed_without_pr,
+            approved_unmerged,
+        }),
+    )
 }
 
 /// `GET /api/search?q=` → `Vec<AdrSummary>`.
@@ -471,15 +559,102 @@ async fn events(
 
 /// Render an ADR markdown body to HTML.
 fn render_markdown(md: &str) -> String {
-    use pulldown_cmark::{Options, Parser, html};
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(md, options);
+
+    // CommonMark only autolinks angle-bracketed `<url>`, so bare URLs (e.g. the
+    // `## References` issue/PR links) render as plain text. Walk the event stream
+    // and turn bare `http(s)://` URLs in text into links — skipping code blocks
+    // and the inside of existing links so we never double-wrap or touch code.
+    let mut events: Vec<Event> = Vec::new();
+    let mut in_code = 0u32;
+    let mut in_link = 0u32;
+    for ev in Parser::new_ext(md, options) {
+        match &ev {
+            Event::Start(Tag::CodeBlock(_)) => in_code += 1,
+            Event::End(TagEnd::CodeBlock) => in_code = in_code.saturating_sub(1),
+            Event::Start(Tag::Link { .. }) => in_link += 1,
+            Event::End(TagEnd::Link) => in_link = in_link.saturating_sub(1),
+            Event::Text(t) if in_code == 0 && in_link == 0 => {
+                push_autolinked(&mut events, t);
+                continue;
+            }
+            _ => {}
+        }
+        events.push(ev);
+    }
+
     let mut out = String::new();
-    html::push_html(&mut out, parser);
+    html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Split a text run into plain-text + autolink events for bare `http(s)://`
+/// URLs. Text with no URL is pushed unchanged.
+fn push_autolinked<'a>(
+    events: &mut Vec<pulldown_cmark::Event<'a>>,
+    text: &pulldown_cmark::CowStr<'a>,
+) {
+    use pulldown_cmark::{CowStr, Event, LinkType, Tag, TagEnd};
+    let s: &str = text;
+    let mut last = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let Some((rel_start, rel_end)) = next_url(&s[i..]) else {
+            break;
+        };
+        let (start, end) = (i + rel_start, i + rel_end);
+        if start > last {
+            events.push(Event::Text(CowStr::from(s[last..start].to_string())));
+        }
+        let url = s[start..end].to_string();
+        events.push(Event::Start(Tag::Link {
+            link_type: LinkType::Inline,
+            dest_url: CowStr::from(url.clone()),
+            title: CowStr::from(""),
+            id: CowStr::from(""),
+        }));
+        events.push(Event::Text(CowStr::from(url)));
+        events.push(Event::End(TagEnd::Link));
+        last = end;
+        i = end;
+    }
+    if last < s.len() {
+        events.push(Event::Text(CowStr::from(s[last..].to_string())));
+    }
+}
+
+/// Byte span `(start, end)` of the first bare `http(s)://` URL in `s`, with
+/// trailing sentence punctuation / closing brackets trimmed off.
+fn next_url(s: &str) -> Option<(usize, usize)> {
+    let http = s.find("http://");
+    let https = s.find("https://");
+    let start = match (http, https) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => return None,
+    };
+    let bytes = s.as_bytes();
+    let mut end = start;
+    while end < s.len()
+        && !bytes[end].is_ascii_whitespace()
+        && !matches!(bytes[end], b'<' | b'>' | b'"' | b'`')
+    {
+        end += 1;
+    }
+    while end > start
+        && matches!(
+            bytes[end - 1],
+            b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']' | b'}' | b'\'' | b'"'
+        )
+    {
+        end -= 1;
+    }
+    Some((start, end))
 }
 
 /// Map a `?status=` string to `Option<Status>`, rejecting unknown values (400).
@@ -600,6 +775,52 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         assert!(v.is_array());
         assert_eq!(v.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn forge_endpoint_returns_null_without_provider() {
+        // No `forge:` configured (and the default test build lacks the feature),
+        // so the read-only panel endpoint resolves the ADR but reports no state.
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/adrs/1/forge").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, "null");
+    }
+
+    #[test]
+    fn render_markdown_autolinks_bare_urls() {
+        let html = render_markdown("See https://example.com/issues/7 for details.");
+        assert!(
+            html.contains(r#"<a href="https://example.com/issues/7""#),
+            "{html}"
+        );
+        // The trailing period stays as text, not part of the link.
+        assert!(html.contains("for details."), "{html}");
+    }
+
+    #[test]
+    fn render_markdown_leaves_code_and_existing_links_alone() {
+        // A URL in a fenced code block is not linkified.
+        let code = render_markdown("```\nhttps://example.com/x\n```");
+        assert!(!code.contains("<a "), "{code}");
+        // An existing markdown link isn't double-wrapped.
+        let linked = render_markdown("[label](https://example.com/y)");
+        assert_eq!(linked.matches("<a ").count(), 1, "{linked}");
+    }
+
+    #[tokio::test]
+    async fn forge_summary_is_null_without_provider() {
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/forge/summary").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, "null");
+    }
+
+    #[tokio::test]
+    async fn forge_endpoint_404s_for_unknown_adr() {
+        let (_tmp, root) = seed();
+        let resp = get(&root, "/api/adrs/999/forge").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

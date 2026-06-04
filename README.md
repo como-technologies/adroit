@@ -70,6 +70,22 @@ adroit config                           # list every setting and where it came f
 flags). The full set, beyond the cheatsheet: `link`, `relink`, `renumber`,
 `migrate`, and `config` round out collisions, link hygiene, and profile changes.
 
+## Shell completions
+
+`adroit completions <bash|zsh|fish|powershell|elvish>` prints a completion
+script generated from the command tree. Source it from your shell rc
+(kubectl-style):
+
+```sh
+. <(adroit completions bash)     # ~/.bashrc
+. <(adroit completions zsh)      # ~/.zshrc
+adroit completions fish | source # fish
+```
+
+— or save it onto your shell's completion path (see the
+[CLI reference](docs/src/reference/cli.md)). It completes subcommands, flags, and
+enum values (e.g. `set-status <TAB>`).
+
 ## TUI
 
 ```sh

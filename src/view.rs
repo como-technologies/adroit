@@ -46,6 +46,28 @@ pub struct AdrSummary {
     /// has a `review_by` deadline, and that deadline is on or before today.
     /// Computed by [`crate::query`] from the ADR model's `review_by` field.
     pub review_due: bool,
+    /// Live forge state (issue/PR), attached only by the opt-in `--forge`
+    /// enrichment; omitted from JSON when absent so the contract is unchanged
+    /// for non-forge surfaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forge_data: Option<ForgeData>,
+}
+
+/// Live forge state for a row, attached by `--forge` enrichment. Always
+/// compiled (feature-independent view contract); populated from the `forge`
+/// adapters when the feature is built in and enrichment is requested.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForgeData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_approvals: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_ci: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_merged: Option<bool>,
 }
 
 /// Full detail for a single ADR: the summary fields plus the raw markdown body
@@ -263,6 +285,10 @@ pub enum ProblemKind {
     /// home — the ADR exists, so `adroit relink` repairs it. Covers both a
     /// wrong-but-present path and a missing path whose ADR lives elsewhere.
     StaleLink,
+    /// Forge state disagrees with the ADR (e.g. an accepted ADR whose PR isn't
+    /// merged, or a closed issue with no matching status change). Surfaced only
+    /// by the opt-in `check --forge`.
+    ForgeIntegration,
 }
 
 /// The kind of relationship an edge / link represents.

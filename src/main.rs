@@ -75,6 +75,26 @@ fn main() -> Result<()> {
     if let Some(Command::Config { action }) = &cli.command {
         return cmd_config(action.as_ref(), &cli);
     }
+    // `completions` just prints a script generated from the command tree — no
+    // ADR dir/store needed, so it works anywhere (and reflects this build).
+    if let Some(Command::Completions { shell }) = &cli.command {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        let bin = cmd.get_name().to_string();
+        clap_complete::generate(*shell, &mut cmd, bin, &mut std::io::stdout());
+        return Ok(());
+    }
+    // `auth` only writes the credential store — no ADR dir/store needed.
+    // Forge-only: the command exists solely in `--features forge` builds.
+    #[cfg(feature = "forge")]
+    if let Some(Command::Auth {
+        provider,
+        token,
+        email,
+    }) = &cli.command
+    {
+        return cmd_auth(provider, token.clone(), email.clone());
+    }
 
     let dir = config::resolve_dir(cli.dir, &cfg);
 
@@ -133,6 +153,10 @@ fn main() -> Result<()> {
             template,
             no_edit,
             category,
+            #[cfg(feature = "forge")]
+            forge,
+            #[cfg(feature = "forge")]
+            dry_run,
         }) => {
             let path = cmd_new(
                 &store,
@@ -142,29 +166,108 @@ fn main() -> Result<()> {
                 category.as_deref(),
             )?;
             println!("Created {}", path.display());
+            // Opt-in forge hook (issue + draft PR + ## References). The forge
+            // flags only exist in `--features forge` builds; otherwise the hook
+            // gets disabled flags and no-ops. Runs before the editor so the
+            // populated References are visible.
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes: false,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            adroit::forge_hook::after_new(&cfg, &path, &title, forge_flags)?;
             if cfg.open_on_new && !no_edit {
                 open_in_editor(editor, &path)?;
             }
         }
-        Some(Command::List { status }) => cmd_list(&store, status.as_deref())?,
+        Some(Command::List {
+            status,
+            #[cfg(feature = "forge")]
+            forge,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_on = forge;
+            #[cfg(not(feature = "forge"))]
+            let forge_on = false;
+            cmd_list(&store, &cfg, status.as_deref(), forge_on)?;
+        }
         Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
-        Some(Command::SetStatus { id, status }) => cmd_set_status(&store, &cfg, &id, &status)?,
-        Some(Command::Supersede { new, old }) => {
+        Some(Command::SetStatus {
+            id,
+            status,
+            #[cfg(feature = "forge")]
+            forge,
+            #[cfg(feature = "forge")]
+            dry_run,
+            #[cfg(feature = "forge")]
+            yes,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            cmd_set_status(&store, &cfg, &id, &status, forge_flags)?;
+        }
+        Some(Command::Supersede {
+            new,
+            old,
+            #[cfg(feature = "forge")]
+            forge,
+            #[cfg(feature = "forge")]
+            dry_run,
+            #[cfg(feature = "forge")]
+            yes,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             cmd_supersede(
                 &store,
                 &cfg,
                 &resolve_ref(&cfg, &new)?,
                 &resolve_ref(&cfg, &old)?,
+                forge_flags,
             )?;
         }
-        Some(Command::SetReview { id, date, clear }) => {
+        Some(Command::SetReview {
+            id,
+            date,
+            clear,
+            #[cfg(feature = "forge")]
+            forge,
+            #[cfg(feature = "forge")]
+            dry_run,
+            #[cfg(feature = "forge")]
+            yes,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             cmd_set_review(
                 &store,
                 &cfg,
                 &resolve_ref(&cfg, &id)?,
                 date.as_deref(),
                 clear,
+                forge_flags,
             )?;
         }
         Some(Command::Link {
@@ -177,13 +280,47 @@ fn main() -> Result<()> {
             cmd_link(&store, &cfg, &id, relates_to, depends_on, refines, remove)?;
         }
         Some(Command::Search { term }) => cmd_search(&store, &term)?,
-        Some(Command::Check) => cmd_check(&store)?,
-        Some(Command::Relink { dry_run }) => cmd_relink(&store, dry_run)?,
+        Some(Command::Check {
+            #[cfg(feature = "forge")]
+            forge,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_on = forge;
+            #[cfg(not(feature = "forge"))]
+            let forge_on = false;
+            cmd_check(&store, &cfg, forge_on)?;
+        }
+        Some(Command::Relink {
+            dry_run,
+            #[cfg(feature = "forge")]
+            forge,
+            #[cfg(feature = "forge")]
+            yes,
+        }) => {
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            cmd_relink(&store, &cfg, dry_run, forge_flags)?;
+        }
+        #[cfg(feature = "forge")]
+        Some(Command::Sync { id, dry_run, yes }) => cmd_sync(&store, &cfg, &id, dry_run, yes)?,
+        #[cfg(feature = "forge")]
+        Some(Command::Reconcile { yes }) => cmd_reconcile(&store, &cfg, yes)?,
         Some(Command::Renumber { old, new, file }) => {
             require_numeric_scheme(&cfg, "renumber")?;
             cmd_renumber(&store, Number::new(old), Number::new(new), file.as_deref())?;
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
+        #[cfg(feature = "forge")]
+        Some(Command::Init { print, yes }) => cmd_init(&store, print, yes)?,
+        Some(Command::Publish { out, dry_run }) => cmd_publish(&store, &out, dry_run)?,
+        #[cfg(feature = "forge")]
+        Some(Command::Notify { id, dry_run }) => cmd_notify(&store, &cfg, &id, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
         Some(Command::Edit { id }) => {
             let path = store.find_path_by_ref(&resolve_ref(&cfg, &id)?)?;
@@ -194,8 +331,22 @@ fn main() -> Result<()> {
             days,
             quorum,
             output,
+            #[cfg(feature = "forge")]
+            forge,
+            #[cfg(feature = "forge")]
+            dry_run,
+            #[cfg(feature = "forge")]
+            yes,
         }) => {
             require_numeric_scheme(&cfg, "review")?;
+            #[cfg(feature = "forge")]
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                enabled: forge,
+                dry_run,
+                yes,
+            };
+            #[cfg(not(feature = "forge"))]
+            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             cmd_review(
                 &store,
                 &cfg,
@@ -203,11 +354,17 @@ fn main() -> Result<()> {
                 days,
                 quorum,
                 output.as_deref(),
+                forge_flags,
             )?;
         }
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
-        // `config` returns before the store is opened (see above).
+        // `config` / `completions` return before the store is opened (see above).
         Some(Command::Config { .. }) => unreachable!("config handled before store open"),
+        Some(Command::Completions { .. }) => {
+            unreachable!("completions handled before store open")
+        }
+        #[cfg(feature = "forge")]
+        Some(Command::Auth { .. }) => unreachable!("auth handled before store open"),
         None => run_tui(&cfg, &dir)?,
     }
 
@@ -304,7 +461,7 @@ fn cmd_new(
     Ok(store.write(&mut adr)?)
 }
 
-fn cmd_list(store: &Store, status_filter: Option<&str>) -> Result<()> {
+fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: bool) -> Result<()> {
     let status: Option<Status> = match status_filter {
         Some(s) => Some(
             s.parse()
@@ -316,10 +473,12 @@ fn cmd_list(store: &Store, status_filter: Option<&str>) -> Result<()> {
         status,
         ..Default::default()
     };
-    let rows = query::summaries(store, &filter)?;
+    let mut rows = query::summaries(store, &filter)?;
     if rows.is_empty() {
         return Ok(());
     }
+    // Opt-in: attach live forge state (no-op unless --forge + feature + config).
+    adroit::forge_hook::enrich(cfg, store, &mut rows, forge)?;
     let id_w = id_col_width(&rows);
     println!("{:<id_w$}{:<12}Title", "#", "Status");
     for row in &rows {
@@ -387,14 +546,29 @@ fn cmd_get_status(store: &Store, cfg: &Config, id: &str) -> Result<()> {
 
 /// `adroit set-status <ID> <STATUS>`: set an ADR's status (moves the file in
 /// by_status layout and rewrites links per `relink_scope`).
-fn cmd_set_status(store: &Store, cfg: &Config, id: &str, status: &str) -> Result<()> {
+fn cmd_set_status(
+    store: &Store,
+    cfg: &Config,
+    id: &str,
+    status: &str,
+    forge: adroit::forge_hook::ForgeFlags,
+) -> Result<()> {
     let new_status: Status = status.parse().map_err(|_| {
         anyhow::anyhow!(
             "invalid status '{status}', expected: proposed, accepted, rejected, deprecated, superseded"
         )
     })?;
     let r = resolve_ref(cfg, id)?;
+    // Opt-in forge pre-step (verify + merge/close before the local move). A
+    // false return means "previewed only — don't move"; an error aborts.
+    let path = store.find_path_by_ref(&r)?;
+    if !adroit::forge_hook::before_status_change(cfg, &path, new_status, forge)? {
+        return Ok(());
+    }
     let path = store.set_status_ref(&r, new_status)?;
+    // On an applied `accepted --forge`, commit the move + relink onto the base
+    // branch and push it (no-op otherwise). Runs after the local move.
+    adroit::forge_hook::after_status_change(cfg, &path, new_status, forge)?;
     println!(
         "Updated {} status to {new_status} ({})",
         cfg.naming.display(&r),
@@ -441,7 +615,20 @@ fn cmd_link(
     Ok(())
 }
 
-fn cmd_supersede(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) -> Result<()> {
+fn cmd_supersede(
+    store: &Store,
+    cfg: &Config,
+    new: &AdrRef,
+    old: &AdrRef,
+    forge: adroit::forge_hook::ForgeFlags,
+) -> Result<()> {
+    // Opt-in forge pre-step: comment on + close the old ADR's issue/PR. A false
+    // return means "previewed only — don't change locally".
+    let old_path_pre = store.find_path_by_ref(old)?;
+    let new_label = cfg.naming.display(new);
+    if !adroit::forge_hook::on_supersede(cfg, &old_path_pre, &new_label, forge)? {
+        return Ok(());
+    }
     let old_path = store.supersede(new, old)?;
     // Add a reciprocal note to the new ADR referencing the old one.
     add_supersedes_note(store, cfg, new, old)?;
@@ -461,6 +648,7 @@ fn cmd_set_review(
     r: &AdrRef,
     date: Option<&str>,
     clear: bool,
+    forge: adroit::forge_hook::ForgeFlags,
 ) -> Result<()> {
     let review_by = if clear {
         None
@@ -477,6 +665,12 @@ fn cmd_set_review(
         Some(rb) => println!("Set {id} review deadline to {rb} ({})", path.display()),
         None => println!("Cleared {id} review deadline ({})", path.display()),
     }
+    // Opt-in: mirror the deadline to the linked issue/PR as a comment.
+    let note = match review_by {
+        Some(rb) => format!("Review deadline for {id} set to **{rb}** (via adroit)."),
+        None => format!("Review deadline for {id} cleared (via adroit)."),
+    };
+    adroit::forge_hook::comment(cfg, &path, &note, "review deadline", forge)?;
     Ok(())
 }
 
@@ -556,7 +750,39 @@ fn id_col_width(rows: &[AdrSummary]) -> usize {
 /// Render one `list` / `search` row. Shared so the two read commands stay
 /// byte-identical. `id_w` is the (dynamic) identifier column width.
 fn print_summary_row(row: &AdrSummary, id_w: usize) {
-    println!("{:<id_w$}{:<12}{}", row_id(row), row.status, row.title);
+    println!(
+        "{:<id_w$}{:<12}{}{}",
+        row_id(row),
+        row.status,
+        row.title,
+        forge_suffix(row)
+    );
+}
+
+/// A compact " · PR merged/2 approvals, ci ok" suffix for `list --forge` rows.
+fn forge_suffix(row: &AdrSummary) -> String {
+    let Some(f) = &row.forge_data else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if f.pr_url.is_some() {
+        let state = if f.pr_merged == Some(true) {
+            "merged".to_string()
+        } else {
+            match (f.pr_approvals, &f.pr_ci) {
+                (Some(a), Some(ci)) => format!("{a} approvals, ci {ci}"),
+                _ => "open".to_string(),
+            }
+        };
+        parts.push(format!("PR {state}"));
+    } else if f.issue_url.is_some() {
+        parts.push("issue".to_string());
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("  · {}", parts.join(", "))
+    }
 }
 
 fn cmd_index(store: &Store, cfg: &Config, check: bool) -> Result<()> {
@@ -684,7 +910,7 @@ fn config_show(cli: &Cli) -> Result<()> {
     println!("{:<21}{:<30} SOURCE", "KEY", "VALUE");
     for &key in config::CONFIG_KEYS {
         let value = config_effective(cli, &cfg, key);
-        let source = config_source(cli, key, raw.get(key).is_some());
+        let source = config_source(cli, key, config::yaml_has_key(&raw, key));
         // The literal space guarantees a gap even when `value` exceeds the pad.
         println!("{key:<21}{value:<30} {source}");
     }
@@ -784,8 +1010,20 @@ fn cmd_renumber(
 /// `adroit relink`: rewrite cross-ADR relative links to each ADR's current
 /// location. Repairs links left stale by file moves; idempotent. `--dry-run`
 /// reports what would change without writing.
-fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
+fn cmd_relink(
+    store: &Store,
+    cfg: &Config,
+    dry_run: bool,
+    forge: adroit::forge_hook::ForgeFlags,
+) -> Result<()> {
     let r = store.relink(!dry_run)?;
+    // Opt-in: after fixing in-repo links, refresh each linked PR's description so
+    // its ADR reference tracks the (possibly moved) file.
+    if forge.enabled {
+        for (path, _) in store.list_with_paths()? {
+            adroit::forge_hook::sync_pr(cfg, &path, forge)?;
+        }
+    }
     if r.files_changed == 0 {
         println!("Links already canonical — nothing to relink.");
         return Ok(());
@@ -814,6 +1052,31 @@ fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+/// `adroit reconcile`: sync local ADR status with the forge after out-of-band changes.
+#[cfg(feature = "forge")]
+fn cmd_reconcile(store: &Store, cfg: &Config, apply: bool) -> Result<()> {
+    let summaries = query::summaries(store, &Filter::default())?;
+    adroit::forge::reconcile(cfg, store, &summaries, apply)?;
+    Ok(())
+}
+
+/// `adroit sync`: refresh an ADR's linked PR description from its content.
+#[cfg(feature = "forge")]
+fn cmd_sync(store: &Store, cfg: &Config, id: &str, dry_run: bool, yes: bool) -> Result<()> {
+    let r = resolve_ref(cfg, id)?;
+    let path = store.find_path_by_ref(&r)?;
+    adroit::forge_hook::sync_pr(
+        cfg,
+        &path,
+        adroit::forge_hook::ForgeFlags {
+            enabled: true, // `sync` is inherently a forge op
+            dry_run,
+            yes,
+        },
+    )?;
+    Ok(())
+}
+
 /// `adroit check`: structural CI gate. Runs [`query::check`] — the shared
 /// validation engine (also behind the web dashboard's repo-health panel) — and
 /// renders its report. It bails (non-zero exit) only when an **error**-severity
@@ -822,8 +1085,16 @@ fn cmd_relink(store: &Store, dry_run: bool) -> Result<()> {
 /// `adroit relink` will heal) is printed but exits 0. This lets a status-change
 /// PR branch — which transiently carries stale inbound links under
 /// `relink_scope = self` — pass CI, while a genuine defect still fails it.
-fn cmd_check(store: &Store) -> Result<()> {
-    let report = query::check(store)?;
+fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
+    let mut report = query::check(store)?;
+    // Opt-in forge-aware checks (issue/PR drift) appended to the same report;
+    // they're Warning-severity so they report but don't fail the gate.
+    if forge {
+        let entries = store.list_with_paths()?;
+        report
+            .problems
+            .extend(adroit::forge_hook::check_repo(cfg, &entries, forge)?);
+    }
     // Print every problem (errors and warnings), sorted for stable output.
     let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
     messages.sort_unstable();
@@ -851,6 +1122,283 @@ fn cmd_check(store: &Store) -> Result<()> {
     Ok(())
 }
 
+/// `adroit auth`: save a forge token to the local credential store.
+#[cfg(feature = "forge")]
+fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Result<()> {
+    if !matches!(provider, "github" | "gitlab" | "jira") {
+        anyhow::bail!("provider must be one of: github, gitlab, jira");
+    }
+    let token = match token {
+        Some(t) => t,
+        None => dialoguer::Password::new()
+            .with_prompt(format!("{provider} API token"))
+            .interact()
+            .context("reading token")?,
+    };
+    config::store_credential(provider, &token)?;
+    if provider == "jira"
+        && let Some(e) = email
+    {
+        config::store_credential("jira_email", &e)?;
+    }
+    let path = config::credentials_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    println!("Saved {provider} token to {path} (environment variables still take precedence).");
+    Ok(())
+}
+
+/// `adroit init`: detect the forge from the git remote and write the config.
+#[cfg(feature = "forge")]
+fn cmd_init(store: &Store, print_only: bool, yes: bool) -> Result<()> {
+    use dialoguer::{Confirm, Input, Select};
+
+    let root = store.root();
+    let detected = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .as_deref()
+        .and_then(config::parse_remote_url);
+
+    // `--print`: report the detection + the steps, write nothing, ask nothing.
+    if print_only {
+        match &detected {
+            Some((p, repo, host)) => {
+                let h = host
+                    .as_deref()
+                    .map(|h| format!(" @ {h}"))
+                    .unwrap_or_default();
+                println!("Detected forge: {p} {repo}{h}");
+            }
+            None => println!("No GitHub/GitLab `origin` remote detected — the wizard will prompt."),
+        }
+        println!("\n(--print: nothing written.) `adroit init` walks through:");
+        println!("  • confirm provider/repo + choose the issue tracker → write forge.* to config");
+        println!("  • optionally write ./.env (ADROIT_DIR; the token stays in your shell env)");
+        println!("  • optionally drop a repo-local adr-template.md (MADR) to customize");
+        println!("  • optionally install a pre-commit hook running `adroit check`");
+        println!(
+            "\n`adroit init --yes` does the full setup non-interactively (detected forge + native tracker)."
+        );
+        return Ok(());
+    }
+
+    // 1. Provider / repo / host — confirm the detected one, else prompt.
+    let (provider, repo, host) = match detected {
+        Some(d)
+            if yes
+                || Confirm::new()
+                    .with_prompt(format!("Use detected forge: {} {}?", d.0, d.1))
+                    .default(true)
+                    .interact()? =>
+        {
+            d
+        }
+        Some(_) | None if yes => {
+            anyhow::bail!(
+                "no GitHub/GitLab `origin` remote detected — run `adroit init` (without --yes) to enter it"
+            );
+        }
+        _ => {
+            let choices = ["github", "gitlab"];
+            let idx = Select::new()
+                .with_prompt("Forge provider")
+                .items(choices)
+                .default(0)
+                .interact()?;
+            let provider = if idx == 1 {
+                config::Provider::Gitlab
+            } else {
+                config::Provider::Github
+            };
+            let repo: String = Input::new()
+                .with_prompt("Repo slug (owner/repo or group/project)")
+                .interact_text()?;
+            let host: String = Input::new()
+                .with_prompt("API host (blank = provider default)")
+                .allow_empty(true)
+                .interact_text()?;
+            let host = host.trim();
+            (provider, repo, (!host.is_empty()).then(|| host.to_string()))
+        }
+    };
+
+    // 2. Issue tracker.
+    let (tracker, tracker_project, tracker_host) = if yes {
+        (config::TrackerProvider::Native, None, None)
+    } else {
+        let choices = ["native (the forge's own issues)", "jira"];
+        let idx = Select::new()
+            .with_prompt("Issue tracker")
+            .items(choices)
+            .default(0)
+            .interact()?;
+        if idx == 1 {
+            let key: String = Input::new()
+                .with_prompt("Jira project key (e.g. OPS)")
+                .interact_text()?;
+            let h: String = Input::new()
+                .with_prompt("Jira host (site.atlassian.net, or a self-hosted host)")
+                .interact_text()?;
+            (config::TrackerProvider::Jira, Some(key), Some(h))
+        } else {
+            (config::TrackerProvider::Native, None, None)
+        }
+    };
+
+    // 3. Write forge.* to config (preserving other keys).
+    let token_env = match provider {
+        config::Provider::Gitlab => "ADROIT_GITLAB_TOKEN",
+        _ => "ADROIT_GITHUB_TOKEN",
+    };
+    let mut cfg = config::Config::load()?;
+    let f = cfg.forge.get_or_insert_with(Default::default);
+    f.provider = provider;
+    f.repo = Some(repo);
+    f.host = host;
+    f.tracker = tracker;
+    f.tracker_project = tracker_project;
+    f.tracker_host = tracker_host;
+    cfg.save()?;
+    let cfg_path = config::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    println!("✓ wrote forge.* to {cfg_path}");
+
+    // 4. ./.env — ADROIT_DIR only; the token stays in the shell env (never written).
+    if yes
+        || Confirm::new()
+            .with_prompt("Write ./.env with ADROIT_DIR (token stays in your shell)?")
+            .default(true)
+            .interact()?
+    {
+        let env_path = std::path::Path::new(".env");
+        config::upsert_env_file(env_path, "ADROIT_DIR", &root.display().to_string())?;
+        println!("✓ wrote .env (ADROIT_DIR)");
+    }
+
+    // 5. Repo-local adr-template.md (MADR) for the team to customize.
+    if yes
+        || Confirm::new()
+            .with_prompt("Drop a repo-local adr-template.md (MADR) to customize?")
+            .default(false)
+            .interact()?
+    {
+        let tpath = root.join("adr-template.md");
+        if tpath.exists() {
+            println!("  adr-template.md already exists — left as-is.");
+        } else {
+            std::fs::write(&tpath, adroit::template::MADR)?;
+            println!("✓ wrote {}", tpath.display());
+        }
+    }
+
+    // 6. Pre-commit hook running `adroit check`.
+    if yes
+        || Confirm::new()
+            .with_prompt("Install a git pre-commit hook running `adroit check`?")
+            .default(false)
+            .interact()?
+    {
+        install_precommit_hook(root)?;
+    }
+
+    println!(
+        "\nDone. Set your token in the environment: export {token_env}=<token>  (never commit it)."
+    );
+    Ok(())
+}
+
+/// The `adroit check` pre-commit hook body.
+#[cfg(feature = "forge")]
+fn precommit_hook_script() -> &'static str {
+    "#!/bin/sh\n# Installed by `adroit init`: validate the ADR repo before each commit.\nadroit check\n"
+}
+
+/// Install (without overwriting) a pre-commit hook that runs `adroit check`,
+/// resolving the hooks dir from git so it works with worktrees / custom git dirs.
+#[cfg(feature = "forge")]
+fn install_precommit_hook(adr_dir: &std::path::Path) -> Result<()> {
+    let git_dir = std::process::Command::new("git")
+        .arg("-C")
+        .arg(adr_dir)
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()));
+    let Some(git_dir) = git_dir else {
+        eprintln!("  not a git work tree — skipped the pre-commit hook.");
+        return Ok(());
+    };
+    let hook = git_dir.join("hooks").join("pre-commit");
+    if hook.exists() {
+        eprintln!(
+            "  a pre-commit hook already exists at {} — left as-is.",
+            hook.display()
+        );
+        return Ok(());
+    }
+    if let Some(parent) = hook.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&hook, precommit_hook_script())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+    }
+    println!("✓ installed pre-commit hook at {}", hook.display());
+    Ok(())
+}
+
+/// `adroit publish`: export accepted ADRs to a directory (static-dir publisher).
+fn cmd_publish(store: &Store, out: &std::path::Path, dry_run: bool) -> Result<()> {
+    let report = adroit::publish::publish(store, out, !dry_run)?;
+    if dry_run {
+        println!(
+            "Would publish {} accepted ADR(s) to {}:",
+            report.written,
+            out.display()
+        );
+        for (title, file) in &report.files {
+            println!("  {file}  {title}");
+        }
+        println!("\nDry run — re-run without --dry-run to write.");
+    } else {
+        println!(
+            "Published {} accepted ADR(s) to {}",
+            report.written,
+            out.display()
+        );
+    }
+    Ok(())
+}
+
+/// `adroit notify`: announce an ADR's state to a chat webhook.
+#[cfg(feature = "forge")]
+fn cmd_notify(store: &Store, cfg: &Config, id: &str, dry_run: bool) -> Result<()> {
+    let webhook = std::env::var("ADROIT_NOTIFY_WEBHOOK").map_err(|_| {
+        anyhow::anyhow!("set ADROIT_NOTIFY_WEBHOOK to a Slack/Teams incoming-webhook URL")
+    })?;
+    let r = resolve_ref(cfg, id)?;
+    let path = store.find_path_by_ref(&r)?;
+    let detail = query::detail_at(store, &path)?;
+    let s = &detail.summary;
+    let text = format!("*{}: {}* — {}", s.reference, s.title, s.status);
+    // Print success only when it was actually posted — not on a dry run, a
+    // failed/unreachable webhook, or a build without the `forge` feature.
+    if adroit::forge_hook::notify(&webhook, &text, dry_run)? {
+        println!("Notified ({})", s.reference);
+    }
+    Ok(())
+}
+
 /// Generate a review-kickoff doc for an ADR. Pure generation — no git ops.
 fn cmd_review(
     store: &Store,
@@ -859,6 +1407,7 @@ fn cmd_review(
     days: Option<u32>,
     quorum: Option<u32>,
     output: Option<&std::path::Path>,
+    forge: adroit::forge_hook::ForgeFlags,
 ) -> Result<()> {
     use adroit::template;
 
@@ -905,12 +1454,14 @@ fn cmd_review(
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("could not create directory {}", parent.display()))?;
             }
-            std::fs::write(out, doc)
+            std::fs::write(out, &doc)
                 .with_context(|| format!("could not write {}", out.display()))?;
             println!("Created {}", out.display());
         }
         None => print!("{doc}"),
     }
+    // Opt-in: post the kickoff as a comment on the ADR's linked issue/PR.
+    adroit::forge_hook::comment(cfg, &path, &doc, "review kickoff", forge)?;
     Ok(())
 }
 

@@ -133,7 +133,10 @@ byte-identical. `e` remains the external-`$EDITOR` escape hatch.
 picker) and serves
 an embedded Vue 3 SPA (`web/dist`, embedded via `rust-embed`). The store is
 reopened per request, so every response reflects current on-disk state.
-Markdown→HTML rendering is server-side (`pulldown-cmark`). No endpoint writes
+Markdown→HTML rendering is server-side (`pulldown-cmark`); `render_markdown`
+post-processes the event stream to **autolink bare `http(s)://` URLs** (e.g. the
+`## References` issue/PR links — CommonMark only autolinks `<url>`), skipping code
+blocks and existing links. No endpoint writes
 ADRs — authoring stays in CLI/TUI; the one mutating route, `POST /api/workspace`,
 only switches which directory the dashboard views (re-pointing the watcher), and
 the ADR side imports only the read path.
@@ -327,6 +330,116 @@ The no-subcommand TUI is launched via `tui::run(cfg, dir)`, where `dir` is the
 directory `main.rs` already resolved from `--dir`/config (same dir `serve`
 receives), so `adroit --dir X` opens the TUI against `X`. The store-opening seam
 is `tui::open_store(cfg, dir)`.
+
+## Forge integration (`forge` feature)
+
+Opt-in adapters that drive the *process* lifecycle (a tracker issue + a
+code-review PR/MR) alongside the ADR's *decision* lifecycle (issue #4). Gated
+behind the `forge` Cargo feature, which adds a small **blocking** HTTP client
+(`ureq`) — the core CLI stays synchronous; `--no-default-features`/`tui`/`web`
+never depend on `forge`.
+
+**Two roles, trait objects.** `src/forge/mod.rs` defines `Forge` (PR/MR host)
+and `Tracker` (issue host). A *same-system* provider implements both over one
+client + one token: `src/forge/github.rs` (`Github` is both, behind `Arc`,
+`ADROIT_GITHUB_TOKEN`); GitLab (`Provider::Gitlab`) is the same shape (Phase
+1b). A *split* setup (GitLab MRs + Jira issues) is reached later via the separate
+`tracker` selection. `src/forge/noop.rs` is the null-object adapter for previews.
+
+**Clean dispatch (two axes).** Compile-time: the `#[cfg(feature="forge")]` lives
+on the `mod` line in `lib.rs`, on the `src/forge_hook.rs` facade (twin defs: real
+when on, no-op when off), and on the **forge CLI surface** in `src/cli.rs` — the
+`--forge`/`--dry-run`/`--yes` opt-in flags on shared verbs *and* the forge-only
+commands (`init`/`auth`/`sync`/`notify`), so a no-forge build doesn't expose them
+at all (no misleading flags or `unrecognized subcommand` no-ops; `publish` stays
+— it's offline). The verb *handlers* (`cmd_new`/`cmd_set_status`/`cmd_supersede`)
+still call `forge_hook::*` unconditionally (no-op twins) — they carry no
+`#[cfg]`; `main`'s dispatch builds the `ForgeFlags` from the gated fields with a
+small `#[cfg]` (`ForgeFlags::default()` when forge is off). The top-level
+`help_template` is `cfg_attr`-selected so the no-forge build's `--help` omits the
+"Forge integration" section. Runtime: `forge::open(&ForgeConfig)` is a **thin
+dispatcher** (`match Provider` → `github::open(cfg)`); each provider module owns
+its own construction (token env var, slug/host). Adding a provider = one match
+arm + one module. HTTP is behind the `HttpTransport` seam so adapters are tested
+with a `FakeTransport` (no network).
+
+**Verbs wired** (all opt-in via `--forge`, with migrate-style `--dry-run`/
+`--yes`; graceful-offline = warn + keep the local write; the ADR is the durable
+record): `new` creates the issue + a draft PR off an `adr/NNNN-…` branch
+(`src/git.rs` does branch/commit/push) and records both URLs in a
+format-preserving `## References` section (`format::upsert_reference`);
+`set-status accepted` verifies `review_quorum` approvals + CI then merges the PR
++ closes the issue (refuses if blocked; the whole op previews unless `--yes`),
+and then **"pushes the relink commit"** (#4): `before_status_change` fast-forwards
+the base branch to the merge, the local move relocates `proposed/ → accepted/` +
+relinks on it, and `after_status_change` (in `forge_hook`) commits + pushes that —
+so `accepted/` lands on `main` in one command. Best-effort: a dirty tree /
+diverged base / rejected push restores the branch and leaves the move local with
+a warning (`git.rs` gained `fetch`/`merge_ff_only`/`is_clean`/`toplevel`).
+`set-status rejected`/`deprecated` close the PR + mark the issue won't-fix (no
+relink commit — those don't merge);
+`supersede` comments on + closes the old ADR's issue/PR. Each orchestration is
+split into a testable core (`run_new`/`run_status_change`/`comment`) exercised
+with mock/noop adapters. Read-side: `check --forge` appends
+`ProblemKind::ForgeIntegration` drift warnings; `list --forge` enriches rows
+(`forge::enrich` → `AdrSummary.forge_data`); `review`/`set-review --forge`
+post a comment (kickoff / deadline) via the shared `forge::comment`.
+
+**Providers.** `github` + `gitlab` (each a same-system Forge+Tracker via
+`{github,gitlab}::open(cfg)`); `jira` is a split **Tracker** (`forge/jira.rs`,
+REST v2) selected by `forge.tracker = jira` so a GitHub/GitLab forge pairs with
+Jira issues — `forge::open` chooses forge and tracker independently. Jira auth
+follows the deployment: Cloud uses Basic `email:token` (email set), Server/Data
+Center uses a Bearer PAT (email omitted). GitHub/GitLab use the same token cloud
+or self-hosted; only `forge.host` changes (GitHub Enterprise host includes the
+`/api/v3` base).
+
+**Cross-cutting verbs.** `adroit init` (interactive wizard: detect/confirm
+provider+repo from the git remote → `config::parse_remote_url`, pick the tracker,
+write `forge.*`, then optionally `./.env` (ADROIT_DIR), a repo-local
+`adr-template.md`, and a pre-commit hook running `adroit check`; `--yes` runs it
+non-interactively, `--print` previews), `adroit publish` (export accepted
+ADRs to a dir — `src/publish.rs`, core/offline; Confluence/Notion adapters are
+future), `adroit notify <id>` (POST to a Slack/Teams webhook via
+`forge::notify`), and `adroit auth <github|gitlab|jira> [--token] [--email]`
+(save a token to a dependency-free 0600 `credentials.yaml` next to the config —
+`config::store_credential`/`load_credential`; `{github,gitlab,jira}::open`
+resolve the token env → credential store → none). `adroit reconcile` syncs local
+status to the forge after out-of-band changes (a merged MR / closed issue):
+reports drift, and with `--yes` moves a merged PR's ADR to `accepted/`
+(read-only on the forge; `forge::run_reconcile` is the testable core).
+**Read-only dashboard.** Two forge-aware routes, both read-only and `null`/empty
+without an active forge (built on always-compiled `forge_hook::*` twins so a
+`web`-only build degrades cleanly): `GET /api/adrs/{id}/forge` (per-ADR, via
+`enrich_one`) feeds `DetailView.vue`'s issue/PR panel; `GET /api/forge/summary`
+(via `dashboard_summary`, with `AppState.review_quorum`) feeds the dashboard
+tiles "Proposed without an MR" (local) + "MR approved · waiting on author"
+(live). The dashboard never *writes* to the forge (the one-click "create MR"
+button remains out of scope). **Still future:** OAuth device-flow + OS-keychain
+credential storage, and Confluence/Notion `publish` adapters.
+
+**Forge config is repo-scoped, not just global.** `forge.*` is one (global)
+config, but the dashboard can switch ADR directories at runtime and the CLI runs
+anywhere — so the active dir may belong to a *different* repo than `forge.repo`.
+`dir_matches_forge(fcfg, dir)` compares the dir's `origin` remote to `forge.repo`;
+a definite mismatch (different provider/slug) means the config doesn't apply here.
+**Every** forge entry point guards on it — both reads (`enrich_with`,
+`dashboard_summary`, `reconcile`, `check_repo`) and writes (`after_new`,
+`before_status_change`, `on_supersede`, `comment`, `sync_pr`) call
+`skip_dir_mismatch` (dir) / `skip_path_mismatch` (file → its dir) right after the
+`cfg.forge` check, before `open(fcfg)`. On mismatch they warn once and skip the
+forge side: the dashboard hides its cells, `list`/`check --forge` omit
+enrichment, and the mutating verbs keep the local ADR record while creating /
+merging *nothing* in the wrong repo. Undeterminable cases (no `repo` set, or no
+recognizable remote) assume it applies — non-git ADR dirs aren't blocked.
+`DetailView.vue` re-fetches its forge panel on `workspaceChanged` (not on every
+live-reload tick).
+
+**Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
+`base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are
+env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
+`get_str`/`set_str`/`CONFIG_KEYS`. `just lint-forge`/`test-forge` (folded into
+`just ci`) cover the feature build.
 
 ## Conventions
 

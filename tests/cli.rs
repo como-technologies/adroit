@@ -1757,3 +1757,128 @@ fn uuid_scheme_new_and_show_by_prefix() {
         .success()
         .stdout(predicate::str::contains("Adopt PostgreSQL"));
 }
+
+// ---------------------------------------------------------------------------
+// Forge integration (issue #4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_without_forge_has_no_references_section() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Plain ADR", "--no-edit"])
+        .assert()
+        .success();
+    let body = fs::read_to_string(dir.path().join("proposed/0001-plain-adr.md")).unwrap();
+    assert!(
+        !body.contains("## References"),
+        "bare `new` must not touch forge"
+    );
+}
+
+#[cfg(not(feature = "forge"))]
+#[test]
+fn forge_flag_is_absent_without_the_feature() {
+    // A no-forge build doesn't expose `--forge` at all (it's `#[cfg]`-gated), so
+    // passing it is a hard error, not a silent no-op.
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit", "--forge"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+}
+
+#[cfg(not(feature = "forge"))]
+#[test]
+fn forge_only_commands_are_absent_without_the_feature() {
+    // init/auth/sync/notify are `#[cfg(feature = "forge")]` — a no-forge build
+    // doesn't have them at all (publish stays — it's offline).
+    let dir = TempDir::new().unwrap();
+    for sub in ["auth", "init", "sync", "notify", "reconcile"] {
+        adroit(&dir)
+            .arg(sub)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+    }
+}
+
+#[cfg(feature = "forge")]
+#[test]
+fn new_with_forge_dry_run_previews_plan_without_network() {
+    // Point config at a temp XDG dir with a github forge block + a fake token,
+    // so the adapter constructs but --dry-run returns before any HTTP/git.
+    let home = TempDir::new().unwrap();
+    let cfgdir = home.path().join("adroit");
+    fs::create_dir_all(&cfgdir).unwrap();
+    fs::write(
+        cfgdir.join("config.yaml"),
+        "forge:\n  provider: github\n  repo: owner/repo\n",
+    )
+    .unwrap();
+
+    let dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("adroit").unwrap();
+    cmd.env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("ADROIT_GITHUB_TOKEN", "fake-token")
+        .arg("--dir")
+        .arg(dir.path())
+        .args(["new", "Adopt Postgres", "--no-edit", "--forge", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Forge plan"))
+        .stdout(predicate::str::contains("create issue"));
+
+    // Dry run touched nothing beyond the ADR file itself.
+    let body = fs::read_to_string(dir.path().join("proposed/0001-adopt-postgres.md")).unwrap();
+    assert!(!body.contains("## References"));
+}
+
+#[cfg(feature = "forge")]
+#[test]
+fn init_yes_writes_config_env_template_and_hook() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    let adrs = repo.join("adrs");
+    fs::create_dir_all(&adrs).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .unwrap();
+    };
+    git(&["init", "-q"]);
+    git(&["remote", "add", "origin", "git@github.com:acme/widgets.git"]);
+    let cfg = repo.join("cfg");
+
+    // `--yes` = full non-interactive setup from the detected remote.
+    Command::cargo_bin("adroit")
+        .unwrap()
+        .current_dir(repo)
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("XDG_DATA_HOME", repo.join("data"))
+        .env("ADROIT_DIR", &adrs)
+        .env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .args(["init", "--yes"])
+        .assert()
+        .success();
+
+    let conf = fs::read_to_string(cfg.join("adroit").join("config.yaml")).unwrap();
+    assert!(conf.contains("provider: github"), "config:\n{conf}");
+    assert!(conf.contains("repo: acme/widgets"), "config:\n{conf}");
+    assert!(
+        fs::read_to_string(repo.join(".env"))
+            .unwrap()
+            .contains("ADROIT_DIR=")
+    );
+    assert!(adrs.join("adr-template.md").exists());
+    let hook = repo.join(".git").join("hooks").join("pre-commit");
+    assert!(hook.exists(), "pre-commit hook not installed");
+    assert!(fs::read_to_string(&hook).unwrap().contains("adroit check"));
+}
