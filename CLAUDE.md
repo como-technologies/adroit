@@ -418,6 +418,19 @@ tiles "Proposed without an MR" (local) + "MR approved · waiting on author"
 button remains out of scope). **Still future:** OAuth device-flow + OS-keychain
 credential storage, and Confluence/Notion `publish` adapters.
 
+**Forge config is repo-scoped, not just global.** `forge.*` is one (global)
+config, but the dashboard can switch ADR directories at runtime and the CLI runs
+anywhere — so the active dir may belong to a *different* repo than `forge.repo`.
+The read paths (`enrich_with`, `dashboard_summary`, `reconcile`) open adapters via
+`forge::open_for_dir(fcfg, store.root())` instead of `open(fcfg)`:
+`dir_matches_forge` compares the dir's `origin` remote to `forge.repo` and returns
+no adapters on a definite mismatch (different provider/slug), so the forge cells
+hide rather than cross-wire another repo's state. Undeterminable cases (no `repo`
+set, or no recognizable remote) assume it applies — non-git ADR dirs aren't
+blocked. `DetailView.vue` re-fetches its forge panel on `workspaceChanged` (not on
+every live-reload tick). The mutating verbs (`new`/`set-status --forge`) aren't
+guarded yet — a known follow-up.
+
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
 `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are
 env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual

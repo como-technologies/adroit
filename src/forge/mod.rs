@@ -247,6 +247,42 @@ pub fn open(cfg: &ForgeConfig) -> Adapters {
     (forge, tracker)
 }
 
+/// Whether the forge config plausibly applies to the ADR directory `dir`.
+///
+/// `forge.*` is a single (global) config, but the dashboard can switch ADR
+/// directories at runtime and the CLI can be run anywhere — so the active
+/// directory may belong to a *different* repo than `forge.repo`. We compare the
+/// directory's `origin` remote against the configured repo: a definite mismatch
+/// (the remote resolves to a different provider/slug) means the config doesn't
+/// apply here, so forge data would be cross-wired and misleading. When we can't
+/// tell — no `repo` configured, or `dir` has no recognizable remote — we assume
+/// it applies and preserve prior behavior (don't block non-git ADR dirs).
+fn dir_matches_forge(fcfg: &ForgeConfig, dir: &std::path::Path) -> bool {
+    let Some(want) = fcfg.repo.as_deref() else {
+        return true;
+    };
+    match crate::git::remote_url(dir, "origin").and_then(|u| crate::config::parse_remote_url(&u)) {
+        Some((prov, repo, _host)) => prov == fcfg.provider && repo.eq_ignore_ascii_case(want),
+        None => true,
+    }
+}
+
+/// [`open`], but scoped to an ADR directory: if `dir` definitely belongs to a
+/// different repo than `forge.repo`, the config doesn't apply here, so return
+/// no adapters (the caller then skips forge — hiding the dashboard's forge
+/// cells / omitting CLI enrichment rather than showing another repo's state).
+fn open_for_dir(fcfg: &ForgeConfig, dir: &std::path::Path) -> Adapters {
+    if !dir_matches_forge(fcfg, dir) {
+        eprintln!(
+            "adroit: forge.repo is `{}` but this directory's `origin` is a different repo — \
+             skipping forge for it (configure forge for this repo to enable it).",
+            fcfg.repo.as_deref().unwrap_or("")
+        );
+        return (None, None);
+    }
+    open(fcfg)
+}
+
 /// Orchestrate the forge side of `adroit new`: create the tracker issue, base a
 /// draft PR on an `adr/NNNN-…` branch, and record both URLs in the ADR's
 /// `## References`. `dry_run` previews the plan and touches nothing.
@@ -976,7 +1012,7 @@ pub fn enrich_with(
     store: &crate::store::Store,
     summaries: &mut [crate::view::AdrSummary],
 ) -> anyhow::Result<()> {
-    let (forge, _tracker) = open(fcfg);
+    let (forge, _tracker) = open_for_dir(fcfg, store.root());
     let Some(forge) = forge else {
         return Ok(());
     };
@@ -1038,7 +1074,7 @@ pub fn reconcile(
         eprintln!("adroit: reconcile needs a configured forge (set forge.provider + forge.repo).");
         return Ok(());
     };
-    let (forge, tracker) = open(fcfg);
+    let (forge, tracker) = open_for_dir(fcfg, store.root());
     let Some(forge) = forge else {
         eprintln!(
             "adroit: --forge: `{}` integration inactive (set forge.repo + a token).",
@@ -1130,7 +1166,7 @@ pub fn dashboard_summary(
     summaries: &[crate::view::AdrSummary],
     quorum: u32,
 ) -> anyhow::Result<Option<(u32, u32)>> {
-    let (forge, _tracker) = open(fcfg);
+    let (forge, _tracker) = open_for_dir(fcfg, store.root());
     let Some(forge) = forge else {
         return Ok(None);
     };
@@ -1204,6 +1240,48 @@ mod tests {
             .args(args)
             .output()
             .unwrap();
+    }
+
+    #[test]
+    fn dir_matches_forge_compares_origin_to_configured_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        git(dir, &["init", "-q"]);
+        git(
+            dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+
+        let gh = |repo: Option<&str>| ForgeConfig {
+            provider: Provider::Github,
+            repo: repo.map(str::to_string),
+            ..Default::default()
+        };
+
+        // Same repo (slug is case-insensitive) → the config applies here.
+        assert!(dir_matches_forge(&gh(Some("acme/widgets")), dir));
+        assert!(dir_matches_forge(&gh(Some("acme/WIDGETS")), dir));
+        // A different repo, or a different provider → does not apply (this is the
+        // "switched to another repo's ADR dir" case that must hide forge data).
+        assert!(!dir_matches_forge(&gh(Some("acme/other")), dir));
+        assert!(!dir_matches_forge(
+            &ForgeConfig {
+                provider: Provider::Gitlab,
+                repo: Some("acme/widgets".into()),
+                ..Default::default()
+            },
+            dir
+        ));
+        // Can't tell — no repo configured, or no recognizable remote → assume it
+        // applies (don't block non-git or unrecognized-host ADR dirs).
+        assert!(dir_matches_forge(&gh(None), dir));
+        let bare = tempfile::tempdir().unwrap();
+        assert!(dir_matches_forge(&gh(Some("acme/widgets")), bare.path()));
     }
 
     #[test]

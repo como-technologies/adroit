@@ -16,6 +16,7 @@ import {
 import { getAdr, getAdrForge, type AdrDetail, type ForgeData, type RelatedLink } from '@/api'
 import { shortDate } from '@/util'
 import { useLiveReload } from '@/useLiveReload'
+import { workspaceChanged } from '@/composables/useWorkspace'
 import StatusPill from '@/components/StatusPill.vue'
 
 const props = defineProps<{ id: string }>()
@@ -65,6 +66,12 @@ watch(() => props.id, () => {
 })
 // Re-fetch this ADR when files change on disk.
 useLiveReload(load)
+// Switching the ADR directory can change which repo (and forge) we're looking
+// at, so re-fetch the forge panel too — but only on an actual workspace switch,
+// not on every live-reload tick (which would hammer the remote forge API).
+watch(workspaceChanged, () => {
+  loadForge()
+})
 
 // Show the panel only when there's actual forge state to show.
 const hasForge = computed(() => !!(forge.value && (forge.value.issue_url || forge.value.pr_url)))

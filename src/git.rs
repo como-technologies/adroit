@@ -59,6 +59,15 @@ pub fn default_remote_branch(dir: &Path, remote: &str) -> Option<String> {
         .or(Some(full))
 }
 
+/// The URL configured for `remote` (e.g. `origin`), or `None` when the remote is
+/// unset or `dir` isn't a git working tree. Used to tell whether an ADR
+/// directory actually belongs to the repo the forge config points at.
+pub fn remote_url(dir: &Path, remote: &str) -> Option<String> {
+    run(dir, &["remote", "get-url", remote])
+        .ok()
+        .filter(|u| !u.is_empty())
+}
+
 /// Create and switch to a new branch from the current HEAD.
 pub fn create_branch(dir: &Path, name: &str) -> Result<(), GitError> {
     run(dir, &["switch", "-c", name]).map(drop)
