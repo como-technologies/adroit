@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 use crate::config::{DateSource, Layout, MarkdownTheme, RelinkScope};
 use crate::format::Format;
@@ -54,6 +55,7 @@ Forge integration:
 
 Configuration:
   config        Inspect or change configuration
+  completions   Print a shell completion script (bash/zsh/fish/…)
   help          Print help for a command
 
 Options:
@@ -93,6 +95,7 @@ Publishing:
 
 Configuration:
   config        Inspect or change configuration
+  completions   Print a shell completion script (bash/zsh/fish/…)
   help          Print help for a command
 
 Options:
@@ -536,6 +539,16 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
+    /// Print a shell completion script to stdout (bash, zsh, fish, …).
+    ///
+    /// Generated from the command tree, so it always matches this build (a
+    /// no-forge build omits the forge commands). Load it with e.g.
+    /// `. <(adroit completions bash)` or save it onto your shell's fpath.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 /// Subcommands for `adroit config`.
@@ -574,6 +587,17 @@ mod tests {
     /// `Cli`'s `help_template` (clap 4 can't group subcommands). This guards
     /// against drift: every real subcommand must appear in that grouped help, so
     /// adding a command without categorizing it fails the build.
+    #[test]
+    fn completions_generate_for_every_shell() {
+        use clap::ValueEnum;
+        for &shell in Shell::value_variants() {
+            let mut cmd = Cli::command();
+            let mut out = Vec::new();
+            clap_complete::generate(shell, &mut cmd, "adroit", &mut out);
+            assert!(!out.is_empty(), "{shell} completion script was empty");
+        }
+    }
+
     #[test]
     fn commands_are_all_grouped() {
         let help = Cli::command().render_help().to_string();

@@ -426,6 +426,42 @@ mismatch. `config get`/`set` cover the **scalar** keys in the
 [Configuration](#configuration) table below; `status_dirs`, `templates_dir`, and
 `summary_path` are set by editing `config.yaml` directly.
 
+### `adroit completions <SHELL>`
+
+Print a shell completion script to stdout, generated from adroit's command tree
+(so it always matches your installed version — and a build without the `forge`
+feature omits the forge commands/flags). `<SHELL>` is `bash`, `zsh`, `fish`,
+`powershell`, or `elvish`.
+
+The quickest way (kubectl-style) — source it from your shell's startup file so
+it loads every session:
+
+```sh
+# ~/.bashrc
+. <(adroit completions bash)
+
+# ~/.zshrc   (ensure `autoload -U compinit && compinit` runs after)
+. <(adroit completions zsh)
+
+# fish
+adroit completions fish | source
+```
+
+Or install the script to the location your shell scans, which is faster to load
+and survives without adroit on `PATH` at startup:
+
+```sh
+# bash (system-wide)
+adroit completions bash | sudo tee /etc/bash_completion.d/adroit > /dev/null
+# zsh (a dir on your $fpath, e.g.)
+adroit completions zsh > ~/.zfunc/_adroit
+# fish
+adroit completions fish > ~/.config/fish/completions/adroit.fish
+```
+
+Completion covers subcommands, flags, and enum values (e.g. `--format
+markdown|frontmatter`, `set-status <TAB>` → the status names).
+
 ## Configuration
 
 adroit stores configuration in `~/.config/adroit/config.yaml` (XDG on Linux, platform-appropriate elsewhere). The file is created automatically on first run with your detected editor.

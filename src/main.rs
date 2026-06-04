@@ -75,6 +75,15 @@ fn main() -> Result<()> {
     if let Some(Command::Config { action }) = &cli.command {
         return cmd_config(action.as_ref(), &cli);
     }
+    // `completions` just prints a script generated from the command tree — no
+    // ADR dir/store needed, so it works anywhere (and reflects this build).
+    if let Some(Command::Completions { shell }) = &cli.command {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        let bin = cmd.get_name().to_string();
+        clap_complete::generate(*shell, &mut cmd, bin, &mut std::io::stdout());
+        return Ok(());
+    }
     // `auth` only writes the credential store — no ADR dir/store needed.
     // Forge-only: the command exists solely in `--features forge` builds.
     #[cfg(feature = "forge")]
@@ -347,8 +356,11 @@ fn main() -> Result<()> {
             )?;
         }
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
-        // `config` returns before the store is opened (see above).
+        // `config` / `completions` return before the store is opened (see above).
         Some(Command::Config { .. }) => unreachable!("config handled before store open"),
+        Some(Command::Completions { .. }) => {
+            unreachable!("completions handled before store open")
+        }
         #[cfg(feature = "forge")]
         Some(Command::Auth { .. }) => unreachable!("auth handled before store open"),
         None => run_tui(&cfg, &dir)?,
