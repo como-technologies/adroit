@@ -317,7 +317,7 @@ fn main() -> Result<()> {
         }
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
         #[cfg(feature = "forge")]
-        Some(Command::Init { print }) => cmd_init(&store, print)?,
+        Some(Command::Init { print, yes }) => cmd_init(&store, print, yes)?,
         Some(Command::Publish { out, dry_run }) => cmd_publish(&store, &out, dry_run)?,
         #[cfg(feature = "forge")]
         Some(Command::Notify { id, dry_run }) => cmd_notify(&store, &cfg, &id, dry_run)?,
@@ -1150,49 +1150,210 @@ fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Res
 
 /// `adroit init`: detect the forge from the git remote and write the config.
 #[cfg(feature = "forge")]
-fn cmd_init(store: &Store, print_only: bool) -> Result<()> {
-    let url = std::process::Command::new("git")
+fn cmd_init(store: &Store, print_only: bool, yes: bool) -> Result<()> {
+    use dialoguer::{Confirm, Input, Select};
+
+    let root = store.root();
+    let detected = std::process::Command::new("git")
         .arg("-C")
-        .arg(store.root())
+        .arg(root)
         .args(["remote", "get-url", "origin"])
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .as_deref()
+        .and_then(config::parse_remote_url);
 
-    let Some((provider, repo, host)) = url.as_deref().and_then(config::parse_remote_url) else {
-        println!("Couldn't detect a GitHub/GitLab `origin` remote. Configure it manually:");
-        println!("  adroit config set forge.provider github   # or gitlab");
-        println!("  adroit config set forge.repo owner/repo");
+    // `--print`: report the detection + the steps, write nothing, ask nothing.
+    if print_only {
+        match &detected {
+            Some((p, repo, host)) => {
+                let h = host
+                    .as_deref()
+                    .map(|h| format!(" @ {h}"))
+                    .unwrap_or_default();
+                println!("Detected forge: {p} {repo}{h}");
+            }
+            None => println!("No GitHub/GitLab `origin` remote detected — the wizard will prompt."),
+        }
+        println!("\n(--print: nothing written.) `adroit init` walks through:");
+        println!("  • confirm provider/repo + choose the issue tracker → write forge.* to config");
+        println!("  • optionally write ./.env (ADROIT_DIR; the token stays in your shell env)");
+        println!("  • optionally drop a repo-local adr-template.md (MADR) to customize");
+        println!("  • optionally install a pre-commit hook running `adroit check`");
+        println!(
+            "\n`adroit init --yes` does the full setup non-interactively (detected forge + native tracker)."
+        );
         return Ok(());
+    }
+
+    // 1. Provider / repo / host — confirm the detected one, else prompt.
+    let (provider, repo, host) = match detected {
+        Some(d)
+            if yes
+                || Confirm::new()
+                    .with_prompt(format!("Use detected forge: {} {}?", d.0, d.1))
+                    .default(true)
+                    .interact()? =>
+        {
+            d
+        }
+        Some(_) | None if yes => {
+            anyhow::bail!(
+                "no GitHub/GitLab `origin` remote detected — run `adroit init` (without --yes) to enter it"
+            );
+        }
+        _ => {
+            let choices = ["github", "gitlab"];
+            let idx = Select::new()
+                .with_prompt("Forge provider")
+                .items(choices)
+                .default(0)
+                .interact()?;
+            let provider = if idx == 1 {
+                config::Provider::Gitlab
+            } else {
+                config::Provider::Github
+            };
+            let repo: String = Input::new()
+                .with_prompt("Repo slug (owner/repo or group/project)")
+                .interact_text()?;
+            let host: String = Input::new()
+                .with_prompt("API host (blank = provider default)")
+                .allow_empty(true)
+                .interact_text()?;
+            let host = host.trim();
+            (provider, repo, (!host.is_empty()).then(|| host.to_string()))
+        }
     };
 
+    // 2. Issue tracker.
+    let (tracker, tracker_project, tracker_host) = if yes {
+        (config::TrackerProvider::Native, None, None)
+    } else {
+        let choices = ["native (the forge's own issues)", "jira"];
+        let idx = Select::new()
+            .with_prompt("Issue tracker")
+            .items(choices)
+            .default(0)
+            .interact()?;
+        if idx == 1 {
+            let key: String = Input::new()
+                .with_prompt("Jira project key (e.g. OPS)")
+                .interact_text()?;
+            let h: String = Input::new()
+                .with_prompt("Jira host (site.atlassian.net, or a self-hosted host)")
+                .interact_text()?;
+            (config::TrackerProvider::Jira, Some(key), Some(h))
+        } else {
+            (config::TrackerProvider::Native, None, None)
+        }
+    };
+
+    // 3. Write forge.* to config (preserving other keys).
     let token_env = match provider {
         config::Provider::Gitlab => "ADROIT_GITLAB_TOKEN",
         _ => "ADROIT_GITHUB_TOKEN",
     };
-    let host_note = host
-        .as_deref()
-        .map(|h| format!(" @ {h}"))
-        .unwrap_or_default();
-    println!("Detected forge: {provider} {repo}{host_note}");
-
-    if print_only {
-        println!("\n(--print: nothing written). To apply:");
-        println!("  adroit config set forge.provider {provider}");
-        println!("  adroit config set forge.repo {repo}");
-        return Ok(());
-    }
-
-    // Load the persisted config (preserving other keys), set the forge block, save.
     let mut cfg = config::Config::load()?;
     let f = cfg.forge.get_or_insert_with(Default::default);
     f.provider = provider;
     f.repo = Some(repo);
     f.host = host;
+    f.tracker = tracker;
+    f.tracker_project = tracker_project;
+    f.tracker_host = tracker_host;
     cfg.save()?;
-    println!("Wrote forge settings to your config.");
-    println!("Next: export {token_env}=<token>   (tokens come from the environment, never config)");
+    let cfg_path = config::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    println!("✓ wrote forge.* to {cfg_path}");
+
+    // 4. ./.env — ADROIT_DIR only; the token stays in the shell env (never written).
+    if yes
+        || Confirm::new()
+            .with_prompt("Write ./.env with ADROIT_DIR (token stays in your shell)?")
+            .default(true)
+            .interact()?
+    {
+        let env_path = std::path::Path::new(".env");
+        config::upsert_env_file(env_path, "ADROIT_DIR", &root.display().to_string())?;
+        println!("✓ wrote .env (ADROIT_DIR)");
+    }
+
+    // 5. Repo-local adr-template.md (MADR) for the team to customize.
+    if yes
+        || Confirm::new()
+            .with_prompt("Drop a repo-local adr-template.md (MADR) to customize?")
+            .default(false)
+            .interact()?
+    {
+        let tpath = root.join("adr-template.md");
+        if tpath.exists() {
+            println!("  adr-template.md already exists — left as-is.");
+        } else {
+            std::fs::write(&tpath, adroit::template::MADR)?;
+            println!("✓ wrote {}", tpath.display());
+        }
+    }
+
+    // 6. Pre-commit hook running `adroit check`.
+    if yes
+        || Confirm::new()
+            .with_prompt("Install a git pre-commit hook running `adroit check`?")
+            .default(false)
+            .interact()?
+    {
+        install_precommit_hook(root)?;
+    }
+
+    println!(
+        "\nDone. Set your token in the environment: export {token_env}=<token>  (never commit it)."
+    );
+    Ok(())
+}
+
+/// The `adroit check` pre-commit hook body.
+#[cfg(feature = "forge")]
+fn precommit_hook_script() -> &'static str {
+    "#!/bin/sh\n# Installed by `adroit init`: validate the ADR repo before each commit.\nadroit check\n"
+}
+
+/// Install (without overwriting) a pre-commit hook that runs `adroit check`,
+/// resolving the hooks dir from git so it works with worktrees / custom git dirs.
+#[cfg(feature = "forge")]
+fn install_precommit_hook(adr_dir: &std::path::Path) -> Result<()> {
+    let git_dir = std::process::Command::new("git")
+        .arg("-C")
+        .arg(adr_dir)
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()));
+    let Some(git_dir) = git_dir else {
+        eprintln!("  not a git work tree — skipped the pre-commit hook.");
+        return Ok(());
+    };
+    let hook = git_dir.join("hooks").join("pre-commit");
+    if hook.exists() {
+        eprintln!(
+            "  a pre-commit hook already exists at {} — left as-is.",
+            hook.display()
+        );
+        return Ok(());
+    }
+    if let Some(parent) = hook.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&hook, precommit_hook_script())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+    }
+    println!("✓ installed pre-commit hook at {}", hook.display());
     Ok(())
 }
 

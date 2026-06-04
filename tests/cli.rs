@@ -1837,3 +1837,48 @@ fn new_with_forge_dry_run_previews_plan_without_network() {
     let body = fs::read_to_string(dir.path().join("proposed/0001-adopt-postgres.md")).unwrap();
     assert!(!body.contains("## References"));
 }
+
+#[cfg(feature = "forge")]
+#[test]
+fn init_yes_writes_config_env_template_and_hook() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    let adrs = repo.join("adrs");
+    fs::create_dir_all(&adrs).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .unwrap();
+    };
+    git(&["init", "-q"]);
+    git(&["remote", "add", "origin", "git@github.com:acme/widgets.git"]);
+    let cfg = repo.join("cfg");
+
+    // `--yes` = full non-interactive setup from the detected remote.
+    Command::cargo_bin("adroit")
+        .unwrap()
+        .current_dir(repo)
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("XDG_DATA_HOME", repo.join("data"))
+        .env("ADROIT_DIR", &adrs)
+        .env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .args(["init", "--yes"])
+        .assert()
+        .success();
+
+    let conf = fs::read_to_string(cfg.join("adroit").join("config.yaml")).unwrap();
+    assert!(conf.contains("provider: github"), "config:\n{conf}");
+    assert!(conf.contains("repo: acme/widgets"), "config:\n{conf}");
+    assert!(
+        fs::read_to_string(repo.join(".env"))
+            .unwrap()
+            .contains("ADROIT_DIR=")
+    );
+    assert!(adrs.join("adr-template.md").exists());
+    let hook = repo.join(".git").join("hooks").join("pre-commit");
+    assert!(hook.exists(), "pre-commit hook not installed");
+    assert!(fs::read_to_string(&hook).unwrap().contains("adroit check"));
+}

@@ -524,8 +524,13 @@ self-hosted — only `forge.host` changes. The integration is opt-in per command
   accepted — by moving it to `accepted/` (+ relink). It's **read-only on the
   forge** (never merges/closes); a closed issue on a still-proposed ADR is
   reported, not auto-fixed (accept vs won't-fix is ambiguous).
-- `adroit init` detects the forge from the git remote and writes `forge.*`;
-  `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
+- `adroit init` is an interactive setup wizard: it detects the provider/repo
+  from the git remote (confirm or override), asks for the issue tracker, writes
+  `forge.*`, and optionally writes `./.env` (ADROIT_DIR — the token stays in your
+  shell), drops a repo-local `adr-template.md` (MADR), and installs a pre-commit
+  hook running `adroit check`. `--print` previews; `--yes` does the full setup
+  non-interactively (detected forge + native tracker).
+- `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
   `adroit notify <id>` posts to a Slack/Teams webhook (`ADROIT_NOTIFY_WEBHOOK`).
 - `adroit auth <github|gitlab|jira> [--token <T>] [--email <E>]` saves a token to
   a `0600` `credentials.yaml` beside the config (prompts if `--token` is omitted),

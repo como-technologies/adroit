@@ -456,16 +456,21 @@ pub enum Command {
         #[arg(long)]
         email: Option<String>,
     },
-    /// Set up forge integration by detecting the provider from the git remote.
+    /// Interactive wizard to set up forge integration.
     ///
-    /// Writes `forge.provider` / `forge.repo` (+ `forge.host` for self-managed)
-    /// to your config and reminds you which token env var to set. `--print` only
-    /// shows what it detected.
+    /// Detects the provider/repo from the git remote (confirm or override),
+    /// asks for the issue tracker, writes `forge.*` to config, and optionally
+    /// writes `./.env` (ADROIT_DIR), drops a repo-local `adr-template.md`, and
+    /// installs a pre-commit hook running `adroit check`. `--print` previews
+    /// without writing; `--yes` does the full setup non-interactively.
     #[cfg(feature = "forge")]
     Init {
-        /// Show the detected settings without writing them to config.
+        /// Show the detected settings + planned steps without writing anything.
         #[arg(long)]
         print: bool,
+        /// Non-interactive: use the detected forge + defaults and do the full setup.
+        #[arg(long)]
+        yes: bool,
     },
     /// Export the accepted ADR set to a directory (static-dir publisher).
     ///

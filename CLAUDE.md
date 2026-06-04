@@ -391,8 +391,11 @@ Center uses a Bearer PAT (email omitted). GitHub/GitLab use the same token cloud
 or self-hosted; only `forge.host` changes (GitHub Enterprise host includes the
 `/api/v3` base).
 
-**Cross-cutting verbs.** `adroit init` (detect provider from the git remote →
-`config::parse_remote_url` → write `forge.*`), `adroit publish` (export accepted
+**Cross-cutting verbs.** `adroit init` (interactive wizard: detect/confirm
+provider+repo from the git remote → `config::parse_remote_url`, pick the tracker,
+write `forge.*`, then optionally `./.env` (ADROIT_DIR), a repo-local
+`adr-template.md`, and a pre-commit hook running `adroit check`; `--yes` runs it
+non-interactively, `--print` previews), `adroit publish` (export accepted
 ADRs to a dir — `src/publish.rs`, core/offline; Confluence/Notion adapters are
 future), `adroit notify <id>` (POST to a Slack/Teams webhook via
 `forge::notify`), and `adroit auth <github|gitlab|jira> [--token] [--email]`
