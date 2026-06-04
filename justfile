@@ -62,6 +62,10 @@ web-build:
 serve *ARGS: web-build
     cargo run --features web -- serve {{ARGS}}
 
+# Like `serve` but with `forge` too, so the dashboard's read-only forge panel is live (needs forge.* configured + a token)
+serve-forge *ARGS: web-build
+    cargo run --features web,forge -- serve {{ARGS}}
+
 # Check for outdated dependencies
 crate-outdated:
     cargo outdated
