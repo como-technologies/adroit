@@ -82,6 +82,14 @@ const CI_STYLES: Record<string, { label: string; cls: string }> = {
 }
 const ciStyle = computed(() => (forge.value?.pr_ci ? CI_STYLES[forge.value.pr_ci] : undefined))
 
+// Compact ref from a forge URL: `…/pull/8` → `#8`, `…/issues/7` → `#7`,
+// `…/-/merge_requests/42` → `#42`, `…/browse/OPS-1` → `OPS-1`.
+function urlRef(url?: string): string {
+  if (!url) return ''
+  const last = url.replace(/\/+$/, '').split('/').pop() ?? ''
+  return /^\d+$/.test(last) ? `#${last}` : last
+}
+
 // `kind` only marks an edge as a supersession; the direction relative to *this*
 // ADR comes from its own superseded_by / supersedes fields. So an edge to the
 // ADR that replaced this one reads "Superseded by", not "Supersedes".
@@ -148,31 +156,97 @@ const relatedSorted = computed(() =>
         </div>
       </header>
 
-      <!-- Lifecycle timeline (git-derived: proposed → accepted/rejected/…) -->
-      <section v-if="adr.history.length" class="card-glass px-6 py-5">
-        <h2
-          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
-        >
-          <History :size="13" /> Timeline
-        </h2>
-        <ol class="mt-3 space-y-3">
-          <li
-            v-for="(e, i) in adr.history"
-            :key="`${e.commit}-${i}`"
-            class="flex items-center gap-3"
+      <!-- Timeline + Forge — side by side when both are present -->
+      <div
+        v-if="adr.history.length || hasForge"
+        :class="['grid gap-6', adr.history.length && hasForge ? 'lg:grid-cols-2' : '']"
+      >
+        <!-- Lifecycle timeline (git-derived: proposed → accepted/rejected/…) -->
+        <section v-if="adr.history.length" class="card-glass px-6 py-5">
+          <h2
+            class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
           >
-            <span
-              class="w-20 shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500"
-            >{{ shortDate(e.date) }}</span>
-            <StatusPill :status="e.status" size="sm" />
-            <span
-              class="min-w-0 flex-1 truncate text-sm text-slate-600 dark:text-slate-300"
-              :title="e.subject"
-            >{{ e.subject }}</span>
-            <span class="hidden shrink-0 font-mono text-xs text-slate-400 dark:text-slate-500 sm:inline">{{ e.commit }}</span>
-          </li>
-        </ol>
-      </section>
+            <History :size="13" /> Timeline
+          </h2>
+          <ol class="mt-3 space-y-3">
+            <li
+              v-for="(e, i) in adr.history"
+              :key="`${e.commit}-${i}`"
+              class="flex items-center gap-3"
+            >
+              <span
+                class="w-20 shrink-0 font-mono text-xs tabular text-slate-400 dark:text-slate-500"
+              >{{ shortDate(e.date) }}</span>
+              <StatusPill :status="e.status" size="sm" />
+              <span
+                class="min-w-0 flex-1 truncate text-sm text-slate-600 dark:text-slate-300"
+                :title="e.subject"
+              >{{ e.subject }}</span>
+              <span class="hidden shrink-0 font-mono text-xs text-slate-400 dark:text-slate-500 sm:inline">{{ e.commit }}</span>
+            </li>
+          </ol>
+        </section>
+
+        <!-- Forge state (read-only) — rows mirror the Timeline layout -->
+        <section v-if="hasForge" class="card-glass px-6 py-5">
+          <h2
+            class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+          >
+            <GitPullRequest :size="13" /> Forge
+          </h2>
+          <dl class="mt-3 space-y-3">
+            <div v-if="forge?.issue_url" class="flex items-center gap-3">
+              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Issue</dt>
+              <dd class="min-w-0 flex-1">
+                <a
+                  :href="forge.issue_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 transition-colors hover:text-brand-700 dark:text-slate-300 dark:hover:text-brand-300"
+                >
+                  <CircleDot :size="14" class="text-emerald-500" /> {{ urlRef(forge.issue_url) }}
+                  <ExternalLink :size="12" class="text-slate-400" />
+                </a>
+              </dd>
+            </div>
+            <div v-if="forge?.pr_url" class="flex items-center gap-3">
+              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Pull request</dt>
+              <dd class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                <a
+                  :href="forge.pr_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 transition-colors hover:text-brand-700 dark:text-slate-300 dark:hover:text-brand-300"
+                >
+                  <GitPullRequest :size="14" class="text-violet-500" /> {{ urlRef(forge.pr_url) }}
+                  <ExternalLink :size="12" class="text-slate-400" />
+                </a>
+                <span
+                  v-if="forge?.pr_merged"
+                  class="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/40 dark:text-violet-300"
+                >
+                  <GitBranch :size="11" /> merged
+                </span>
+              </dd>
+            </div>
+            <div v-if="ciStyle" class="flex items-center gap-3">
+              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">CI</dt>
+              <dd class="min-w-0 flex-1">
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                  :class="ciStyle.cls"
+                >{{ ciStyle.label }}</span>
+              </dd>
+            </div>
+            <div v-if="forge?.pr_approvals != null" class="flex items-center gap-3">
+              <dt class="w-24 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">Reviews</dt>
+              <dd class="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300">
+                <Check :size="13" class="text-emerald-500" /> {{ forge.pr_approvals }} approval{{ forge.pr_approvals === 1 ? '' : 's' }}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      </div>
 
       <!-- Cross-links -->
       <nav
@@ -195,56 +269,6 @@ const relatedSorted = computed(() =>
           <span class="font-mono">{{ link.reference }}</span>
         </RouterLink>
       </nav>
-
-      <!-- Forge state (read-only enrichment: linked issue + PR review state) -->
-      <section v-if="hasForge" class="card-glass px-6 py-5">
-        <h2
-          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
-        >
-          <GitPullRequest :size="13" /> Forge
-        </h2>
-        <div class="mt-3 flex flex-wrap items-center gap-2">
-          <a
-            v-if="forge?.issue_url"
-            :href="forge.issue_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-brand-300 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:text-brand-300"
-          >
-            <CircleDot :size="12" class="text-emerald-500" /> Issue
-            <ExternalLink :size="11" class="text-slate-400" />
-          </a>
-          <a
-            v-if="forge?.pr_url"
-            :href="forge.pr_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:border-brand-300 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:text-brand-300"
-          >
-            <GitPullRequest :size="12" class="text-violet-500" /> Pull request
-            <ExternalLink :size="11" class="text-slate-400" />
-          </a>
-          <span
-            v-if="forge?.pr_merged"
-            class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-800 dark:bg-violet-900/40 dark:text-violet-300"
-          >
-            <GitBranch :size="12" /> merged
-          </span>
-          <span
-            v-if="ciStyle"
-            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-            :class="ciStyle.cls"
-          >
-            {{ ciStyle.label }}
-          </span>
-          <span
-            v-if="forge?.pr_approvals != null && forge.pr_approvals > 0"
-            class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-          >
-            <Check :size="12" /> {{ forge.pr_approvals }} approval{{ forge.pr_approvals === 1 ? '' : 's' }}
-          </span>
-        </div>
-      </section>
 
       <!-- Body (server-rendered markdown) -->
       <div class="card-glass px-6 py-6 sm:px-8 sm:py-7">
