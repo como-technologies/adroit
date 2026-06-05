@@ -1101,6 +1101,9 @@ fn apply_ref(adr: &mut Adr, r: AdrRef) {
 
 /// Today's local date (UTC fallback), for the date naming scheme.
 fn today_local() -> time::Date {
+    if let Some(d) = crate::config::today_override() {
+        return d;
+    }
     time::OffsetDateTime::now_local()
         .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
         .date()

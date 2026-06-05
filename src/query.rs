@@ -63,7 +63,11 @@ pub enum Sort {
 // ---------------------------------------------------------------------------
 
 /// Today's date (local, falling back to UTC), used to evaluate review deadlines.
+/// An `ADROIT_TODAY` override (ISO `YYYY-MM-DD`) pins it for tests / CI.
 fn today() -> Date {
+    if let Some(d) = crate::config::today_override() {
+        return d;
+    }
     OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
         .date()

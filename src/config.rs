@@ -531,6 +531,21 @@ pub fn env_var_for(key: &str) -> Option<&'static str> {
     })
 }
 
+/// A deterministic override for "today", read from the `ADROIT_TODAY`
+/// environment variable (ISO `YYYY-MM-DD`). This lets the `date` naming scheme's
+/// `YYYYMMDD-` slugs and the review-due math be pinned for tests / CI without
+/// touching the system clock. Returns `None` (→ use the system clock) when the
+/// variable is unset or unparseable. Distinct from `ADROIT_DATE_SOURCE`, which
+/// selects *where* dates come from (git / filesystem), not what "today" is.
+pub fn today_override() -> Option<time::Date> {
+    let raw = std::env::var("ADROIT_TODAY").ok()?;
+    time::Date::parse(
+        raw.trim(),
+        &time::format_description::well_known::Iso8601::DATE,
+    )
+    .ok()
+}
+
 /// Best-effort parse of a git remote URL into `(provider, "owner/repo", host)`
 /// for `adroit init`. Handles `git@host:path.git`, `https://host/path.git`, and
 /// `ssh://git@host/path`. `host` is `Some` only for a non-default host
