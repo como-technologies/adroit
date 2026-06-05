@@ -150,7 +150,7 @@ rest of the file. Prints to stdout if no `SUMMARY.md` is found.
 
 ```sh
 adroit review 1
-adroit review 1 --days 5 --quorum 3 --output review-kickoff.md
+adroit review 1 --days 5 --quorum 3 --out review-kickoff.md
 ```
 
 Generates a review-kickoff doc for an ADR — the structured "here's what you're
@@ -158,7 +158,7 @@ reviewing" document the team writes when opening an ADR for a formal accept or
 reject decision. It includes the review timeline (computed in business days,
 weekends skipped), the quorum, a table of key docs, and a checklist of what the
 review MR changes. This is pure generation: no git operations, and the ADR
-itself is untouched. Without `--output` it prints to stdout.
+itself is untouched. Without `--out` it prints to stdout.
 
 ## Editing an ADR
 

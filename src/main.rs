@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use adroit::adr::{Number, ReviewBy, Status};
-use adroit::cli::{Cli, Command, ConfigAction};
+use adroit::cli::{Cli, Command, ConfigAction, OutputFormat};
 use adroit::config::{self, Config, Layout};
 use adroit::format::Format;
 use adroit::naming::AdrRef;
@@ -160,6 +160,10 @@ fn main() -> Result<()> {
         anyhow::bail!("{msg}");
     }
 
+    // `-o/--output` is honored by the read verbs (Copy, so reading it here
+    // doesn't conflict with the `match cli.command` move below).
+    let output = cli.output;
+
     match cli.command {
         Some(Command::New {
             title,
@@ -205,9 +209,9 @@ fn main() -> Result<()> {
             let forge_on = forge;
             #[cfg(not(feature = "forge"))]
             let forge_on = false;
-            cmd_list(&store, &cfg, status.as_deref(), forge_on)?;
+            cmd_list(&store, &cfg, status.as_deref(), forge_on, output)?;
         }
-        Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
+        Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?, output)?,
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
         Some(Command::SetStatus {
             id,
@@ -292,7 +296,7 @@ fn main() -> Result<()> {
         }) => {
             cmd_link(&store, &cfg, &id, relates_to, depends_on, refines, remove)?;
         }
-        Some(Command::Search { term }) => cmd_search(&store, &term)?,
+        Some(Command::Search { term }) => cmd_search(&store, &term, output)?,
         Some(Command::Check {
             #[cfg(feature = "forge")]
             forge,
@@ -301,8 +305,10 @@ fn main() -> Result<()> {
             let forge_on = forge;
             #[cfg(not(feature = "forge"))]
             let forge_on = false;
-            cmd_check(&store, &cfg, forge_on)?;
+            cmd_check(&store, &cfg, forge_on, output)?;
         }
+        Some(Command::Stats) => cmd_stats(&store, output)?,
+        Some(Command::Graph) => cmd_graph(&store, output)?,
         Some(Command::Relink {
             dry_run,
             #[cfg(feature = "forge")]
@@ -343,7 +349,7 @@ fn main() -> Result<()> {
             number,
             days,
             quorum,
-            output,
+            out,
             #[cfg(feature = "forge")]
             forge,
             #[cfg(feature = "forge")]
@@ -366,7 +372,7 @@ fn main() -> Result<()> {
                 Number::new(number),
                 days,
                 quorum,
-                output.as_deref(),
+                out.as_deref(),
                 forge_flags,
             )?;
         }
@@ -474,7 +480,19 @@ fn cmd_new(
     Ok(store.write(&mut adr)?)
 }
 
-fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: bool) -> Result<()> {
+/// Print any `view` type as pretty JSON — the `-o json` path for the read verbs.
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn cmd_list(
+    store: &Store,
+    cfg: &Config,
+    status_filter: Option<&str>,
+    forge: bool,
+    output: OutputFormat,
+) -> Result<()> {
     let status: Option<Status> = match status_filter {
         Some(s) => Some(
             s.parse()
@@ -487,11 +505,14 @@ fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: boo
         ..Default::default()
     };
     let mut rows = query::summaries(store, &filter)?;
+    // Opt-in: attach live forge state (no-op unless --forge + feature + config).
+    adroit::forge_hook::enrich(cfg, store, &mut rows, forge)?;
+    if output == OutputFormat::Json {
+        return print_json(&rows);
+    }
     if rows.is_empty() {
         return Ok(());
     }
-    // Opt-in: attach live forge state (no-op unless --forge + feature + config).
-    adroit::forge_hook::enrich(cfg, store, &mut rows, forge)?;
     let id_w = id_col_width(&rows);
     println!("{:<id_w$}{:<12}Title", "#", "Status");
     for row in &rows {
@@ -500,9 +521,12 @@ fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: boo
     Ok(())
 }
 
-fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
+fn cmd_show(store: &Store, r: &AdrRef, output: OutputFormat) -> Result<()> {
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
+    if output == OutputFormat::Json {
+        return print_json(&detail);
+    }
     let s = &detail.summary;
     println!("{}: {}", s.reference, s.title);
     println!("Status:  {}", s.status);
@@ -736,8 +760,11 @@ fn relative_link(from_file: &std::path::Path, to_file: &std::path::Path) -> Stri
     parts.join("/")
 }
 
-fn cmd_search(store: &Store, term: &str) -> Result<()> {
+fn cmd_search(store: &Store, term: &str, output: OutputFormat) -> Result<()> {
     let rows = query::search(store, term)?;
+    if output == OutputFormat::Json {
+        return print_json(&rows);
+    }
     let id_w = id_col_width(&rows);
     for row in &rows {
         print_summary_row(row, id_w);
@@ -1109,7 +1136,7 @@ fn cmd_sync(store: &Store, cfg: &Config, id: &str, dry_run: bool, yes: bool) -> 
 /// `adroit relink` will heal) is printed but exits 0. This lets a status-change
 /// PR branch — which transiently carries stale inbound links under
 /// `relink_scope = self` — pass CI, while a genuine defect still fails it.
-fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
+fn cmd_check(store: &Store, cfg: &Config, forge: bool, output: OutputFormat) -> Result<()> {
     let mut report = query::check(store)?;
     // Opt-in forge-aware checks (issue/PR drift) appended to the same report;
     // they're Warning-severity so they report but don't fail the gate.
@@ -1119,17 +1146,30 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
             .problems
             .extend(adroit::forge_hook::check_repo(cfg, &entries, forge)?);
     }
+    let errors = report
+        .problems
+        .iter()
+        .filter(|p| p.severity == Severity::Error)
+        .count();
+    // `-o json` emits the structured report on stdout; the CI gate still holds —
+    // a non-zero exit on any Error-severity problem.
+    if output == OutputFormat::Json {
+        print_json(&report)?;
+        if errors > 0 {
+            anyhow::bail!(
+                "{} problem(s) found across {} ADR file(s)",
+                report.problems.len(),
+                report.checked
+            );
+        }
+        return Ok(());
+    }
     // Print every problem (errors and warnings), sorted for stable output.
     let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
     messages.sort_unstable();
     for message in &messages {
         eprintln!("{message}");
     }
-    let errors = report
-        .problems
-        .iter()
-        .filter(|p| p.severity == Severity::Error)
-        .count();
     if errors > 0 {
         anyhow::bail!(
             "{} problem(s) found across {} ADR file(s)",
@@ -1142,6 +1182,59 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
     } else {
         let warnings = report.problems.len();
         println!("OK: {} ADRs, {} warning(s)", report.checked, warnings);
+    }
+    Ok(())
+}
+
+/// `adroit stats`: repo statistics (status counts, proposed ages, growth).
+/// `-o json` emits `view::Stats`; the human view is a compact summary.
+fn cmd_stats(store: &Store, output: OutputFormat) -> Result<()> {
+    let stats = query::stats(store)?;
+    if output == OutputFormat::Json {
+        return print_json(&stats);
+    }
+    println!("Total ADRs: {}", stats.total);
+    println!("By status:");
+    for sc in &stats.by_status {
+        println!("  {:<11} {}", sc.status, sc.count);
+    }
+    if !stats.review_due.is_empty() {
+        println!("Review due: {}", stats.review_due.len());
+    }
+    if !stats.proposed_age.is_empty() {
+        println!("Oldest proposed:");
+        for p in stats.proposed_age.iter().take(5) {
+            let age = p
+                .age_days
+                .map(|d| format!("{d}d"))
+                .unwrap_or_else(|| "?".into());
+            let flag = if p.review_due { " (review due)" } else { "" };
+            println!("  {:<8} {:<5} {}{}", p.reference, age, p.title, flag);
+        }
+    }
+    if !stats.created_over_time.is_empty() {
+        println!("Created over time:");
+        for b in &stats.created_over_time {
+            println!("  {} {}", b.month, b.count);
+        }
+    }
+    Ok(())
+}
+
+/// `adroit graph`: the ADR relationship graph (supersession + typed links).
+/// `-o json` emits `view::Graph` (nodes + edges); the human view is a summary.
+fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
+    let graph = query::graph(store)?;
+    if output == OutputFormat::Json {
+        return print_json(&graph);
+    }
+    println!(
+        "{} ADRs, {} relationship(s)",
+        graph.nodes.len(),
+        graph.edges.len()
+    );
+    for e in &graph.edges {
+        println!("  {} --{:?}--> {}", e.from, e.kind, e.to);
     }
     Ok(())
 }

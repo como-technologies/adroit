@@ -935,7 +935,7 @@ fn review_writes_output_file() {
     let out = dir.path().join("kickoff.md");
     adroit(&dir)
         .args(["review", "1", "--quorum", "5", "--days", "5"])
-        .arg("--output")
+        .arg("--out")
         .arg(&out)
         .assert()
         .success()
@@ -2315,4 +2315,151 @@ fn init_yes_writes_config_env_template_and_hook() {
     let hook = repo.join(".git").join("hooks").join("pre-commit");
     assert!(hook.exists(), "pre-commit hook not installed");
     assert!(fs::read_to_string(&hook).unwrap().contains("adroit check"));
+}
+
+// ---------------------------------------------------------------------------
+// `-o json` output for the read verbs (agent-consumable CLI)
+// ---------------------------------------------------------------------------
+
+/// Run `args` against `dir`, assert success, and parse stdout as JSON.
+fn json_ok(dir: &TempDir, args: &[&str]) -> serde_json::Value {
+    let out = adroit(dir).args(args).assert().success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("`{args:?}` did not emit valid JSON: {e}\n{text}"))
+}
+
+#[test]
+fn list_json_emits_array_of_summaries() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "First decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Second decision", "--no-edit"])
+        .assert()
+        .success();
+
+    let v = json_ok(&dir, &["list", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(2));
+    assert_eq!(v[0]["reference"], "ADR-0001");
+    assert_eq!(v[0]["title"], "First decision");
+    assert_eq!(v[0]["status"], "Proposed");
+}
+
+#[test]
+fn list_json_empty_repo_is_empty_array() {
+    let dir = TempDir::new().unwrap();
+    let v = json_ok(&dir, &["list", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(0));
+}
+
+#[test]
+fn show_json_emits_detail_object() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Only decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["show", "1", "-o", "json"]);
+    // AdrDetail flattens the summary to the top level alongside `body`.
+    assert_eq!(v["reference"], "ADR-0001");
+    assert_eq!(v["title"], "Only decision");
+    assert!(v["body"].is_string(), "detail JSON carries the raw body");
+}
+
+#[test]
+fn search_json_emits_matching_array() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt Postgres", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Adopt Redis", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["search", "Postgres", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(1));
+    assert_eq!(v[0]["title"], "Adopt Postgres");
+}
+
+#[test]
+fn stats_json_has_totals_and_status_breakdown() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["stats", "-o", "json"]);
+    assert_eq!(v["total"], 1);
+    assert!(v["by_status"].is_array());
+}
+
+#[test]
+fn graph_json_has_nodes_and_edges() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["graph", "-o", "json"]);
+    assert_eq!(v["nodes"].as_array().map(|a| a.len()), Some(1));
+    assert!(v["edges"].is_array());
+}
+
+#[test]
+fn check_json_clean_repo_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["check", "-o", "json"]);
+    assert_eq!(v["checked"], 1);
+    assert_eq!(v["problems"].as_array().map(|a| a.len()), Some(0));
+}
+
+#[test]
+fn check_json_broken_link_emits_json_and_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    // Inject a broken cross-ADR link (ADR-0099 doesn't exist) → Error severity.
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let mut body = fs::read_to_string(&file).unwrap();
+    body.push_str("\nSee [ADR-0099](./0099-ghost.md) for context.\n");
+    fs::write(&file, body).unwrap();
+
+    // The CI gate still holds (non-zero exit), but stdout is still valid JSON.
+    let out = adroit(&dir)
+        .args(["check", "-o", "json"])
+        .assert()
+        .failure();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("check -o json must emit JSON even on failure: {e}\n{text}"));
+    assert!(
+        !v["problems"].as_array().unwrap().is_empty(),
+        "expected the broken link to be reported as a problem"
+    );
+}
+
+#[test]
+fn read_verbs_default_to_human_output() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    // No -o flag → human table (header line), not JSON.
+    adroit(&dir)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Status"))
+        .stdout(predicate::str::starts_with("[").not());
 }

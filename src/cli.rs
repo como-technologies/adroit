@@ -7,6 +7,20 @@ use crate::config::{DateSource, Layout, MarkdownTheme, RelinkScope};
 use crate::format::Format;
 use crate::naming::NamingScheme;
 
+/// How a read verb prints its result.
+///
+/// `human` (default) is the formatted text rendering; `json` emits the
+/// [`crate::view`] types verbatim — the same structured contract the web API
+/// returns — for scripts and AI agents that drive adroit's CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 /// A snappy tool for managing Architecture Decision Records.
 #[derive(Debug, Parser)]
 // clap 4 can't group subcommands under headings, so the command list is
@@ -35,6 +49,8 @@ Browse & inspect:
   show          Show one ADR by its identifier
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
+  stats         Show repo statistics (status counts, ages, growth)
+  graph         Print the ADR relationship graph
   serve         Serve the read-only web dashboard
 
 Repo health:
@@ -82,6 +98,8 @@ Browse & inspect:
   show          Show one ADR by its identifier
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
+  stats         Show repo statistics (status counts, ages, growth)
+  graph         Print the ADR relationship graph
   serve         Serve the read-only web dashboard
 
 Repo health:
@@ -208,6 +226,21 @@ pub struct Cli {
     /// `ADROIT_REVIEW_OVERDUE_DAYS`.
     #[arg(long, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
     pub review_overdue_days: Option<u32>,
+
+    /// Output format for read verbs: `human` (default) or `json`.
+    ///
+    /// `json` emits the structured `view` types — the same contract the web API
+    /// returns — for scripts and AI agents. Honored by `list` / `show` /
+    /// `search` / `stats` / `graph` / `check`; other verbs ignore it.
+    #[arg(
+        short = 'o',
+        long,
+        value_enum,
+        global = true,
+        default_value_t = OutputFormat::Human,
+        help_heading = "Output"
+    )]
+    pub output: OutputFormat,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -367,6 +400,16 @@ pub enum Command {
         #[arg(long)]
         forge: bool,
     },
+    /// Print repo statistics: per-status counts, proposed-age rows (review-due
+    /// flagged), and a created-per-period histogram.
+    ///
+    /// `-o json` emits `view::Stats`; the human view is a compact summary.
+    Stats,
+    /// Print the ADR relationship graph — supersession + typed-link edges.
+    ///
+    /// Most useful with `-o json` (`view::Graph`, nodes + edges); the human view
+    /// summarizes counts.
+    Graph,
     /// Rewrite cross-ADR relative links to each ADR's current location.
     ///
     /// Fixes links left stale by status-change file moves (run by hand or in
@@ -478,7 +521,10 @@ pub enum Command {
     /// accepted ADR plus an `index.md` to `--out`. Idempotent.
     Publish {
         /// Output directory for the published ADRs.
-        #[arg(short, long)]
+        ///
+        /// Long-only (`--out`); the short `-o` is the global `--output`
+        /// (human/json) selector.
+        #[arg(long)]
         out: PathBuf,
         /// Preview what would be written without writing.
         #[arg(long)]
@@ -520,8 +566,11 @@ pub enum Command {
         #[arg(long)]
         quorum: Option<u32>,
         /// Write the generated doc to this path instead of stdout.
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        ///
+        /// Long-only (`--out`); the short `-o` / `--output` is the global
+        /// human/json result-format selector.
+        #[arg(long)]
+        out: Option<PathBuf>,
         /// Also post the kickoff as a comment on the ADR's linked issue/PR.
         #[cfg(feature = "forge")]
         #[arg(long)]

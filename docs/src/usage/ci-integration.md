@@ -104,7 +104,7 @@ On a decision PR/MR, generate the kickoff document and post it as the
 description so reviewers get a consistent "here's what you're deciding" brief:
 
 ```sh
-adroit review <number> --output kickoff.md
+adroit review <number> --out kickoff.md
 ```
 
 It includes the decision summary, key-docs links, the review timeline and

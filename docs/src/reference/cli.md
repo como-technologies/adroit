@@ -40,6 +40,20 @@ since just a few commands use each.
 
 `--version` / `--help` (`-h` for a short summary) are available everywhere.
 
+### Output
+
+Global — works before *or* after any verb (`adroit list -o json`). Selects how the
+**read** verbs print their result.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-o`, `--output <human\|json>` | `human` | Result format for `list` / `show` / `search` / `stats` / `graph` / `check`. `json` emits the structured `view` types — the same contract the web API returns — for scripts and AI agents. Other verbs ignore it. |
+
+`json` goes to **stdout**; warnings/errors go to **stderr**. `check -o json` still
+exits non-zero on an Error-severity problem, so a CI gate or agent can branch on
+the exit code while parsing the report from stdout. See
+[Automation & AI](../usage/automation.md).
+
 Each also reads from an environment variable, so you don't have to pass it on
 every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
 `ADROIT_REVIEW_OVERDUE_DAYS`, `ADROIT_TEMPLATE`, `ADROIT_DATE_SOURCE`,
@@ -208,6 +222,30 @@ Case-insensitive search across ADR titles and bodies (recursive). Prints number,
 
 ```sh
 adroit search postgres
+adroit search postgres -o json   # structured matches for scripts/agents
+```
+
+### `adroit stats`
+
+Repo statistics: total ADRs, a per-status breakdown, the oldest still-`Proposed`
+ADRs (with review-due flags), and a created-per-month histogram. The human view
+is a compact summary; `-o json` emits the full `view::Stats`.
+
+```sh
+adroit stats
+adroit stats -o json
+```
+
+### `adroit graph`
+
+The ADR relationship graph — supersession plus typed (`relates_to` /
+`depends_on` / `refines`) links — as nodes and edges. The human view summarizes
+counts and lists each edge; `-o json` emits `view::Graph` (the same shape the web
+dashboard's relationship graph consumes).
+
+```sh
+adroit graph
+adroit graph -o json
 ```
 
 ### `adroit check`
@@ -359,14 +397,14 @@ decision date is the next business day after that.
 ```sh
 adroit review 1                              # print to stdout
 adroit review 1 --days 5 --quorum 3          # 5-business-day window, quorum 3
-adroit review 1 --output review-kickoff.md   # write to a file
+adroit review 1 --out review-kickoff.md      # write to a file
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--days <N>` | config `review_days` (3) | Review period length in business days |
 | `--quorum <N>` | config `review_quorum` (3) | Number of approvals required |
-| `--output <PATH>` | — | Write the doc to a file instead of stdout |
+| `--out <PATH>` | — | Write the doc to a file instead of stdout (long-only; `-o`/`--output` is the global result-format selector) |
 
 ### `adroit edit <ID>`
 

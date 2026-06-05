@@ -110,6 +110,20 @@ JSON with no extra mapping. Write logic stays in the `Store` write path (CLI +
 future TUI only); the query layer never writes. Markdown→HTML rendering is
 deliberately deferred to the web surface (`AdrDetail::body_html` stays `None`).
 
+**The CLI emits the same JSON too (`-o`/`--output json`).** A global
+`cli::OutputFormat` (`human` default, `json`) is honored by the read verbs —
+`list`, `show`, `search`, `stats`, `graph`, `check` — which serialize the `view`
+types via `serde_json` (a core dep) through the `print_json` helper in `main.rs`.
+So an AI agent / script drives the CLI for the same shapes the web API returns
+(`docs/src/usage/automation.md`). `check -o json` still exits non-zero on an
+Error-severity problem (the CI gate). The destination flags on `publish` and
+`review` are **`--out`** (long-only) so the short `-o` belongs to `--output`.
+`stats` + `graph` are thin CLI verbs over `query::stats`/`query::graph` (added to
+both `help_template`s — the `commands_are_all_grouped` guard). Note the five
+on-disk *shape* globals (`--format/--layout/--naming/--date-source/--relink-scope`)
+are now **top-level-only** (env still binds) so each subcommand's `--help` stays
+terse; only `--dir` stays `global`.
+
 **Repo validation is shared here too.** `query::check` runs the five `adroit
 check` rules (status/dir mismatch, duplicate identifiers, unparseable files,
 broken supersession, broken/stale links) and returns a structured
