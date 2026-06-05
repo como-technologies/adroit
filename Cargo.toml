@@ -84,3 +84,7 @@ http-body-util = "0.1"
 # random command sequences against an in-memory oracle, asserting adroit's
 # documented invariants after every step.
 proptest = "1"
+# Coverage-guided fuzzing for the parsers (tests/fuzz_parsers.rs). The same target
+# runs as a stable property test under `cargo test` (CI) and coverage-guided under
+# `cargo bolero test <name>` (nightly + the cargo-bolero CLI).
+bolero = "0.11"
