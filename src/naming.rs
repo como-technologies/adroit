@@ -244,8 +244,12 @@ impl NamingScheme {
         match r {
             AdrRef::Number(n) => format!("ADR-{n:04}"),
             // Uuid is long; show a short prefix. Date slug is already readable.
+            // Take the first 8 *chars* (not bytes) so a crafted non-hex slug can't
+            // panic by slicing inside a multibyte char — a real uuid is ASCII hex,
+            // so this stays byte-identical for it.
             AdrRef::Slug(s) if matches!(self, NamingScheme::Uuid) => {
-                format!("ADR-{}", &s[..s.len().min(8)])
+                let short: String = s.chars().take(8).collect();
+                format!("ADR-{short}")
             }
             AdrRef::Slug(s) => s.clone(),
         }
@@ -497,6 +501,22 @@ mod tests {
         // Addressable by a unique leading prefix of the uuid.
         assert!(s.ref_matches(&r, &AdrRef::Slug("12345678".into())));
         assert!(!s.ref_matches(&r, &AdrRef::Slug("ffff".into())));
+    }
+
+    #[test]
+    fn uuid_display_tolerates_multibyte_slug() {
+        // Regression (hardening blitz parser fuzz): `display` shortened a uuid slug
+        // by slicing the first 8 *bytes*, which panics when byte 8 lands inside a
+        // multibyte char (a crafted id / filename). It now takes 8 chars instead.
+        let s = NamingScheme::Uuid;
+        // A real (hex) uuid still shortens to exactly 8 chars, byte-identical.
+        assert_eq!(
+            s.display(&AdrRef::Slug("123456789abcdef0".into())),
+            "ADR-12345678"
+        );
+        // A non-hex / multibyte slug must not panic.
+        let _ = s.display(&AdrRef::Slug("a𐀀𐀀".into()));
+        assert_eq!(s.display(&AdrRef::Slug("éè".into())), "ADR-éè");
     }
 
     #[test]

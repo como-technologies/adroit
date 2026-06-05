@@ -49,3 +49,39 @@ that guards each one. Spec:
 (`store::pathdiff`, `main::relative_link`) that diverged from the canonical
 `links::rel_link` by dropping the same-dir `./` prefix. Supersession-link
 generation now routes through the one canonical engine.
+
+### 3. `NamingScheme::display` panicked on a multibyte uuid slug
+
+- **Found by:** `tests/parsers.rs::naming_helpers_never_panic` (parser fuzz).
+  Input: `display(Slug("a𐀀𐀀"))` under the uuid scheme.
+- **Cause:** the uuid branch shortened the slug with `&s[..s.len().min(8)]`, a
+  **byte** slice that panics when byte 8 lands inside a multibyte char. Reachable
+  via a crafted id (`adroit show <…>`) or a crafted uuid-slug filename in the repo
+  (`adroit list`/`show` would panic).
+- **Fix:** take the first 8 *chars* (`s.chars().take(8)`) — byte-identical for a
+  real ASCII-hex uuid, panic-free for any slug. (src/naming.rs)
+- **Regression:** `src/naming.rs::uuid_display_tolerates_multibyte_slug` +
+  the property test's saved seed.
+
+## Found — deferred (low severity)
+
+### 4. `upsert_reference` is non-idempotent on input containing a lone `\r`
+
+- **Found by:** `tests/parsers.rs::upsert_reference_is_idempotent`. Input
+  `"#\r"` + label `A`: the second call appends a **duplicate** `## References`
+  section.
+- **Cause:** the helper detects the newline style as `\n` (the input has no
+  `\r\n`), splits/joins on `\n`, which fuses the lone `\r` with the joined `\n`
+  into a `\r\n`. The next call then detects `\r\n`, mis-splits the document, fails
+  to find the existing `## References` heading, and creates a second one. The same
+  class affects `rewrite_status` / `rewrite_review_by`.
+- **Why deferred:** adroit only ever *writes* `\n` (or preserves an existing
+  `\r\n`) — both are idempotent — so this triggers only on an externally-corrupted
+  lone-CR (classic-Mac) file, which adroit never produces. A correct fix is a
+  cross-cutting newline-normalization change across `format.rs` with real
+  byte-preservation risk to the many round-trip-identical tests; not worth that
+  risk for a degenerate input without a deliberate go-ahead.
+- **Status:** the idempotence property tests are scoped to consistent-newline
+  inputs (`arb_lf_text`) so they stay meaningful for realistic documents. Fix
+  candidate: route all three rewriters through one newline-aware split that
+  recognizes a lone `\r` as a separator.
