@@ -881,6 +881,11 @@ fn config_cli_value(cli: &Cli, key: &str) -> Option<String> {
         "dir" => cli.dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "format" => cli.format.map(|f| f.to_string()),
         "layout" => cli.layout.map(|l| l.to_string()),
+        // `naming` has a `--naming` / `ADROIT_NAMING` override too; without this
+        // arm `config show`/`get naming` ignored it and reported the file/default
+        // value (the actual ADR operations still honored it — only the diagnostic
+        // lied).
+        "naming" => cli.naming.map(|n| n.to_string()),
         "tui_theme" => cli.theme.map(|t| t.to_string()),
         "default_template" => cli.default_template.clone(),
         "review_overdue_days" => cli.review_overdue_days.map(|n| n.to_string()),

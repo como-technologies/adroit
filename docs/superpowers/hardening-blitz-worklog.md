@@ -125,6 +125,17 @@ generation now routes through the one canonical engine.
   `check` error instead of being silent. (src/query.rs)
 - **Regression:** `tests/cli.rs::frontmatter_check_flags_stranded_supersession`.
 
+### 11. `config show`/`get naming` ignored the `--naming` / `ADROIT_NAMING` override
+
+- **Found by:** `tests/config_precedence.rs` (#1 follow-up harness) — the
+  precedence ladder for `naming`.
+- **Cause:** `config_cli_value` (src/main.rs) mapped every flag-settable key
+  *except* `naming`, so the diagnostic resolved `naming` from `config.yaml`/default
+  and ignored a `--naming` flag or `ADROIT_NAMING` env. (Actual ADR operations
+  honored the override via `cfg.naming` — only `config show`/`get` mis-reported it.)
+- **Fix:** add the `"naming" => cli.naming…` arm. (src/main.rs)
+- **Regression:** `tests/config_precedence.rs::precedence_participates_for_every_profile_key`.
+
 ## Found — deferred (low severity)
 
 ### 4. `upsert_reference` is non-idempotent on input containing a lone `\r`
