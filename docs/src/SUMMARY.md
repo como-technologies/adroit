@@ -24,3 +24,4 @@
 
 - [Testing & Fuzzing](./dev/testing.md)
 - [Hardening & Quality](./dev/hardening.md)
+- [Project Skills](./dev/skills.md)
