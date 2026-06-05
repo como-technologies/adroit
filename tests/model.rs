@@ -76,7 +76,13 @@ impl Profile {
             NamingScheme::PerCategory => "per_category",
         };
         [
-            "--format", format, "--layout", layout, "--naming", naming, "--date-source",
+            "--format",
+            format,
+            "--layout",
+            layout,
+            "--naming",
+            naming,
+            "--date-source",
             "filesystem",
         ]
     }
@@ -91,13 +97,26 @@ impl Profile {
 /// valid no matter how many ADRs exist.
 #[derive(Debug, Clone)]
 enum Op {
-    New { title: String },
-    SetStatus { which: usize, status: Status },
-    Supersede { newer: usize, older: usize },
-    SetReview { which: usize, clear: bool },
+    New {
+        title: String,
+    },
+    SetStatus {
+        which: usize,
+        status: Status,
+    },
+    Supersede {
+        newer: usize,
+        older: usize,
+    },
+    SetReview {
+        which: usize,
+        clear: bool,
+    },
     /// Renumber the selected ADR to a fresh (always-free) number. Sequential
     /// scheme only — only emitted for sequential cells.
-    Renumber { which: usize },
+    Renumber {
+        which: usize,
+    },
     Relink,
 }
 
@@ -276,8 +295,7 @@ impl Harness {
         );
 
         // (B+C) Per ADR: status, status↔directory, title, supersession, review_by.
-        let by_num: BTreeMap<u32, &ModelAdr> =
-            self.model.iter().map(|a| (a.number, a)).collect();
+        let by_num: BTreeMap<u32, &ModelAdr> = self.model.iter().map(|a| (a.number, a)).collect();
         for (path, adr) in &entries {
             let n = adr.number.unwrap().get();
             let m = by_num[&n];
