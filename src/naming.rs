@@ -324,7 +324,16 @@ impl NamingScheme {
                 .filter(|c| !c.is_empty() && *c != "..")?;
             let n = leading_digits(stem)?;
             Some(AdrRef::Slug(percat_id(category, n)))
+        } else if matches!(self, NamingScheme::Uuid) {
+            // A uuid ADR's identity is the bare uuid; its filename appends a title
+            // slug (`{uuid}-{slug}.md`). Split it back off so a link resolves to
+            // the ADR (mirrors `parse`). Without this, supersession links never
+            // resolve and `check` reports them as broken.
+            Some(AdrRef::Slug(
+                stem.split('-').next().unwrap_or(stem).to_string(),
+            ))
         } else {
+            // Date scheme: the whole stem (`YYYYMMDD-title`) is the identity.
             Some(AdrRef::Slug(stem.to_string()))
         }
     }
@@ -501,6 +510,13 @@ mod tests {
         // Addressable by a unique leading prefix of the uuid.
         assert!(s.ref_matches(&r, &AdrRef::Slug("12345678".into())));
         assert!(!s.ref_matches(&r, &AdrRef::Slug("ffff".into())));
+        // A supersession/cross link carries the full `{uuid}-{title}.md` filename;
+        // `ref_in_link` must recover the bare uuid identity so the link resolves
+        // (otherwise `check` flags the supersession as broken).
+        assert_eq!(
+            s.ref_in_link("../accepted/123456789abcdef0123456789abcdef0-adopt-crossplane.md"),
+            Some(r.clone())
+        );
     }
 
     #[test]

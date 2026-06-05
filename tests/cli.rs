@@ -284,6 +284,54 @@ fn supersede_in_place_writes_canonical_status_link() {
         .stdout(predicate::str::contains("canonical"));
 }
 
+/// Regression (hardening blitz, full-matrix oracle): under the `uuid` naming
+/// scheme, a supersession link (`…/{uuid}-{slug}.md`) must resolve back to the
+/// ADR whose identity is the bare `{uuid}`. `ref_in_link` previously returned the
+/// whole filename stem (`{uuid}-{slug}`), so `adroit check` reported the
+/// supersession as "no such ADR exists" and exited non-zero — uuid supersede
+/// produced a repo that failed its own validation.
+#[test]
+fn uuid_scheme_supersede_passes_check() {
+    let dir = TempDir::new().unwrap();
+    let scheme = ["--naming", "uuid"];
+    adroit(&dir)
+        .args(scheme)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(scheme)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success();
+
+    // Recover the two uuids from the filenames (`{uuid}-{slug}.md`).
+    let ids: Vec<String> = adr_files(dir.path())
+        .iter()
+        .map(|p| {
+            let name = p.file_name().unwrap().to_str().unwrap();
+            name.split('-').next().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(ids.len(), 2, "expected two ADRs, got {ids:?}");
+
+    adroit(&dir)
+        .args(scheme)
+        .args(["supersede", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // The superseded ADR's link must resolve, so `check` passes and `relink` is
+    // a no-op (the repo is consistent).
+    adroit(&dir).args(scheme).args(["check"]).assert().success();
+    adroit(&dir)
+        .args(scheme)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
 #[test]
 fn set_review_sets_and_clears_deadline_format_preserving() {
     let dir = TempDir::new().unwrap();
