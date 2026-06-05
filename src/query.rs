@@ -63,7 +63,11 @@ pub enum Sort {
 // ---------------------------------------------------------------------------
 
 /// Today's date (local, falling back to UTC), used to evaluate review deadlines.
+/// An `ADROIT_TODAY` override (ISO `YYYY-MM-DD`) pins it for tests / CI.
 fn today() -> Date {
+    if let Some(d) = crate::config::today_override() {
+        return d;
+    }
     OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
         .date()
@@ -239,13 +243,15 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     let files = store.list_files()?;
     let mut problems: Vec<Problem> = Vec::new();
 
-    // Track which ADR numbers exist (for the numeric supersession-link checks)
-    // and group paths by the scheme's identity (to flag duplicates — works for
-    // every naming scheme, not just the numeric ones).
-    let mut by_number: BTreeMap<u32, Vec<std::path::PathBuf>> = BTreeMap::new();
+    // Group paths by the scheme's identity (to flag duplicates, and to resolve
+    // cross-ADR links / supersession refs — works for every naming scheme, not
+    // just the numeric ones).
     let mut by_ident: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
     let scheme = store.options().naming;
     let markdown = store.options().format == Format::Markdown;
+    // Frontmatter supersession refs (YAML fields, not markdown links), collected
+    // for a broken-supersession check mirroring the markdown one below.
+    let mut fm_supersession: Vec<(String, Option<AdrRef>, Option<AdrRef>)> = Vec::new();
 
     for path in &files {
         let rel = path
@@ -269,12 +275,6 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 continue;
             }
         };
-        if let Some(number) = adr.number {
-            by_number
-                .entry(number.get())
-                .or_default()
-                .push(path.clone());
-        }
         // Group by the scheme's identity for duplicate detection. A numeric ADR
         // with no number, or a file with no parseable identity, is skipped so
         // stray notes don't register as collisions.
@@ -285,6 +285,13 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 .entry(ident_key(&r))
                 .or_default()
                 .push(path.clone());
+        }
+        if !markdown {
+            fm_supersession.push((
+                rel.clone(),
+                adr.supersedes.clone(),
+                adr.superseded_by.clone(),
+            ));
         }
 
         // Markdown-specific checks need the file's raw text and section status.
@@ -344,8 +351,17 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             let Ok(content) = std::fs::read_to_string(path) else {
                 continue;
             };
-            let (supersedes, superseded_by) =
-                crate::format::parse_markdown_section_supersession(&content, scheme);
+            // The file's parent dir is the per_category category (ignored by other
+            // schemes), so a same-category supersession link resolves.
+            let source_category = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str());
+            let (supersedes, superseded_by) = crate::format::parse_markdown_section_supersession(
+                &content,
+                scheme,
+                source_category,
+            );
             for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
                 if let Some(r) = r
                     && !by_ident.contains_key(&ident_key(&r))
@@ -366,13 +382,39 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
         }
     }
 
-    // (5) Cross-ADR relative links: each must resolve to an existing file, and
-    // an ADR-numbered link should point at where that ADR currently lives.
-    let by_number_path: BTreeMap<u32, std::path::PathBuf> = by_number
-        .iter()
-        .filter(|(_, paths)| paths.len() == 1)
-        .map(|(n, paths)| (*n, paths[0].clone()))
-        .collect();
+    // (4b) Broken supersession in the frontmatter profile. There the refs are
+    // YAML fields (`supersedes:` / `superseded_by:`), not `## Status` links, so
+    // they're checked here against the same identity set — closing the gap that
+    // let a renumber strand a frontmatter supersession pointer silently.
+    if !markdown {
+        for (rel, supersedes, superseded_by) in &fm_supersession {
+            for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
+                if let Some(r) = r
+                    && !by_ident.contains_key(&ident_key(r))
+                {
+                    let disp = scheme.display(r);
+                    problems.push(Problem {
+                        severity: Severity::Error,
+                        kind: ProblemKind::BrokenSupersession,
+                        label: rel.clone(),
+                        summary: format!("frontmatter says {kind} {disp} but no such ADR exists"),
+                        paths: Vec::new(),
+                        message: format!(
+                            "{rel}: frontmatter says {kind} {disp} but no such ADR exists"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // (5) Cross-ADR relative links: each must resolve to an existing file, and a
+    // link should point at where the ADR it names currently lives. **Scheme-aware**
+    // (mirrors `relink`/check #4): the link target is resolved to an `AdrRef` and
+    // looked up in the identity set, so date/uuid/per_category links classify
+    // correctly. (A numeric-only resolution mis-flagged a *stale* slug-scheme link
+    // — an ADR that merely moved — as a *broken* error, which broke the
+    // `relink_scope = self/none` heal-on-main flow for those schemes.)
     for path in &files {
         let rel = path
             .strip_prefix(store.root())
@@ -383,12 +425,25 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             continue;
         };
         let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        // The source file's parent dir is the per_category category (ignored by
+        // other schemes), needed to resolve a same-category link.
+        let source_category = dir.file_name().and_then(|n| n.to_str());
         for target in crate::links::relative_md_targets(&content) {
             let pathpart = target.split('#').next().unwrap_or(target);
             let resolved = dir.join(pathpart);
-            // The ADR this link names, and where it currently lives (if known).
-            let num = crate::links::number_in_target(target);
-            let canon = num.and_then(|n| by_number_path.get(&n));
+            // The ADR this link names, and where it currently lives (unambiguously).
+            let link_ref = scheme.ref_in_link_from(target, source_category);
+            let canon: Option<&std::path::PathBuf> = link_ref
+                .as_ref()
+                .and_then(|r| by_ident.get(&ident_key(r)))
+                .filter(|paths| paths.len() == 1)
+                .map(|paths| &paths[0]);
+            // Message label: keep `ADR-N` (un-padded) for numeric schemes so the
+            // output stays byte-identical; the scheme display otherwise.
+            let disp = link_ref.as_ref().map(|r| match r.as_number() {
+                Some(n) => format!("ADR-{n}"),
+                None => scheme.display(r),
+            });
 
             if !resolved.exists() {
                 // The literal target is missing. If the link names an ADR that
@@ -397,18 +452,18 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 // whose inbound links haven't been canonicalized yet, still
                 // passes `check`). A link that names no existing ADR is truly
                 // BROKEN (an error).
-                if let (Some(num), Some(canon)) = (num, canon) {
+                if let (Some(disp), Some(canon)) = (&disp, canon) {
                     let want = crate::links::rel_link(dir, canon);
                     problems.push(Problem {
                         severity: Severity::Warning,
                         kind: ProblemKind::StaleLink,
                         label: rel.clone(),
                         summary: format!(
-                            "stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                            "stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
                         ),
                         paths: Vec::new(),
                         message: format!(
-                            "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                            "{rel}: stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
                         ),
                     });
                 } else {
@@ -424,7 +479,7 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 continue;
             }
             // Resolved file exists: stale only if it isn't the ADR's current home.
-            if let (Some(num), Some(canon)) = (num, canon)
+            if let (Some(disp), Some(canon)) = (&disp, canon)
                 && let (Ok(rp), Ok(cp)) = (
                     std::fs::canonicalize(&resolved),
                     std::fs::canonicalize(canon),
@@ -437,11 +492,11 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                     kind: ProblemKind::StaleLink,
                     label: rel.clone(),
                     summary: format!(
-                        "stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                        "stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
                     ),
                     paths: Vec::new(),
                     message: format!(
-                        "{rel}: stale link [{target}] — ADR-{num} is now [{want}] (run `adroit relink`)"
+                        "{rel}: stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
                     ),
                 });
             }

@@ -32,6 +32,22 @@ just release       # release build → target/release/adroit
 The `web` feature is off by default (it needs the Vue bundle). Build/run it via
 `just serve` (below) or `cargo run --features web -- serve`.
 
+## Test
+
+```sh
+just ci            # the full gate: fmt, clippy, all suites, book, audit
+just test          # default-feature tests (unit + CLI + model oracle + parsers)
+just model         # wide property soak (PROPTEST_CASES, default 2000)
+```
+
+adroit has a model-based ("oracle") tester that drives the real binary through
+random command sequences across the format × layout × scheme matrix, plus parser
+fuzzing (incl. coverage-guided via bolero), forge fault-injection, and dashboard
+XSS tests. See
+[Testing & Fuzzing](docs/src/dev/testing.md) for how to run, soak, extend, and
+triage them — and how to drive an AI assistant to do it — and
+[Hardening & Quality](docs/src/dev/hardening.md) for the bug-finding campaign.
+
 ## Point it at your ADR repo
 
 Pass `--dir`, or set it once and forget it:

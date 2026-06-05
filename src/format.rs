@@ -13,6 +13,8 @@
 //! rewrite just the `## Status` line/banner and leave everything else
 //! byte-identical, so round-tripping an unchanged real ADR is a no-op.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
@@ -306,20 +308,25 @@ pub fn parse_markdown_section_status(input: &str) -> Option<Status> {
 /// be `None`.
 ///
 /// Exposed for `adroit check` so it can verify the referenced ADRs exist.
+///
+/// `source_category` is the category of the ADR whose section this is (only the
+/// `per_category` scheme uses it, to resolve a same-category link with no category
+/// segment); pass `None` for every other scheme.
 pub fn parse_markdown_section_supersession(
     input: &str,
     naming: crate::naming::NamingScheme,
+    source_category: Option<&str>,
 ) -> (Option<crate::naming::AdrRef>, Option<crate::naming::AdrRef>) {
     let region = parse_status_region(input);
     (
         region
             .supersedes
             .as_deref()
-            .and_then(|f| naming.ref_in_note(f)),
+            .and_then(|f| naming.ref_in_note_from(f, source_category)),
         region
             .superseded_by
             .as_deref()
-            .and_then(|f| naming.ref_in_note(f)),
+            .and_then(|f| naming.ref_in_note_from(f, source_category)),
     )
 }
 
@@ -334,11 +341,40 @@ pub fn parse_markdown_section_supersession(
 /// Only the status value line and banner change — all other bytes (including
 /// the original trailing newline) are preserved exactly. If the document has
 /// no `## Status` section, one is appended after the H1/banner.
+/// Replace a *lone* `\r` (a carriage return not part of `\r\n`) with `\n`, leaving
+/// `\r\n` and `\n` untouched. adroit never writes lone-CR files, but an imported or
+/// hand-edited one would otherwise defeat the rewriters' newline detection (the
+/// lone `\r` fuses with a joined `\n` into `\r\n` on the next pass) and make
+/// `rewrite_status` / `rewrite_review_by` / `upsert_reference` non-idempotent.
+/// Returns the input unchanged (borrowed) when there is no lone CR, so a
+/// consistent-newline document round-trips byte-for-byte.
+fn normalize_lone_cr(s: &str) -> Cow<'_, str> {
+    let bytes = s.as_bytes();
+    let has_lone_cr = bytes
+        .iter()
+        .enumerate()
+        .any(|(i, &b)| b == b'\r' && bytes.get(i + 1) != Some(&b'\n'));
+    if !has_lone_cr {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' && chars.peek() != Some(&'\n') {
+            out.push('\n');
+        } else {
+            out.push(c);
+        }
+    }
+    Cow::Owned(out)
+}
+
 pub fn rewrite_status(
     original: &str,
     new_status: Status,
     supersede: Option<(&str, &str)>,
 ) -> String {
+    let original = normalize_lone_cr(original);
     let value = match (new_status, supersede) {
         (Status::Superseded, Some((label, link))) => {
             format!("Superseded by [{label}]({link})")
@@ -416,6 +452,7 @@ pub fn rewrite_status(
 /// line that does not exist), the input is returned unchanged so unedited
 /// round-trips stay byte-identical.
 pub fn rewrite_review_by(original: &str, review_by: Option<ReviewBy>) -> String {
+    let original = normalize_lone_cr(original);
     let newline = if original.contains("\r\n") {
         "\r\n"
     } else {
@@ -467,6 +504,7 @@ fn review_insert_point(lines: &[String]) -> Option<usize> {
 /// same label replaces only that line's URL, and a no-change write is
 /// byte-identical — so the forge integration can call it repeatedly.
 pub fn upsert_reference(original: &str, label: &str, url: &str) -> String {
+    let original = normalize_lone_cr(original);
     let newline = if original.contains("\r\n") {
         "\r\n"
     } else {
@@ -787,5 +825,43 @@ We need a consistent way to capture architectural decisions.\n";
         // remains the source of truth — not a mismatch).
         let prose = "# ADR-0005: X\n\n## Status\n\nSee the discussion thread.\n";
         assert_eq!(parse_markdown_section_status(prose), None);
+    }
+
+    #[test]
+    fn normalize_lone_cr_preserves_crlf_and_lf() {
+        assert!(matches!(normalize_lone_cr("a\nb"), Cow::Borrowed(_)));
+        assert!(matches!(normalize_lone_cr("a\r\nb"), Cow::Borrowed(_)));
+        assert_eq!(normalize_lone_cr("a\rb").as_ref(), "a\nb");
+        assert_eq!(normalize_lone_cr("a\r\nb\rc").as_ref(), "a\r\nb\nc");
+        // Multibyte stays intact.
+        assert_eq!(normalize_lone_cr("é\rx").as_ref(), "é\nx");
+    }
+
+    #[test]
+    fn rewriters_are_idempotent_on_lone_cr() {
+        // Regression (hardening blitz #4): a lone `\r` (classic-Mac / corrupted
+        // file) used to defeat newline detection and make these non-idempotent —
+        // a second `upsert_reference` duplicated `## References`. They now
+        // normalize a lone `\r` to `\n` first.
+        let doc = "# ADR-0001: X\r\r## Status\r\rProposed\r"; // CR-only line endings
+
+        let once = upsert_reference(doc, "Issue", "https://x/7");
+        assert_eq!(
+            upsert_reference(&once, "Issue", "https://x/7"),
+            once,
+            "upsert not idempotent on lone CR"
+        );
+        assert_eq!(
+            once.matches("## References").count(),
+            1,
+            "no duplicate section"
+        );
+        assert!(!once.contains('\r'), "lone CR normalized away");
+
+        let s1 = rewrite_status(doc, Status::Accepted, None);
+        assert_eq!(rewrite_status(&s1, Status::Accepted, None), s1);
+
+        let r1 = rewrite_review_by(doc, None);
+        assert_eq!(rewrite_review_by(&r1, None), r1);
     }
 }

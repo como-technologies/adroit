@@ -244,8 +244,12 @@ impl NamingScheme {
         match r {
             AdrRef::Number(n) => format!("ADR-{n:04}"),
             // Uuid is long; show a short prefix. Date slug is already readable.
+            // Take the first 8 *chars* (not bytes) so a crafted non-hex slug can't
+            // panic by slicing inside a multibyte char — a real uuid is ASCII hex,
+            // so this stays byte-identical for it.
             AdrRef::Slug(s) if matches!(self, NamingScheme::Uuid) => {
-                format!("ADR-{}", &s[..s.len().min(8)])
+                let short: String = s.chars().take(8).collect();
+                format!("ADR-{short}")
             }
             AdrRef::Slug(s) => s.clone(),
         }
@@ -280,10 +284,21 @@ impl NamingScheme {
     /// [`ref_in_link`]: Self::ref_in_link
     /// [`parse_ref`]: Self::parse_ref
     pub fn ref_in_note(&self, fragment: &str) -> Option<AdrRef> {
+        self.ref_in_note_from(fragment, None)
+    }
+
+    /// Like [`ref_in_note`](Self::ref_in_note), but resolves a category-less
+    /// `per_category` link relative to `source_category` — the category of the ADR
+    /// that *contains* the note. Other schemes ignore `source_category`.
+    pub fn ref_in_note_from(
+        &self,
+        fragment: &str,
+        source_category: Option<&str>,
+    ) -> Option<AdrRef> {
         if let Some(open) = fragment.find("](") {
             let after = &fragment[open + 2..];
             let target = after.split(')').next().unwrap_or(after);
-            return self.ref_in_link(target);
+            return self.ref_in_link_from(target, source_category);
         }
         let token = fragment
             .trim()
@@ -302,6 +317,19 @@ impl NamingScheme {
     /// Extract the ADR ref a relative link target points at (filename-based), so
     /// relink/check can match links to ADRs without knowing the scheme.
     pub fn ref_in_link(&self, target: &str) -> Option<AdrRef> {
+        self.ref_in_link_from(target, None)
+    }
+
+    /// Like [`ref_in_link`](Self::ref_in_link), but for the `per_category` scheme a
+    /// target with no category directory segment (a same-category `./0002-x.md` or
+    /// bare `0002-x.md` link) is resolved relative to `source_category` — the
+    /// category of the file that contains the link. Other schemes ignore it.
+    ///
+    /// A per_category identity is `category/NNNN`, recovered from the link's parent
+    /// directory; a same-category link carries no such segment, so without the
+    /// source category it can't be resolved (and `check` would flag the
+    /// supersession as broken).
+    pub fn ref_in_link_from(&self, target: &str, source_category: Option<&str>) -> Option<AdrRef> {
         let file = target.split('#').next().unwrap_or(target);
         let name = file.rsplit('/').next().unwrap_or(file);
         let stem = name.strip_suffix(".md").unwrap_or(name);
@@ -311,16 +339,26 @@ impl NamingScheme {
         if self.is_numeric() {
             leading_digits(stem).map(AdrRef::Number)
         } else if matches!(self, NamingScheme::PerCategory) {
-            // The category is the link's immediate parent directory; the number
-            // is the filename's leading digits → `category/NNNN`.
-            let path = file.split('#').next().unwrap_or(file);
-            let category = path
+            let n = leading_digits(stem)?;
+            // Category = the link's immediate parent dir segment when present; for
+            // a same-category link (`./0002-x.md` / `0002-x.md`) there is none, so
+            // fall back to the source file's category.
+            let category = file
                 .rsplit('/')
                 .nth(1)
-                .filter(|c| !c.is_empty() && *c != "..")?;
-            let n = leading_digits(stem)?;
+                .filter(|c| !c.is_empty() && *c != "." && *c != "..")
+                .or(source_category)?;
             Some(AdrRef::Slug(percat_id(category, n)))
+        } else if matches!(self, NamingScheme::Uuid) {
+            // A uuid ADR's identity is the bare uuid; its filename appends a title
+            // slug (`{uuid}-{slug}.md`). Split it back off so a link resolves to
+            // the ADR (mirrors `parse`). Without this, supersession links never
+            // resolve and `check` reports them as broken.
+            Some(AdrRef::Slug(
+                stem.split('-').next().unwrap_or(stem).to_string(),
+            ))
         } else {
+            // Date scheme: the whole stem (`YYYYMMDD-title`) is the identity.
             Some(AdrRef::Slug(stem.to_string()))
         }
     }
@@ -497,6 +535,29 @@ mod tests {
         // Addressable by a unique leading prefix of the uuid.
         assert!(s.ref_matches(&r, &AdrRef::Slug("12345678".into())));
         assert!(!s.ref_matches(&r, &AdrRef::Slug("ffff".into())));
+        // A supersession/cross link carries the full `{uuid}-{title}.md` filename;
+        // `ref_in_link` must recover the bare uuid identity so the link resolves
+        // (otherwise `check` flags the supersession as broken).
+        assert_eq!(
+            s.ref_in_link("../accepted/123456789abcdef0123456789abcdef0-adopt-crossplane.md"),
+            Some(r.clone())
+        );
+    }
+
+    #[test]
+    fn uuid_display_tolerates_multibyte_slug() {
+        // Regression (hardening blitz parser fuzz): `display` shortened a uuid slug
+        // by slicing the first 8 *bytes*, which panics when byte 8 lands inside a
+        // multibyte char (a crafted id / filename). It now takes 8 chars instead.
+        let s = NamingScheme::Uuid;
+        // A real (hex) uuid still shortens to exactly 8 chars, byte-identical.
+        assert_eq!(
+            s.display(&AdrRef::Slug("123456789abcdef0".into())),
+            "ADR-12345678"
+        );
+        // A non-hex / multibyte slug must not panic.
+        let _ = s.display(&AdrRef::Slug("a𐀀𐀀".into()));
+        assert_eq!(s.display(&AdrRef::Slug("éè".into())), "ADR-éè");
     }
 
     #[test]

@@ -91,6 +91,51 @@ pub fn deserialize(input: &str) -> anyhow::Result<crate::adr::Adr> {
     })
 }
 
+/// Remap every numeric reference to ADR `old` to ADR `new` across a frontmatter
+/// ADR's reference fields (`supersedes` / `superseded_by` / `relates_to` /
+/// `depends_on` / `refines`), returning the re-serialized document — or `None`
+/// if nothing referenced `old` (so the caller leaves the file untouched).
+///
+/// These refs are bare numbers in the YAML block, not markdown links, so
+/// `links::relabel_links_to` (which `renumber` uses for inbound links) can't see
+/// them. Without this, `renumber 1 9` would strand another ADR's
+/// `superseded_by: 1` — a dangling pointer `check` flags as a broken
+/// supersession. The markdown profile heals the equivalent (a `## Status`
+/// `Superseded by [ADR-0001](…)` link) via that same link relabeling, so this
+/// closes the frontmatter-only gap. Unparseable input yields `None` (renumber
+/// must not hard-fail on a malformed neighbor; `check` reports those separately).
+pub fn remap_numeric_refs(text: &str, old: Number, new: Number) -> Option<String> {
+    fn remap(r: &mut AdrRef, old: Number, new: Number) -> bool {
+        if *r == AdrRef::Number(old.get()) {
+            *r = AdrRef::Number(new.get());
+            true
+        } else {
+            false
+        }
+    }
+
+    let mut adr = deserialize(text).ok()?;
+    let mut changed = false;
+    if let Some(r) = adr.supersedes.as_mut() {
+        changed |= remap(r, old, new);
+    }
+    if let Some(r) = adr.superseded_by.as_mut() {
+        changed |= remap(r, old, new);
+    }
+    for r in adr
+        .relates_to
+        .iter_mut()
+        .chain(adr.depends_on.iter_mut())
+        .chain(adr.refines.iter_mut())
+    {
+        changed |= remap(r, old, new);
+    }
+    if !changed {
+        return None;
+    }
+    serialize(&adr).ok()
+}
+
 /// Split a document into (frontmatter_yaml, body) at the `---` delimiters.
 fn split_frontmatter(input: &str) -> anyhow::Result<(&str, &str)> {
     let trimmed = input.trim_start();
@@ -206,6 +251,28 @@ mod tests {
         let parsed = deserialize(&text).unwrap();
         assert_eq!(parsed.supersedes, Some(AdrRef::Number(2)));
         assert_eq!(parsed.superseded_by, Some(AdrRef::Number(9)));
+    }
+
+    #[test]
+    fn remap_numeric_refs_retargets_matching_and_leaves_others() {
+        let mut adr = sample_adr(); // ADR 1
+        adr.superseded_by = Some(AdrRef::Number(2));
+        adr.depends_on = vec![AdrRef::Number(2), AdrRef::Number(3)];
+        let text = serialize(&adr).unwrap();
+
+        // 2 -> 9 retargets every ref to ADR 2, leaving ADR 3 untouched.
+        let out = remap_numeric_refs(&text, Number::new(2), Number::new(9)).unwrap();
+        let parsed = deserialize(&out).unwrap();
+        assert_eq!(parsed.superseded_by, Some(AdrRef::Number(9)));
+        assert_eq!(
+            parsed.depends_on,
+            vec![AdrRef::Number(9), AdrRef::Number(3)]
+        );
+
+        // No ref equals ADR 7 -> None, so the caller leaves the file byte-identical.
+        assert!(remap_numeric_refs(&text, Number::new(7), Number::new(8)).is_none());
+        // Slug refs are never numeric, so they're left alone too.
+        assert!(remap_numeric_refs("not frontmatter", Number::new(2), Number::new(9)).is_none());
     }
 
     #[test]

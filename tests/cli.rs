@@ -44,6 +44,26 @@ fn adr_files(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Snapshot every file under `root` (relative path → bytes), including
+/// `SUMMARY.md`. Used by the idempotency guards for byte-identical before/after
+/// comparisons of the whole tree.
+fn snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn walk(dir: &Path, root: &Path, out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, root, out);
+            } else {
+                let rel = p.strip_prefix(root).unwrap().to_path_buf();
+                out.insert(rel, fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Markdown / by_status (default) profile
 // ---------------------------------------------------------------------------
@@ -194,6 +214,299 @@ fn supersede_moves_old_and_links_both() {
     let new = dir.path().join("accepted/0002-new-way.md");
     let new_content = fs::read_to_string(&new).unwrap();
     assert!(new_content.contains("Supersedes [ADR-0001]"));
+}
+
+/// Regression (hardening blitz, model-based oracle): when the *newer* ADR is
+/// itself already in `superseded/`, `supersede` adds the reciprocal
+/// "Supersedes [..]" note with a **same-directory** link. That link must be in
+/// the canonical `./` form `relink` produces, so the repo stays link-canonical
+/// and a follow-up `relink` is a no-op (the documented invariant). Previously the
+/// note was written as a bare `0002-beta.md` (no `./`), so `relink` would then
+/// rewrite it — leaving `supersede` output non-canonical.
+#[test]
+fn supersede_when_new_is_already_superseded_leaves_links_canonical() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success(); // ADR-0001
+    adroit(&dir)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success(); // ADR-0002
+    // Move ADR-0001 into superseded/ via a plain status change.
+    adroit(&dir)
+        .args(["set-status", "1", "superseded"])
+        .assert()
+        .success();
+    // Supersede ADR-0002 by ADR-0001 — both now live in superseded/.
+    adroit(&dir)
+        .args(["supersede", "1", "2"])
+        .assert()
+        .success();
+
+    // The reciprocal note's same-dir link is canonical (`./`).
+    let new = fs::read_to_string(dir.path().join("superseded/0001-alpha.md")).unwrap();
+    assert!(
+        new.contains("Supersedes [ADR-0002](./0002-beta.md)"),
+        "reciprocal note must use the canonical ./ link form, got:\n{new}"
+    );
+
+    // And the repo is link-canonical: a relink dry-run rewrites nothing.
+    adroit(&dir)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, model-based oracle): superseding an ADR that is
+/// **already** in `superseded/` (the old ADR doesn't move) must still write a
+/// canonical `## Status` "Superseded by [..]" link. The old side's link is
+/// produced by `Store::supersede`, which previously only canonicalized links when
+/// the file moved dirs — so re-superseding in place left a bare `0002-x.md` link
+/// (no `./`), and the repo was no longer link-canonical.
+#[test]
+fn supersede_in_place_writes_canonical_status_link() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success(); // ADR-0001
+    adroit(&dir)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success(); // ADR-0002
+    // Put BOTH ADRs in superseded/ so the supersede target doesn't move.
+    adroit(&dir)
+        .args(["set-status", "1", "superseded"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["set-status", "2", "superseded"])
+        .assert()
+        .success();
+    // Supersede ADR-0001 by ADR-0002 — old is already in superseded/ (no move).
+    adroit(&dir)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .success();
+
+    let old = fs::read_to_string(dir.path().join("superseded/0001-alpha.md")).unwrap();
+    assert!(
+        old.contains("Superseded by [ADR-0002](./0002-beta.md)"),
+        "in-place supersede must write the canonical ./ status link, got:\n{old}"
+    );
+    adroit(&dir)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, full-matrix oracle): under the `uuid` naming
+/// scheme, a supersession link (`…/{uuid}-{slug}.md`) must resolve back to the
+/// ADR whose identity is the bare `{uuid}`. `ref_in_link` previously returned the
+/// whole filename stem (`{uuid}-{slug}`), so `adroit check` reported the
+/// supersession as "no such ADR exists" and exited non-zero — uuid supersede
+/// produced a repo that failed its own validation.
+#[test]
+fn uuid_scheme_supersede_passes_check() {
+    let dir = TempDir::new().unwrap();
+    let scheme = ["--naming", "uuid"];
+    adroit(&dir)
+        .args(scheme)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(scheme)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success();
+
+    // Recover the two uuids from the filenames (`{uuid}-{slug}.md`).
+    let ids: Vec<String> = adr_files(dir.path())
+        .iter()
+        .map(|p| {
+            let name = p.file_name().unwrap().to_str().unwrap();
+            name.split('-').next().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(ids.len(), 2, "expected two ADRs, got {ids:?}");
+
+    adroit(&dir)
+        .args(scheme)
+        .args(["supersede", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // The superseded ADR's link must resolve, so `check` passes and `relink` is
+    // a no-op (the repo is consistent).
+    adroit(&dir).args(scheme).args(["check"]).assert().success();
+    adroit(&dir)
+        .args(scheme)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, full-matrix oracle): the `frontmatter` format is
+/// numeric-only, so combining it with a slug-based naming scheme (date / uuid /
+/// per_category) must be refused **up front** with a clear message — previously it
+/// failed deep in the write path with a cryptic "ADR number must be assigned
+/// before serializing" error.
+#[test]
+fn frontmatter_rejects_slug_naming_with_clear_error() {
+    for scheme in ["date", "uuid"] {
+        let dir = TempDir::new().unwrap();
+        adroit(&dir)
+            .args(["--format", "frontmatter", "--naming", scheme])
+            .args(["new", "Hello", "--no-edit"])
+            .assert()
+            .failure()
+            .stderr(
+                predicate::str::contains("frontmatter").and(predicate::str::contains("sequential")),
+            );
+    }
+}
+
+/// Regression (hardening blitz, full-matrix oracle): under `by_category`,
+/// `supersede` must write the supersession link relative to where the **old** ADR
+/// ends up — and in `by_category` it stays in its category dir (it does not move
+/// to `superseded/`). The link was computed relative to the superseded dir
+/// unconditionally, producing a `./<category>/<file>` path (a spurious category
+/// segment) pointing at a nonexistent file. Cross-category links carry the
+/// category, so they now resolve and `check` passes.
+///
+/// (The *same-category* case — `ref_in_link` recovering the per_category identity
+/// from a category-less `./<file>` link — is now also fixed; see
+/// `per_category_same_category_supersede_passes_check`.)
+#[test]
+fn per_category_cross_category_supersede_passes_check() {
+    let dir = TempDir::new().unwrap();
+    let prof = ["--layout", "by_category", "--naming", "per_category"];
+    adroit(&dir)
+        .args(prof)
+        .args(["new", "Alpha", "--category", "data", "--no-edit"])
+        .assert()
+        .success(); // data/0001
+    adroit(&dir)
+        .args(prof)
+        .args(["new", "Beta", "--category", "infra", "--no-edit"])
+        .assert()
+        .success(); // infra/0001
+    adroit(&dir)
+        .args(prof)
+        .args(["supersede", "infra/0001", "data/0001"])
+        .assert()
+        .success();
+
+    // The superseded ADR's link resolves: `check` passes and `relink` is a no-op.
+    adroit(&dir).args(prof).args(["check"]).assert().success();
+    adroit(&dir)
+        .args(prof)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, #9): a *same-category* per_category supersede must
+/// also pass `check`. Its link (`./0002-x.md`) carries no category segment, so
+/// resolution falls back to the source file's category (`ref_in_link_from`).
+/// Previously `check` falsely reported the supersession as broken.
+#[test]
+fn per_category_same_category_supersede_passes_check() {
+    let dir = TempDir::new().unwrap();
+    let prof = ["--layout", "by_category", "--naming", "per_category"];
+    for title in ["Alpha", "Beta"] {
+        adroit(&dir)
+            .args(prof)
+            .args(["new", title, "--category", "data", "--no-edit"])
+            .assert()
+            .success();
+    }
+    adroit(&dir)
+        .args(prof)
+        .args(["supersede", "data/0002", "data/0001"])
+        .assert()
+        .success();
+    adroit(&dir).args(prof).args(["check"]).assert().success();
+    adroit(&dir)
+        .args(prof)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, #8 check-half): `check` validates frontmatter
+/// supersession refs (the YAML `superseded_by:` field), not just markdown
+/// `## Status` links. This is the backstop that keeps a dangling pointer from
+/// being silent — e.g. when the target ADR is removed out-of-band. (`renumber`
+/// itself no longer strands these; it remaps the YAML ref — see
+/// `renumber_rewrites_frontmatter_supersession_ref`.)
+#[test]
+fn frontmatter_check_flags_stranded_supersession() {
+    let dir = TempDir::new().unwrap();
+    let fm = ["--format", "frontmatter"];
+    adroit(&dir)
+        .args(fm)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success(); // ADR-1
+    adroit(&dir)
+        .args(fm)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success(); // ADR-2
+    adroit(&dir)
+        .args(fm)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .success(); // ADR-1 superseded_by: 2
+    adroit(&dir).args(fm).args(["check"]).assert().success();
+
+    // Remove ADR-2 out-of-band, stranding ADR-1's `superseded_by: 2`. The check
+    // rule resolves the bare-number YAML ref against the identity set and must
+    // flag it as a broken supersession.
+    fs::remove_file(dir.path().join("proposed/0002-beta.md")).unwrap();
+    adroit(&dir)
+        .args(fm)
+        .args(["check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no such ADR exists"));
+}
+
+/// Regression (hardening blitz #2/#12): under a slug scheme, a *stale* cross-ADR
+/// link (the ADR merely moved) must be a `check` **warning**, not a broken-link
+/// **error** — so a `relink_scope=self` deferred branch still passes `check`.
+/// Check #5 was numeric-only; for date/uuid/per_category it couldn't tell "ADR
+/// moved" (stale) from "no such ADR" (broken) and wrongly failed the repo.
+#[test]
+fn date_scheme_stale_link_passes_check_under_relink_scope_self() {
+    let dir = TempDir::new().unwrap();
+    let prof = ["--naming", "date", "--relink-scope", "self"];
+    let run = |args: &[&str]| {
+        adroit(&dir)
+            .env("ADROIT_TODAY", "2026-06-04")
+            .args(prof)
+            .args(args)
+            .assert()
+    };
+    run(&["new", "Alpha", "--no-edit"]).success(); // 20260604-alpha
+    run(&["new", "Beta", "--no-edit"]).success(); // 20260604-beta
+    // Alpha superseded by Beta → Alpha moves to superseded/ with a link to Beta
+    // (still in proposed/ at this point).
+    run(&["supersede", "20260604-beta", "20260604-alpha"]).success();
+    // Move Beta to accepted/. With relink_scope=self, Alpha's inbound link to Beta
+    // is intentionally left stale (deferred to a later full `relink`).
+    run(&["set-status", "20260604-beta", "accepted"]).success();
+    // The stale link must be a warning, so `check` still passes (exit 0).
+    run(&["check"]).success();
 }
 
 #[test]
@@ -923,6 +1236,53 @@ fn renumber_resolves_duplicate_with_file_flag() {
     adroit(&dir).arg("check").assert().success();
 }
 
+#[test]
+fn renumber_rewrites_frontmatter_supersession_ref() {
+    // In the frontmatter profile, supersession is a bare-number YAML field
+    // (`superseded_by: N`), not a markdown link. Renumbering the *superseding*
+    // ADR must retarget that inbound ref so it isn't stranded (the markdown
+    // profile heals the equivalent `## Status` link via relabeling).
+    let dir = TempDir::new().unwrap();
+    adroit_flat(&dir)
+        .args(["new", "First", "--no-edit"])
+        .assert()
+        .success();
+    adroit_flat(&dir)
+        .args(["new", "Second", "--no-edit"])
+        .assert()
+        .success();
+    // ADR 2 supersedes ADR 1 -> ADR 1's YAML gains `superseded_by: 2`.
+    adroit_flat(&dir)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .success();
+    let one = dir.path().join("0001-first.md");
+    assert!(
+        fs::read_to_string(&one)
+            .unwrap()
+            .contains("superseded_by: 2"),
+        "precondition: ADR 1 records the supersession"
+    );
+
+    // Renumber the superseding ADR 2 -> 9.
+    adroit_flat(&dir)
+        .args(["renumber", "2", "9"])
+        .assert()
+        .success();
+
+    let one_after = fs::read_to_string(&one).unwrap();
+    assert!(
+        one_after.contains("superseded_by: 9"),
+        "the inbound frontmatter ref must follow the renumber:\n{one_after}"
+    );
+    assert!(
+        !one_after.contains("superseded_by: 2"),
+        "the stranded ref must be gone:\n{one_after}"
+    );
+    // No stranded supersession -> `check` is clean.
+    adroit_flat(&dir).arg("check").assert().success();
+}
+
 // ---------------------------------------------------------------------------
 // Profile mismatch guard + `migrate`
 // ---------------------------------------------------------------------------
@@ -1028,6 +1388,80 @@ fn migrate_dry_run_does_not_apply() {
     // --dry-run wins over --yes: nothing moved.
     assert!(dir.path().join("proposed/0001-one.md").exists());
     assert!(!dir.path().join("0001-one.md").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Statelessness / idempotency invariant
+//
+// Guards the design principle (CLAUDE.md "Design principles", book dev/design.md):
+// the only state is the filesystem, and every converge-style verb is idempotent —
+// re-running it on an unchanged tree is a byte-for-byte no-op.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn commands_are_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let run = |args: &[&str]| adroit(&dir).args(args).assert().success();
+
+    // A small repo with a status change, a supersession, a review deadline, and a
+    // regenerated index — so relink/index/etc. all have real work to (not) redo.
+    run(&["new", "First", "--no-edit"]);
+    run(&["new", "Second", "--no-edit"]);
+    run(&["new", "Third", "--no-edit"]);
+    run(&["new", "Fourth", "--no-edit"]);
+    run(&["new", "Fifth", "--no-edit"]);
+
+    // The converge-style verbs: each asserts a desired state. Distinct ADRs per
+    // verb so the *first* loop pass below is already a no-op (1 is accepted, 4
+    // supersedes 5, 2 has a deadline — none conflict).
+    let converge: &[&[&str]] = &[
+        &["set-status", "1", "accepted"],
+        &["supersede", "4", "5"],
+        &["set-review", "2", "2030-01-01"],
+        &["index"],
+        &["relink"],
+    ];
+    for argv in converge {
+        run(argv);
+    }
+
+    // Re-running every converge verb on the now-canonical tree must change
+    // nothing — same files, byte-identical contents (incl. SUMMARY.md).
+    let before = snapshot(dir.path());
+    for argv in converge {
+        run(argv);
+    }
+    let after = snapshot(dir.path());
+    assert_eq!(
+        before, after,
+        "re-running converge-style verbs must be a byte-for-byte no-op"
+    );
+}
+
+#[test]
+fn migrate_is_idempotent_at_fixpoint() {
+    let dir = TempDir::new().unwrap();
+    let run = |args: &[&str]| adroit(&dir).args(args).assert().success();
+    run(&["new", "One", "--no-edit"]);
+    run(&["new", "Two", "--no-edit"]);
+    run(&["set-status", "2", "accepted"]);
+
+    // Converge to the flat layout.
+    run(&["--layout", "flat", "migrate", "--yes"]);
+    let before = snapshot(dir.path());
+
+    // A second migrate to the same target is a no-op: it reports nothing to do
+    // and leaves every file byte-identical.
+    adroit(&dir)
+        .args(["--layout", "flat", "migrate", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to migrate"));
+    assert_eq!(
+        before,
+        snapshot(dir.path()),
+        "re-running migrate at its fixpoint must change nothing"
+    );
 }
 
 #[test]

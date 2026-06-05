@@ -390,6 +390,18 @@ impl Store {
                 .and_then(|n| n.to_str())
                 .map(str::to_string);
         }
+        // For per_category markdown, a same-category supersession link carries no
+        // category segment, so `parse_markdown` (category-blind) can't resolve it.
+        // Re-resolve both directions with this ADR's category.
+        if self.opts.naming == NamingScheme::PerCategory && self.opts.format == Format::Markdown {
+            let (supersedes, superseded_by) = format::parse_markdown_section_supersession(
+                &content,
+                self.opts.naming,
+                adr.category.as_deref(),
+            );
+            adr.supersedes = supersedes;
+            adr.superseded_by = superseded_by;
+        }
         Ok(adr)
     }
 
@@ -784,9 +796,19 @@ impl Store {
                 continue;
             }
             let content = std::fs::read_to_string(&path)?;
-            let (rewritten, n) = crate::links::relabel_links_to(
+            let (mut rewritten, mut n) = crate::links::relabel_links_to(
                 &content, &old_base, &new_base, &old_label, &new_label,
             );
+            // Frontmatter ADRs carry their supersession + typed-link refs as bare
+            // numbers in the YAML block, not as markdown links, so the relabel
+            // above can't reach them — remap them through the model so a renumber
+            // doesn't strand e.g. another ADR's `superseded_by: <old>`.
+            if self.opts.format == Format::Frontmatter
+                && let Some(remapped) = crate::frontmatter::remap_numeric_refs(&rewritten, old, new)
+            {
+                rewritten = remapped;
+                n += 1;
+            }
             if n > 0 && rewritten != content {
                 std::fs::write(&path, rewritten)?;
                 report.files_updated += 1;
@@ -819,8 +841,14 @@ impl Store {
     pub fn supersede(&self, new: &AdrRef, old: &AdrRef) -> Result<PathBuf, StoreError> {
         // Validate the new ADR exists before mutating the old one.
         let new_path = self.find_path_by_ref(new)?;
-        let link = self.relative_link_to(&new_path);
         let old_path = self.find_path_by_ref(old)?;
+        // The supersession link must be relative to where the OLD ADR ends up: it
+        // moves to the superseded dir under by_status, but STAYS in its current
+        // directory under flat / by_category. Computing it from the superseded dir
+        // unconditionally produced a broken link in by_category (a spurious
+        // category segment). Route through the canonical `links::rel_link`.
+        let from_dir = self.status_target_dir(&old_path, Status::Superseded);
+        let link = crate::links::rel_link(&from_dir, &new_path);
         self.set_status_at(old_path, Status::Superseded, Some((new.clone(), link)))
     }
 
@@ -1025,13 +1053,6 @@ impl Store {
         }
         Ok(path)
     }
-
-    /// Compute the relative markdown link from the superseded dir (where the
-    /// old ADR will live) to `to_path` (the superseding ADR's current file).
-    fn relative_link_to(&self, to_path: &Path) -> String {
-        let from_dir = self.status_dir(Status::Superseded);
-        pathdiff(&from_dir, to_path)
-    }
 }
 
 /// Immediate subdirectories of `dir` (one level), sorted by name. Used by the
@@ -1095,26 +1116,12 @@ fn apply_ref(adr: &mut Adr, r: AdrRef) {
 
 /// Today's local date (UTC fallback), for the date naming scheme.
 fn today_local() -> time::Date {
+    if let Some(d) = crate::config::today_override() {
+        return d;
+    }
     time::OffsetDateTime::now_local()
         .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
         .date()
-}
-
-/// Compute a relative path from a directory to a target file using `../`.
-/// Both inputs should share the same ancestor `root`.
-fn pathdiff(from_dir: &Path, to_file: &Path) -> String {
-    let from: Vec<_> = from_dir.components().collect();
-    let to: Vec<_> = to_file.components().collect();
-    let mut i = 0;
-    while i < from.len() && i < to.len() && from[i] == to[i] {
-        i += 1;
-    }
-    let ups = from.len() - i;
-    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), ups).collect();
-    for c in &to[i..] {
-        parts.push(c.as_os_str().to_string_lossy().into_owned());
-    }
-    parts.join("/")
 }
 
 #[cfg(test)]

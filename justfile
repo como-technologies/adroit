@@ -8,7 +8,7 @@ init:
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
 # Run all CI checks (used by .github/workflows/ci.yml)
-ci: fmt-check lint lint-forge test test-forge book crate-outdated crate-audit
+ci: fmt-check lint lint-forge lint-web test test-forge test-web book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -26,6 +26,10 @@ lint:
 lint-forge:
     cargo clippy --features forge -- -D warnings
 
+# Run clippy with the web feature (read-only Axum dashboard)
+lint-web:
+    cargo clippy --features web -- -D warnings
+
 # Run all tests
 test *ARGS:
     cargo test {{ARGS}}
@@ -34,9 +38,20 @@ test *ARGS:
 test-forge *ARGS:
     cargo test --features forge {{ARGS}}
 
+# Run tests with the web feature enabled (JSON API + markdown-render security).
+# Builds without a Vue SPA present (the embed dir has a .gitkeep).
+test-web *ARGS:
+    cargo test --features web {{ARGS}}
+
 # Run only unit tests (skip integration tests)
 unit:
     cargo test --lib
+
+# Hardening-blitz soak: the model-based oracle + parser property tests at a wider
+# case budget. Override depth with PROPTEST_CASES, e.g. `PROPTEST_CASES=5000 just model`.
+# (Both also run in `just ci` via `just test` at proptest's default 256 cases.)
+model *ARGS:
+    PROPTEST_CASES="${PROPTEST_CASES:-2000}" cargo test --test model --test parsers {{ARGS}}
 
 # Type-check without building
 check:
@@ -66,9 +81,10 @@ serve *ARGS: web-build
 serve-forge *ARGS: web-build
     cargo run --features web,forge -- serve {{ARGS}}
 
-# Check for outdated dependencies
+# Check for outdated dependencies (skipped if cargo-outdated isn't installed;
+# `just init` installs it and GitHub CI always runs it)
 crate-outdated:
-    cargo outdated
+    @if command -v cargo-outdated >/dev/null 2>&1; then cargo outdated; else echo "skip: cargo-outdated not installed (run 'just init')"; fi
 
 # Upgrade dependencies (including incompatible versions)
 crate-upgrade:
@@ -78,9 +94,10 @@ crate-upgrade:
 crate-update:
     cargo update
 
-# Audit dependencies for known vulnerabilities
+# Audit dependencies for known vulnerabilities (skipped if cargo-audit isn't
+# installed; `just init` installs it and GitHub CI always runs it)
 crate-audit:
-    cargo audit
+    @if command -v cargo-audit >/dev/null 2>&1; then cargo audit; else echo "skip: cargo-audit not installed (run 'just init')"; fi
 
 # Upgrade deps, update lockfile, audit, and test
 crate-refresh: crate-upgrade crate-update crate-audit test

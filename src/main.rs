@@ -100,6 +100,19 @@ fn main() -> Result<()> {
 
     let opts = store_options(&cfg, cli.format, cli.layout);
 
+    // The `frontmatter` format is numeric-only — its YAML persists a `number:`
+    // field and can't represent the slug-based identity schemes (date / uuid /
+    // per_category). Refuse the combination up front with a clear message instead
+    // of failing deep in the write path with a cryptic "number must be assigned
+    // before serializing" error. (`config`/`completions` already returned above.)
+    if opts.format == Format::Frontmatter && !opts.naming.is_numeric() {
+        anyhow::bail!(
+            "the `frontmatter` format supports only the `sequential` naming scheme \
+             (it persists a numeric `number:`); `{}` requires `--format markdown`",
+            opts.naming
+        );
+    }
+
     // Resolve editor before any I/O so we fail fast on misconfiguration.
     // Needed for `edit`, and for `new` unless --no-edit / open_on_new=false.
     let needs_editor = match &cli.command {
@@ -691,9 +704,15 @@ fn add_supersedes_note(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) 
     let mut updated = content.trim_end_matches(['\n', '\r']).to_string();
     updated.push_str(newline);
     updated.push_str(newline);
-    // Relative link from new's dir to old's (now in superseded/).
+    // Relative link from new's dir to old's (now in superseded/). Use the same
+    // canonical engine `relink` uses (`links::rel_link`) so the note's link is
+    // born canonical (e.g. `./0002-x.md` for a same-dir target). Computing it any
+    // other way leaves the repo non-canonical — a follow-up `relink` would then
+    // rewrite this note, breaking the "relink is a no-op after a status op"
+    // invariant. (`relative_link` here would omit the `./` for a same-dir target.)
     let old_path = store.find_path_by_ref(old)?;
-    let link = relative_link(&path, &old_path);
+    let new_dir = path.parent().unwrap_or(std::path::Path::new(""));
+    let link = adroit::links::rel_link(new_dir, &old_path);
     updated.push_str(&format!("> Supersedes [{old_label}]({link})"));
     updated.push_str(newline);
     std::fs::write(&path, updated)?;
@@ -862,6 +881,11 @@ fn config_cli_value(cli: &Cli, key: &str) -> Option<String> {
         "dir" => cli.dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "format" => cli.format.map(|f| f.to_string()),
         "layout" => cli.layout.map(|l| l.to_string()),
+        // `naming` has a `--naming` / `ADROIT_NAMING` override too; without this
+        // arm `config show`/`get naming` ignored it and reported the file/default
+        // value (the actual ADR operations still honored it — only the diagnostic
+        // lied).
+        "naming" => cli.naming.map(|n| n.to_string()),
         "tui_theme" => cli.theme.map(|t| t.to_string()),
         "default_template" => cli.default_template.clone(),
         "review_overdue_days" => cli.review_overdue_days.map(|n| n.to_string()),

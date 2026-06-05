@@ -42,7 +42,9 @@ impl Jira {
         }
     }
 
-    #[cfg(test)]
+    /// Build a client over an injected transport. Exposed (like the GitHub /
+    /// GitLab adapters' `with_transport`) for the forge fault-injection suite
+    /// (tests/forge_faults.rs) as well as unit tests.
     pub fn with_transport(host: &str, project: &str, transport: Arc<dyn HttpTransport>) -> Self {
         Self {
             host: host.to_string(),

@@ -89,3 +89,11 @@ directly:
 | `POST /api/workspace` | switch the active ADR directory (body `{ "path": … }`) |
 | `GET /api/browse?path=` | subdirectories of `path` + ADR count (powers the directory picker) |
 | `GET /api/events` | SSE stream of live-reload change events |
+
+## Safety
+
+The dashboard is **read-only** for ADRs (no endpoint writes one) and binds to
+`127.0.0.1` by default — it's a local single-user tool, so the directory picker can
+browse your own filesystem. ADR bodies are rendered to **sanitized** HTML: raw HTML
+is escaped and dangerous link schemes (`javascript:` / `data:`) are neutralized, so
+a crafted ADR (e.g. from a shared repo or a PR) can't run script in your browser.

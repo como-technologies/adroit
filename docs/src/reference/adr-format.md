@@ -202,6 +202,11 @@ abstracted behind a single seam, so each scheme is self-contained. Pick **one
 for the repo's lifetime** — adroit does not rename existing ADRs when you change
 the setting.
 
+The slug-based schemes (`date` / `uuid` / `per_category`) require the **markdown**
+format; the frontmatter profile is numeric-only and pairs with `sequential`.
+adroit refuses an invalid combination (e.g. `--format frontmatter --naming uuid`)
+up front with a clear message rather than failing mid-write.
+
 | Scheme | Filename | Heading | Identity | Collisions |
 |---|---|---|---|---|
 | `sequential` (default) | `NNNN-title.md` | `# ADR-NNNN: Title` | global number | possible across branches |

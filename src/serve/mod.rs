@@ -569,27 +569,86 @@ fn render_markdown(md: &str) -> String {
     // `## References` issue/PR links) render as plain text. Walk the event stream
     // and turn bare `http(s)://` URLs in text into links — skipping code blocks
     // and the inside of existing links so we never double-wrap or touch code.
+    //
+    // The dashboard renders ADR *bodies* as HTML, so this is also an
+    // **XSS-sanitization seam**: raw HTML in a body is escaped to visible text
+    // (never executed), and dangerous link/image URL schemes (`javascript:`,
+    // `data:`, `vbscript:`) are neutralized. Without this, a crafted ADR in a
+    // shared repo would run script when someone opened it in `adroit serve`.
     let mut events: Vec<Event> = Vec::new();
     let mut in_code = 0u32;
     let mut in_link = 0u32;
     for ev in Parser::new_ext(md, options) {
-        match &ev {
-            Event::Start(Tag::CodeBlock(_)) => in_code += 1,
-            Event::End(TagEnd::CodeBlock) => in_code = in_code.saturating_sub(1),
-            Event::Start(Tag::Link { .. }) => in_link += 1,
-            Event::End(TagEnd::Link) => in_link = in_link.saturating_sub(1),
-            Event::Text(t) if in_code == 0 && in_link == 0 => {
-                push_autolinked(&mut events, t);
-                continue;
+        match ev {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                in_code += 1;
+                events.push(Event::Start(Tag::CodeBlock(kind)));
             }
-            _ => {}
+            Event::End(TagEnd::CodeBlock) => {
+                in_code = in_code.saturating_sub(1);
+                events.push(Event::End(TagEnd::CodeBlock));
+            }
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                in_link += 1;
+                events.push(Event::Start(Tag::Link {
+                    link_type,
+                    dest_url: sanitize_href(dest_url),
+                    title,
+                    id,
+                }));
+            }
+            Event::End(TagEnd::Link) => {
+                in_link = in_link.saturating_sub(1);
+                events.push(Event::End(TagEnd::Link));
+            }
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                events.push(Event::Start(Tag::Image {
+                    link_type,
+                    dest_url: sanitize_href(dest_url),
+                    title,
+                    id,
+                }));
+            }
+            // Raw HTML (block or inline) is escaped to visible text, not passed
+            // through — otherwise `<script>`/`<img onerror>` in an ADR body would
+            // execute in the dashboard (stored XSS).
+            Event::Html(h) | Event::InlineHtml(h) => events.push(Event::Text(h)),
+            Event::Text(t) if in_code == 0 && in_link == 0 => {
+                push_autolinked(&mut events, &t);
+            }
+            other => events.push(other),
         }
-        events.push(ev);
     }
 
     let mut out = String::new();
     html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Neutralize dangerous link / image URL schemes so a crafted ADR can't execute
+/// script when the dashboard renders it. `javascript:` / `data:` / `vbscript:`
+/// (case- and leading-whitespace-insensitive) become `#`; everything else is
+/// left untouched.
+fn sanitize_href(url: pulldown_cmark::CowStr<'_>) -> pulldown_cmark::CowStr<'_> {
+    let lower = url.trim_start().to_ascii_lowercase();
+    if lower.starts_with("javascript:")
+        || lower.starts_with("data:")
+        || lower.starts_with("vbscript:")
+    {
+        pulldown_cmark::CowStr::from("#")
+    } else {
+        url
+    }
 }
 
 /// Split a text run into plain-text + autolink events for bare `http(s)://`
@@ -806,6 +865,54 @@ mod tests {
         // An existing markdown link isn't double-wrapped.
         let linked = render_markdown("[label](https://example.com/y)");
         assert_eq!(linked.matches("<a ").count(), 1, "{linked}");
+    }
+
+    // --- security (hardening blitz): the dashboard renders ADR bodies as HTML,
+    // so raw HTML / dangerous link schemes in an ADR body are a stored-XSS surface.
+
+    #[test]
+    fn render_markdown_escapes_raw_block_html() {
+        let html = render_markdown("Intro\n\n<script>alert(document.cookie)</script>\n");
+        assert!(
+            !html.contains("<script>"),
+            "raw block <script> passed through: {html}"
+        );
+    }
+
+    #[test]
+    fn render_markdown_escapes_raw_inline_html() {
+        let html = render_markdown("hi <img src=x onerror=alert(1)> there");
+        assert!(
+            !html.contains("<img"),
+            "raw inline HTML passed through: {html}"
+        );
+    }
+
+    #[test]
+    fn render_markdown_neutralizes_dangerous_link_schemes() {
+        let js = render_markdown("[click me](javascript:alert(1))");
+        assert!(
+            !js.contains("javascript:"),
+            "javascript: href survived: {js}"
+        );
+        let data = render_markdown("[x](data:text/html;base64,PHNjcmlwdD4=)");
+        assert!(
+            !data.contains("data:text/html"),
+            "data: href survived: {data}"
+        );
+    }
+
+    #[tokio::test]
+    async fn browse_bad_path_is_a_clean_error_not_a_panic() {
+        let (_tmp, root) = seed();
+        // A nonexistent directory must produce a clean client error, never a
+        // panic or 500.
+        let resp = get(&root, "/api/browse?path=/no/such/directory/xyzzy").await;
+        assert!(
+            resp.status().is_client_error(),
+            "expected 4xx, got {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

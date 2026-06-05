@@ -19,3 +19,10 @@
 
 - [CLI Reference](./reference/cli.md)
 - [ADR Format](./reference/adr-format.md)
+
+# Development
+
+- [Design Principles](./dev/design.md)
+- [Testing & Fuzzing](./dev/testing.md)
+- [Hardening & Quality](./dev/hardening.md)
+- [Project Skills](./dev/skills.md)
