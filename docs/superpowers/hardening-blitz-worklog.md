@@ -85,3 +85,20 @@ generation now routes through the one canonical engine.
   inputs (`arb_lf_text`) so they stay meaningful for realistic documents. Fix
   candidate: route all three rewriters through one newline-aware split that
   recognizes a lone `\r` as a separator.
+
+## Forge fault-injection (`tests/forge_faults.rs`, `--features forge`)
+
+A `HostileTransport` returns arbitrary status codes and malformed / truncated /
+wrong-typed / oversized / null response bodies (plus an injected connection
+failure) to every `Forge` + `Tracker` method on all three adapters
+(GitHub / GitLab / Jira).
+
+- **Result: no parsing bug.** At 5000 cases the adapters never panic and always
+  return a clean `Result` — the response parsing (built on the `HttpTransport`
+  seam) is already robustly defensive. A positive finding.
+- **Minor consistency fix:** `Jira::with_transport` was `#[cfg(test)]`-gated while
+  the GitHub/GitLab equivalents are public; exposed it to match (so the
+  fault-injection suite can build all three adapters over an injected transport).
+  (src/forge/jira.rs)
+- **Note:** `Jira`'s `Forge` impl is an intentional `unreachable!` guard (Jira is
+  only ever wired as a Tracker); the suite exercises only its tracker side.
