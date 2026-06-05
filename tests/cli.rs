@@ -332,6 +332,67 @@ fn uuid_scheme_supersede_passes_check() {
         .stdout(predicate::str::contains("canonical"));
 }
 
+/// Regression (hardening blitz, full-matrix oracle): the `frontmatter` format is
+/// numeric-only, so combining it with a slug-based naming scheme (date / uuid /
+/// per_category) must be refused **up front** with a clear message — previously it
+/// failed deep in the write path with a cryptic "ADR number must be assigned
+/// before serializing" error.
+#[test]
+fn frontmatter_rejects_slug_naming_with_clear_error() {
+    for scheme in ["date", "uuid"] {
+        let dir = TempDir::new().unwrap();
+        adroit(&dir)
+            .args(["--format", "frontmatter", "--naming", scheme])
+            .args(["new", "Hello", "--no-edit"])
+            .assert()
+            .failure()
+            .stderr(
+                predicate::str::contains("frontmatter").and(predicate::str::contains("sequential")),
+            );
+    }
+}
+
+/// Regression (hardening blitz, full-matrix oracle): under `by_category`,
+/// `supersede` must write the supersession link relative to where the **old** ADR
+/// ends up — and in `by_category` it stays in its category dir (it does not move
+/// to `superseded/`). The link was computed relative to the superseded dir
+/// unconditionally, producing a `./<category>/<file>` path (a spurious category
+/// segment) pointing at a nonexistent file. Cross-category links carry the
+/// category, so they now resolve and `check` passes.
+///
+/// (A *same-category* supersede is a separate, deeper limitation — `ref_in_link`
+/// can't recover the per_category identity from a category-less `./<file>` link.
+/// Tracked in docs/superpowers/hardening-blitz-worklog.md.)
+#[test]
+fn per_category_cross_category_supersede_passes_check() {
+    let dir = TempDir::new().unwrap();
+    let prof = ["--layout", "by_category", "--naming", "per_category"];
+    adroit(&dir)
+        .args(prof)
+        .args(["new", "Alpha", "--category", "data", "--no-edit"])
+        .assert()
+        .success(); // data/0001
+    adroit(&dir)
+        .args(prof)
+        .args(["new", "Beta", "--category", "infra", "--no-edit"])
+        .assert()
+        .success(); // infra/0001
+    adroit(&dir)
+        .args(prof)
+        .args(["supersede", "infra/0001", "data/0001"])
+        .assert()
+        .success();
+
+    // The superseded ADR's link resolves: `check` passes and `relink` is a no-op.
+    adroit(&dir).args(prof).args(["check"]).assert().success();
+    adroit(&dir)
+        .args(prof)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
 #[test]
 fn set_review_sets_and_clears_deadline_format_preserving() {
     let dir = TempDir::new().unwrap();

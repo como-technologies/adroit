@@ -63,6 +63,44 @@ generation now routes through the one canonical engine.
 - **Regression:** `src/naming.rs::uuid_display_tolerates_multibyte_slug` +
   the property test's saved seed.
 
+### 5. `uuid`-scheme supersede produced a repo that failed `check`
+
+- **Found by:** the full-matrix oracle (uuid cell). `supersede` then `check`.
+- **Cause:** `naming::ref_in_link` returned the **full** `{uuid}-{slug}` filename
+  stem, but a uuid ADR's identity is the bare `{uuid}` (`parse` splits the title
+  off). The supersession link therefore never resolved — `check` reported
+  "Superseded by ADR-… but no such ADR exists" and exited non-zero. (Contradicted
+  the documented "uuid works end-to-end incl. supersede/check".)
+- **Fix:** `ref_in_link` splits the title slug off for uuid, mirroring `parse`.
+- **Regression:** `tests/cli.rs::uuid_scheme_supersede_passes_check` + a
+  `naming` unit assertion.
+
+### 6. `frontmatter` + a slug naming scheme failed with a cryptic error
+
+- **Found by:** the full-matrix oracle (frontmatter × per_category/date/uuid).
+- **Cause:** the frontmatter format is numeric-only (its YAML persists a
+  `number:`), so it can't represent slug-based identity (date / uuid /
+  per_category). `adroit new` failed deep in the serializer with "ADR number must
+  be assigned before serializing" — a confusing error on a user-reachable config
+  (the flags/config keys are independent).
+- **Fix:** a clear up-front guard in `main.rs` — the `frontmatter` format requires
+  the `sequential` scheme; otherwise bail with a message pointing at
+  `--format markdown`.
+- **Regression:** `tests/cli.rs::frontmatter_rejects_slug_naming_with_clear_error`.
+
+### 7. `by_category` supersede wrote a broken link
+
+- **Found by:** the full-matrix oracle (by_category cell). `supersede` then
+  `check` reported a broken link.
+- **Cause:** `Store::supersede` built the supersession link relative to
+  `status_dir(Superseded)` unconditionally. But in `flat`/`by_category` the old
+  ADR doesn't move to `superseded/` — it stays in its category dir — so the link
+  got a spurious `./<category>/` segment and pointed at a nonexistent file.
+- **Fix:** compute the link relative to where the old ADR actually ends up
+  (`status_target_dir(old_path, Superseded)`), via the canonical `links::rel_link`.
+  Removed the now-misleading `relative_link_to` helper.
+- **Regression:** `tests/cli.rs::per_category_cross_category_supersede_passes_check`.
+
 ## Found — deferred (low severity)
 
 ### 4. `upsert_reference` is non-idempotent on input containing a lone `\r`
@@ -85,6 +123,47 @@ generation now routes through the one canonical engine.
   inputs (`arb_lf_text`) so they stay meaningful for realistic documents. Fix
   candidate: route all three rewriters through one newline-aware split that
   recognizes a lone `\r` as a separator.
+
+### 8. `renumber` leaves stale supersession refs under `frontmatter`
+
+- **Found by:** the full-matrix oracle (frontmatter × sequential): `new; new;
+  supersede 2 1; renumber 2 3` leaves ADR-1's `superseded_by: 2` pointing at the
+  now-nonexistent number.
+- **Cause:** `renumber` updates references by **text-relabeling markdown links**
+  (`relabel_links_to`). In the frontmatter profile, supersession is a YAML field
+  (`superseded_by: 2`), not a markdown link, so it isn't rewritten — the pointer
+  dangles. (The renamed ADR's own YAML `number:` field is likewise left stale,
+  though identity still resolves via the body heading.) `check` doesn't catch it
+  because frontmatter supersession isn't validated — a second gap.
+- **Why deferred:** narrow (legacy frontmatter + renumber + an existing
+  supersession to the renumbered ADR), and a correct fix makes `renumber`
+  format-aware (parse + rewrite each ADR's YAML supersession refs, and the renamed
+  ADR's `number:`), a moderate change to what is today pure text manipulation.
+- **Status:** the oracle models the actual behavior (a frontmatter renumber
+  doesn't follow supersession pointers) so it keeps hunting other bugs. Fix
+  candidates: make `renumber` rewrite frontmatter YAML refs, and extend `check`
+  to validate frontmatter supersession.
+
+### 9. `per_category` *same-category* cross-ADR links don't resolve
+
+- **Found by:** the full-matrix oracle (by_category cell), same-category
+  `supersede`. The link `./0002-beta.md` is a valid file path but `check` reports
+  the supersession as "no such ADR exists".
+- **Cause:** a per_category identity is `category/NNNN`, and `naming::ref_in_link`
+  recovers the category from the link's **path** — which works for a
+  cross-category `../infra/0001-x.md` link but not for a canonical same-category
+  `./0002-beta.md` link, which carries no category segment. Resolution needs the
+  *source* file's category, which the scheme-agnostic `ref_in_link` (used by
+  `relink` and `check`) isn't given.
+- **Why deferred:** the proper fix threads source-category context through
+  `ref_in_link` and its callers (`relink`, `relink_one`, `check`'s supersession +
+  link checks, and `format`'s supersession parse) — a cross-cutting change to
+  central relink/check logic with regression risk, for a peripheral scheme.
+  Cross-category supersession (the common case) works after fix #7.
+- **Status:** the oracle exercises cross-category per_category supersession and
+  skips the same-category case (documented here). Fix candidate: a
+  `ref_in_link_from(target, source_category)` that falls back to the source
+  category when the target carries no category segment.
 
 ## Forge fault-injection (`tests/forge_faults.rs`, `--features forge`)
 

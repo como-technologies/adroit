@@ -819,8 +819,14 @@ impl Store {
     pub fn supersede(&self, new: &AdrRef, old: &AdrRef) -> Result<PathBuf, StoreError> {
         // Validate the new ADR exists before mutating the old one.
         let new_path = self.find_path_by_ref(new)?;
-        let link = self.relative_link_to(&new_path);
         let old_path = self.find_path_by_ref(old)?;
+        // The supersession link must be relative to where the OLD ADR ends up: it
+        // moves to the superseded dir under by_status, but STAYS in its current
+        // directory under flat / by_category. Computing it from the superseded dir
+        // unconditionally produced a broken link in by_category (a spurious
+        // category segment). Route through the canonical `links::rel_link`.
+        let from_dir = self.status_target_dir(&old_path, Status::Superseded);
+        let link = crate::links::rel_link(&from_dir, &new_path);
         self.set_status_at(old_path, Status::Superseded, Some((new.clone(), link)))
     }
 
@@ -1024,19 +1030,6 @@ impl Store {
             }
         }
         Ok(path)
-    }
-
-    /// Compute the relative markdown link from the superseded dir (where the
-    /// old ADR will live) to `to_path` (the superseding ADR's current file).
-    ///
-    /// Routes through the canonical link engine [`crate::links::rel_link`] (the
-    /// same one `relink` uses) so the written link is already canonical — e.g. a
-    /// same-dir target gets the `./` prefix. Otherwise an in-place supersede (the
-    /// old ADR already in `superseded/`, so no move triggers a relink) would leave
-    /// a non-canonical link and the repo would fail the relink-is-a-no-op invariant.
-    fn relative_link_to(&self, to_path: &Path) -> String {
-        let from_dir = self.status_dir(Status::Superseded);
-        crate::links::rel_link(&from_dir, to_path)
     }
 }
 

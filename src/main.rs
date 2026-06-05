@@ -100,6 +100,19 @@ fn main() -> Result<()> {
 
     let opts = store_options(&cfg, cli.format, cli.layout);
 
+    // The `frontmatter` format is numeric-only — its YAML persists a `number:`
+    // field and can't represent the slug-based identity schemes (date / uuid /
+    // per_category). Refuse the combination up front with a clear message instead
+    // of failing deep in the write path with a cryptic "number must be assigned
+    // before serializing" error. (`config`/`completions` already returned above.)
+    if opts.format == Format::Frontmatter && !opts.naming.is_numeric() {
+        anyhow::bail!(
+            "the `frontmatter` format supports only the `sequential` naming scheme \
+             (it persists a numeric `number:`); `{}` requires `--format markdown`",
+            opts.naming
+        );
+    }
+
     // Resolve editor before any I/O so we fail fast on misconfiguration.
     // Needed for `edit`, and for `new` unless --no-edit / open_on_new=false.
     let needs_editor = match &cli.command {
