@@ -127,7 +127,8 @@ proptest! {
             for st in STATUSES {
                 let _ = format::parse_markdown(&text, Some(st), scheme);
             }
-            let _ = format::parse_markdown_section_supersession(&text, scheme);
+            let _ = format::parse_markdown_section_supersession(&text, scheme, None);
+            let _ = format::parse_markdown_section_supersession(&text, scheme, Some("cat"));
         }
         let _ = format::parse_markdown_section_status(&text);
         let _ = format::parse_references(&text);

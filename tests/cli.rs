@@ -393,6 +393,76 @@ fn per_category_cross_category_supersede_passes_check() {
         .stdout(predicate::str::contains("canonical"));
 }
 
+/// Regression (hardening blitz, #9): a *same-category* per_category supersede must
+/// also pass `check`. Its link (`./0002-x.md`) carries no category segment, so
+/// resolution falls back to the source file's category (`ref_in_link_from`).
+/// Previously `check` falsely reported the supersession as broken.
+#[test]
+fn per_category_same_category_supersede_passes_check() {
+    let dir = TempDir::new().unwrap();
+    let prof = ["--layout", "by_category", "--naming", "per_category"];
+    for title in ["Alpha", "Beta"] {
+        adroit(&dir)
+            .args(prof)
+            .args(["new", title, "--category", "data", "--no-edit"])
+            .assert()
+            .success();
+    }
+    adroit(&dir)
+        .args(prof)
+        .args(["supersede", "data/0002", "data/0001"])
+        .assert()
+        .success();
+    adroit(&dir).args(prof).args(["check"]).assert().success();
+    adroit(&dir)
+        .args(prof)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, #8 check-half): `check` now validates frontmatter
+/// supersession refs (the YAML `superseded_by:` field), not just markdown
+/// `## Status` links. A `renumber` that strands a frontmatter pointer is no longer
+/// silent — `check` reports it and exits non-zero. (Auto-fixing the pointer in
+/// `renumber` is deferred; catching it loudly is the win.)
+#[test]
+fn frontmatter_check_flags_stranded_supersession() {
+    let dir = TempDir::new().unwrap();
+    let fm = ["--format", "frontmatter"];
+    adroit(&dir)
+        .args(fm)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success(); // ADR-1
+    adroit(&dir)
+        .args(fm)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success(); // ADR-2
+    adroit(&dir)
+        .args(fm)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .success(); // ADR-1 superseded_by: 2
+    adroit(&dir).args(fm).args(["check"]).assert().success();
+
+    // Renumbering ADR-2 strands ADR-1's `superseded_by: 2` (renumber doesn't
+    // rewrite YAML refs) — check must now catch it.
+    adroit(&dir)
+        .args(fm)
+        .args(["renumber", "2", "3"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(fm)
+        .args(["check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no such ADR exists"));
+}
+
 #[test]
 fn set_review_sets_and_clears_deadline_format_preserving() {
     let dir = TempDir::new().unwrap();

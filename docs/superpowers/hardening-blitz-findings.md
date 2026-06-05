@@ -24,15 +24,16 @@ minor API inconsistency:
 | 5 | `uuid` supersede produced a repo that **failed `check`** | core | **Fixed** |
 | 6 | `frontmatter` + a slug scheme failed with a cryptic error | core | **Fixed** |
 | 7 | `by_category` supersede wrote a **broken link** | core | **Fixed** |
-| 8 | `renumber` leaves stale frontmatter supersession refs | core | Deferred |
-| 9 | `per_category` *same-category* cross-ADR links don't resolve | core | Deferred |
+| 8 | `renumber` strands a frontmatter supersession ref | core | **Detect-fixed** ¹ |
+| 9 | `per_category` *same-category* cross-ADR links don't resolve | core | **Fixed** |
 | 10 | **Stored XSS** — dashboard rendered raw HTML / `javascript:` | web | **Fixed** |
 | — | `Jira::with_transport` was `#[cfg(test)]`-gated unlike siblings | forge | **Fixed** |
 
-**7 fixed at root cause, each with a regression test; 3 deferred** (each a real
-but narrow/peripheral defect whose proper fix is cross-cutting and risky — they
-are documented with a fix recommendation rather than chased without a deliberate
-go-ahead).
+**9 of the 10 fixed (or detect-fixed), each with a regression test.** Only #4
+(lone-CR) remains fully deferred; #8's *auto-fix* is deferred but it is no longer
+silent — ¹ `check` now validates frontmatter supersession and flags the stranded
+ref. (#9 and the #8 detection were fixed in a follow-up pass after the full-matrix
+oracle surfaced them; see §3.)
 
 The lasting artifacts are **four reusable test suites** wired into CI, a small
 production test-seam, and a `just model` soak recipe:
@@ -195,6 +196,20 @@ security tests.
 GitHub/GitLab equivalents are public; exposed it to match, for the fault-injection
 suite.
 
+**#9 — `per_category` same-category links didn't resolve.** `ref_in_link` recovered
+the per_category identity from the link's path, which fails for a same-category
+`./0002-x.md` link (no category segment) — so `check` falsely reported the
+supersession broken. *Fix:* `ref_in_link_from` / `ref_in_note_from(target,
+source_category)` (a pass-through for every other scheme) take the source file's
+category; threaded into the one `query::check` supersession call and a `store::read`
+re-resolution. Regression: `per_category_same_category_supersede_passes_check`.
+
+**#8b — `check` now validates frontmatter supersession.** `check` previously checked
+supersession only in markdown; it now also validates the frontmatter YAML
+`superseded_by:` / `supersedes:` refs, so a stranded pointer (#8) is caught as a
+`check` error rather than being silent. Regression:
+`frontmatter_check_flags_stranded_supersession`.
+
 ### Deferred (real, but narrow + cross-cutting to fix)
 
 **#4 — `upsert_reference` non-idempotent on a lone `\r`.** A lone CR (no `\r\n`)
@@ -204,19 +219,12 @@ externally-corrupted input; a correct fix is a cross-cutting newline-normalizati
 across `format.rs` with byte-preservation risk. The idempotence property tests are
 scoped to consistent newlines (`arb_lf_text`).
 
-**#8 — `renumber` leaves stale frontmatter supersession refs.** `renumber` updates
-references by text-relabeling markdown links; in frontmatter, supersession is a
-YAML field, so a pointer at the renumbered ADR is left dangling (and `check` doesn't
-validate frontmatter supersession). Narrow (frontmatter + renumber + supersession);
-the fix makes `renumber` format-aware. The oracle models the actual behavior.
-
-**#9 — `per_category` same-category links don't resolve.** `ref_in_link` recovers a
-per_category identity from the link's path, which works for cross-category
-(`../infra/0001-x.md`) but not for a canonical same-category `./0002-x.md` link
-(no category segment). Resolution needs the *source* file's category, which the
-scheme-agnostic `ref_in_link` (used by `relink` + `check`) isn't given. The fix
-threads source context through several call sites. Cross-category supersession
-works after #7; the oracle exercises that and skips same-category.
+**#8 (auto-fix only) — `renumber` doesn't rewrite frontmatter supersession refs.**
+In frontmatter, supersession is a YAML field, so renumbering a superseded-to ADR
+strands the pointer. It is **no longer silent** (#8b: `check` now flags it); only
+the *auto-fix* — making `renumber` format-aware (rewrite each ADR's YAML refs + the
+renamed ADR's `number:`) — is deferred. Narrow (legacy frontmatter + renumber +
+supersession); the oracle skips renumbering a supersession target under frontmatter.
 
 ---
 
@@ -233,8 +241,8 @@ works after #7; the oracle exercises that and skips same-category.
 - Dashboard markdown-render XSS + directory-picker crash-safety.
 
 **Not covered**
-- The three deferred defects (#4, #8, #9) remain unfixed by design.
-- `frontmatter` validation of supersession references (a gap surfaced by #8).
+- #4 (lone-CR `upsert`) and #8's `renumber` *auto-fix* remain unfixed by design
+  (#8 is now *detected* by `check`).
 - The dashboard SPA itself (JS), SSE backpressure, and the live-reload watcher
   beyond its existing unit tests.
 - git-history paths (`src/history.rs`) — the oracle runs `date_source=filesystem`
@@ -265,13 +273,14 @@ PROPTEST_CASES=5000 just model
 
 ## 6. Recommendations
 
-1. **Land the fixes.** #1–#3, #5–#7, #10 are clean, root-caused, regression-guarded
-   fixes hardening real user-facing behavior (supersede correctness across every
-   scheme/layout, crash-safety of `show`/`list`, and a genuine dashboard XSS).
-2. **Schedule the deferred three.** #9 (per_category same-category links) is the
-   most user-visible; the fix is a source-category-aware `ref_in_link_from`. #8 and
-   #4 are narrower; pair #8's fix with extending `check` to validate frontmatter
-   supersession.
+1. **Land the fixes.** #1–#3, #5–#7, #9, #10 are clean, root-caused,
+   regression-guarded fixes hardening real user-facing behavior (supersede
+   correctness across every scheme/layout, crash-safety of `show`/`list`, a genuine
+   dashboard XSS, and per_category supersession). #8 is now detected by `check`.
+2. **Optionally close the last two.** #8's `renumber` auto-fix (make `renumber`
+   format-aware) and #4 (lone-CR `upsert`) are both narrow; #4 is best left, or
+   handled by normalizing a lone `\r` on read rather than touching the byte-
+   sensitive rewriters.
 3. **Keep the suites in CI** (done). They're cheap at the default budgets and pay
    for themselves the next time the write path, a parser, or the renderer is
    touched. Use `just model` for deeper soaks before a release.

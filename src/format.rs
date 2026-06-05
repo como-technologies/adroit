@@ -306,20 +306,25 @@ pub fn parse_markdown_section_status(input: &str) -> Option<Status> {
 /// be `None`.
 ///
 /// Exposed for `adroit check` so it can verify the referenced ADRs exist.
+///
+/// `source_category` is the category of the ADR whose section this is (only the
+/// `per_category` scheme uses it, to resolve a same-category link with no category
+/// segment); pass `None` for every other scheme.
 pub fn parse_markdown_section_supersession(
     input: &str,
     naming: crate::naming::NamingScheme,
+    source_category: Option<&str>,
 ) -> (Option<crate::naming::AdrRef>, Option<crate::naming::AdrRef>) {
     let region = parse_status_region(input);
     (
         region
             .supersedes
             .as_deref()
-            .and_then(|f| naming.ref_in_note(f)),
+            .and_then(|f| naming.ref_in_note_from(f, source_category)),
         region
             .superseded_by
             .as_deref()
-            .and_then(|f| naming.ref_in_note(f)),
+            .and_then(|f| naming.ref_in_note_from(f, source_category)),
     )
 }
 

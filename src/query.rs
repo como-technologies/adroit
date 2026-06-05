@@ -250,6 +250,9 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     let mut by_ident: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
     let scheme = store.options().naming;
     let markdown = store.options().format == Format::Markdown;
+    // Frontmatter supersession refs (YAML fields, not markdown links), collected
+    // for a broken-supersession check mirroring the markdown one below.
+    let mut fm_supersession: Vec<(String, Option<AdrRef>, Option<AdrRef>)> = Vec::new();
 
     for path in &files {
         let rel = path
@@ -289,6 +292,13 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 .entry(ident_key(&r))
                 .or_default()
                 .push(path.clone());
+        }
+        if !markdown {
+            fm_supersession.push((
+                rel.clone(),
+                adr.supersedes.clone(),
+                adr.superseded_by.clone(),
+            ));
         }
 
         // Markdown-specific checks need the file's raw text and section status.
@@ -348,8 +358,17 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             let Ok(content) = std::fs::read_to_string(path) else {
                 continue;
             };
-            let (supersedes, superseded_by) =
-                crate::format::parse_markdown_section_supersession(&content, scheme);
+            // The file's parent dir is the per_category category (ignored by other
+            // schemes), so a same-category supersession link resolves.
+            let source_category = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str());
+            let (supersedes, superseded_by) = crate::format::parse_markdown_section_supersession(
+                &content,
+                scheme,
+                source_category,
+            );
             for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
                 if let Some(r) = r
                     && !by_ident.contains_key(&ident_key(&r))
@@ -363,6 +382,32 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                         paths: Vec::new(),
                         message: format!(
                             "{rel}: ## Status says {kind} {disp} but no such ADR exists"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // (4b) Broken supersession in the frontmatter profile. There the refs are
+    // YAML fields (`supersedes:` / `superseded_by:`), not `## Status` links, so
+    // they're checked here against the same identity set — closing the gap that
+    // let a renumber strand a frontmatter supersession pointer silently.
+    if !markdown {
+        for (rel, supersedes, superseded_by) in &fm_supersession {
+            for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
+                if let Some(r) = r
+                    && !by_ident.contains_key(&ident_key(r))
+                {
+                    let disp = scheme.display(r);
+                    problems.push(Problem {
+                        severity: Severity::Error,
+                        kind: ProblemKind::BrokenSupersession,
+                        label: rel.clone(),
+                        summary: format!("frontmatter says {kind} {disp} but no such ADR exists"),
+                        paths: Vec::new(),
+                        message: format!(
+                            "{rel}: frontmatter says {kind} {disp} but no such ADR exists"
                         ),
                     });
                 }

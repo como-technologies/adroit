@@ -390,6 +390,18 @@ impl Store {
                 .and_then(|n| n.to_str())
                 .map(str::to_string);
         }
+        // For per_category markdown, a same-category supersession link carries no
+        // category segment, so `parse_markdown` (category-blind) can't resolve it.
+        // Re-resolve both directions with this ADR's category.
+        if self.opts.naming == NamingScheme::PerCategory && self.opts.format == Format::Markdown {
+            let (supersedes, superseded_by) = format::parse_markdown_section_supersession(
+                &content,
+                self.opts.naming,
+                adr.category.as_deref(),
+            );
+            adr.supersedes = supersedes;
+            adr.superseded_by = superseded_by;
+        }
         Ok(adr)
     }
 
