@@ -19,3 +19,8 @@
 
 - [CLI Reference](./reference/cli.md)
 - [ADR Format](./reference/adr-format.md)
+
+# Development
+
+- [Testing & Fuzzing](./dev/testing.md)
+- [Hardening & Quality](./dev/hardening.md)

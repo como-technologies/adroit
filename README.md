@@ -42,9 +42,11 @@ just model         # wide property soak (PROPTEST_CASES, default 2000)
 
 adroit has a model-based ("oracle") tester that drives the real binary through
 random command sequences across the format × layout × scheme matrix, plus parser
-fuzzing, forge fault-injection, and dashboard XSS tests. See
-[`docs/testing.md`](docs/testing.md) for how to run, soak, extend, and triage
-them — and how to drive an AI assistant to do it.
+fuzzing (incl. coverage-guided via bolero), forge fault-injection, and dashboard
+XSS tests. See
+[Testing & Fuzzing](docs/src/dev/testing.md) for how to run, soak, extend, and
+triage them — and how to drive an AI assistant to do it — and
+[Hardening & Quality](docs/src/dev/hardening.md) for the bug-finding campaign.
 
 ## Point it at your ADR repo
 

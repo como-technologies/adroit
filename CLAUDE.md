@@ -5,6 +5,23 @@ An interactive TUI (browse, triage, and in-terminal body editing) ships behind
 the `tui` feature; a read-only web dashboard (`adroit serve`) with auto
 live-reload ships behind the `web` feature.
 
+## Working agreements (IMPORTANT — read first)
+
+- **Never `git push` / force-push / create / merge / comment on PRs without the
+  user's explicit, in-the-moment permission.** Committing locally is fine and
+  expected; *publishing* is not. A one-time "push" or "create a PR" authorizes
+  *that* action only — ask again every subsequent time. Do not infer standing
+  permission.
+- **All documentation lives in the mdbook** (`docs/src/**`, wired into
+  `docs/src/SUMMARY.md`, built with `just book`). Do NOT create standalone
+  Markdown docs anywhere else (`docs/*.md`, parallel doc trees, ad-hoc reports).
+  One doc system, one style. Contributor/dev docs go under the book's
+  **Development** section.
+- **Keep code and docs in sync, always.** When you change behavior, update the
+  relevant mdbook page *and* this file in the same change, and verify by running
+  the CLI — docs must reflect what the code ACTUALLY does. Periodically sweep
+  code↔docs for drift. Run `just book` to confirm the manual builds.
+
 ## Build & Test
 
 Always use `just` recipes — never raw `cargo` or `mdbook` commands.
@@ -34,7 +51,12 @@ just run <args>  # run the binary
   (`summaries`/`detail`/`search`/`stats`/`graph`) that builds the view types
 - `src/history.rs` — git-derived ADR dates + lifecycle (shells `git log`)
 - `src/links.rs` — cross-ADR relative-link parsing + rewriting (pure helpers)
-- `tests/cli.rs` — integration tests against the compiled binary
+- `tests/` — integration suites: `cli.rs` (binary + every regression), `model.rs`
+  (model-based oracle over the format×layout×scheme×relink_scope matrix),
+  `parsers.rs` + `fuzz_parsers.rs` (parser properties / bolero coverage-guided fuzz),
+  `config_precedence.rs`, `date_source_git.rs`, `forge_faults.rs` + `forge_cli.rs`
+  (`--features forge`). See the book's **Development → Testing & Fuzzing** page
+  (`docs/src/dev/testing.md`); the campaign that built them is **Hardening & Quality**.
 - `docs/` — mdbook user manual source (`book.toml` + `src/`), published to
   GitHub Pages; build output goes to `docs/book/` (gitignored)
 - `justfile` — all dev workflow recipes
@@ -55,7 +77,12 @@ deliberately deferred to the web surface (`AdrDetail::body_html` stays `None`).
 **Repo validation is shared here too.** `query::check` runs the five `adroit
 check` rules (status/dir mismatch, duplicate identifiers, unparseable files,
 broken supersession, broken/stale links) and returns a structured
-`view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). The CLI's
+`view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). Both the
+supersession and the cross-ADR-link checks are **scheme-aware** — they resolve a
+link/ref to an ADR via the naming seam (`ref_in_link_from`), so date/uuid/
+per_category links classify *stale* (ADR moved → warning) vs *broken* (no such ADR
+→ error) correctly, not just numeric ones; supersession is validated in **both**
+profiles (the markdown `## Status` note and the frontmatter YAML field). The CLI's
 `cmd_check` renders that report — sorting `problem.message` so its output stays
 **byte-identical** (the `check_*` integration tests are the guard) — and the web
 `GET /api/check` endpoint serves it for the dashboard's repo-health panel.
@@ -87,6 +114,11 @@ warns once via a process `AtomicBool` when the repo isn't git or is shallow, the
 falls back), `filesystem` (skip git entirely — mtime/authored dates, no
 timeline). `query::open_history` centralizes this; `load_resolved`/`detail` go
 through it.
+
+"Today" (for the `date` scheme's `YYYYMMDD-` slug and review-due math) comes from
+`config::today_override()` then the system clock: a **test-only** `ADROIT_TODAY`
+(ISO `YYYY-MM-DD`) env override pins it deterministically for tests/CI without
+touching the clock; unset, behavior is unchanged. Distinct from `ADROIT_DATE_SOURCE`.
 
 ## Interactive TUI (`tui` feature)
 
@@ -136,7 +168,11 @@ reopened per request, so every response reflects current on-disk state.
 Markdown→HTML rendering is server-side (`pulldown-cmark`); `render_markdown`
 post-processes the event stream to **autolink bare `http(s)://` URLs** (e.g. the
 `## References` issue/PR links — CommonMark only autolinks `<url>`), skipping code
-blocks and existing links. No endpoint writes
+blocks and existing links. It is also the **XSS-sanitization seam**: pulldown-cmark
+is not a sanitizer, so `render_markdown` escapes raw HTML events to visible text and
+routes every link/image `dest_url` through `sanitize_href` (neutralizing
+`javascript:` / `data:` / `vbscript:` → `#`) — a crafted ADR body can't run script
+in the dashboard. No endpoint writes
 ADRs — authoring stays in CLI/TUI; the one mutating route, `POST /api/workspace`,
 only switches which directory the dashboard views (re-pointing the watcher), and
 the ADR side imports only the read path.
@@ -171,7 +207,10 @@ convention (status encoded by directory).
   only rewrites the `## Status` line and `> State:` banner; unchanged
   round-trips are byte-identical. See `src/format.rs`.
 - `format = frontmatter`: the original YAML-frontmatter + body format
-  (`src/frontmatter.rs`).
+  (`src/frontmatter.rs`). **Numeric-only** — its YAML persists a `number:`, so it
+  pairs only with the `sequential` scheme. `main` bails up front with a clear
+  message when `frontmatter` is combined with a slug scheme (`date`/`uuid`/
+  `per_category`) rather than failing deep in the serializer.
 - `layout = by_status` (default): ADRs grouped into `proposed/ accepted/
   rejected/ superseded/ deprecated/` subdirs; `README.md` and `adr-template.md`
   are skipped; `next_number` is the max across all subdirs + 1; status changes
@@ -288,7 +327,12 @@ then `relink`. `--file` disambiguates when `old` has two files.
 The naming/identity **seam** (`src/naming.rs`) — `AdrRef` + `NamingScheme`
 (`sequential`/`date`/`uuid`/`per_category`) + `Scope` — owns all scheme behavior
 (`assign`/`parse`/`parse_ref`/`filename`/`display`/`heading`/`link_label`/
-`ref_in_link`/`ref_matches`/`scope`), so adding a scheme edits only that module.
+`ref_in_link`/`ref_in_link_from`/`ref_matches`/`scope`), so adding a scheme edits
+only that module. (`ref_in_link_from(target, source_category)` is the
+category-aware variant: a per_category same-category link like `./0002-x.md`
+carries no category segment, so it's resolved relative to the source file's
+category; a pass-through for every other scheme. `relink` and `check` route
+through it.)
 Consumers route through it: `Store::write`/`read` assign+parse identity via the
 scheme and name files with `scheme.filename`; `next_ref`/`find_path_by_ref` and
 the `set_*_ref` mutation methods address ADRs by `AdrRef`; `template::render`
