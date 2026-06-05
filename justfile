@@ -8,7 +8,7 @@ init:
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
 # Run all CI checks (used by .github/workflows/ci.yml)
-ci: fmt-check lint lint-forge test test-forge book crate-outdated crate-audit
+ci: fmt-check lint lint-forge lint-web test test-forge test-web book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -26,6 +26,10 @@ lint:
 lint-forge:
     cargo clippy --features forge -- -D warnings
 
+# Run clippy with the web feature (read-only Axum dashboard)
+lint-web:
+    cargo clippy --features web -- -D warnings
+
 # Run all tests
 test *ARGS:
     cargo test {{ARGS}}
@@ -33,6 +37,11 @@ test *ARGS:
 # Run tests with the forge feature enabled
 test-forge *ARGS:
     cargo test --features forge {{ARGS}}
+
+# Run tests with the web feature enabled (JSON API + markdown-render security).
+# Builds without a Vue SPA present (the embed dir has a .gitkeep).
+test-web *ARGS:
+    cargo test --features web {{ARGS}}
 
 # Run only unit tests (skip integration tests)
 unit:

@@ -181,3 +181,41 @@ failure) to every `Forge` + `Tracker` method on all three adapters
   (src/forge/jira.rs)
 - **Note:** `Jira`'s `Forge` impl is an intentional `unreachable!` guard (Jira is
   only ever wired as a Tracker); the suite exercises only its tracker side.
+
+## Web / serve security (`src/serve/mod.rs` tests, `--features web`)
+
+The dashboard renders ADR *bodies* to HTML server-side and serves a directory
+picker. Tested both surfaces.
+
+### 10. Stored XSS — `render_markdown` passed raw HTML / `javascript:` through
+
+- **Found by:** new `serve` unit tests (`render_markdown_escapes_raw_block_html`,
+  `…_escapes_raw_inline_html`, `…_neutralizes_dangerous_link_schemes`).
+- **Cause:** `render_markdown` walked the pulldown-cmark event stream to autolink
+  bare URLs but emitted `Event::Html` / `Event::InlineHtml` verbatim and didn't
+  vet link/image URL schemes. pulldown-cmark is **not** a sanitizer, so a `<script>`
+  or `<img onerror=…>` in an ADR body, or a `[x](javascript:…)` link, rendered live
+  in the dashboard — stored XSS for anyone viewing a crafted ADR (e.g. from a
+  shared repo / a malicious PR) in `adroit serve`.
+- **Fix:** `render_markdown` now escapes raw HTML events to visible text and routes
+  every link/image `dest_url` through a new `sanitize_href` that neutralizes
+  `javascript:` / `data:` / `vbscript:` schemes (→ `#`). Code blocks and existing
+  http(s) links/autolinks are unaffected. (src/serve/mod.rs)
+- **Regressions:** the three `render_markdown_*` security tests.
+
+### Directory picker (`/api/browse`, `/api/workspace`) — no bug
+
+- These endpoints are **by design** an unhardened, local, single-user API that can
+  browse the whole filesystem and switch the active dir (read-only on ADRs — there
+  is no ADR write path). So filesystem "traversal" is intended, not a vuln.
+- The real risk — a hostile path crashing the server — is covered:
+  `browse_bad_path_is_a_clean_error_not_a_panic` confirms a nonexistent/invalid
+  path yields a clean `4xx` (via `require_dir`'s canonicalize-and-check), never a
+  panic or 500.
+
+### CI gap closed
+
+`web`-feature tests (including these) were not run by `just ci`. Added `lint-web`
++ `test-web` and folded them into `just ci` so the dashboard's JSON API and the
+markdown-render security tests are gated on every push. (The `web` feature builds
+without a Vue SPA — the embed dir has a `.gitkeep`.)
