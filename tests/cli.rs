@@ -463,6 +463,34 @@ fn frontmatter_check_flags_stranded_supersession() {
         .stderr(predicate::str::contains("no such ADR exists"));
 }
 
+/// Regression (hardening blitz #2/#12): under a slug scheme, a *stale* cross-ADR
+/// link (the ADR merely moved) must be a `check` **warning**, not a broken-link
+/// **error** — so a `relink_scope=self` deferred branch still passes `check`.
+/// Check #5 was numeric-only; for date/uuid/per_category it couldn't tell "ADR
+/// moved" (stale) from "no such ADR" (broken) and wrongly failed the repo.
+#[test]
+fn date_scheme_stale_link_passes_check_under_relink_scope_self() {
+    let dir = TempDir::new().unwrap();
+    let prof = ["--naming", "date", "--relink-scope", "self"];
+    let run = |args: &[&str]| {
+        adroit(&dir)
+            .env("ADROIT_TODAY", "2026-06-04")
+            .args(prof)
+            .args(args)
+            .assert()
+    };
+    run(&["new", "Alpha", "--no-edit"]).success(); // 20260604-alpha
+    run(&["new", "Beta", "--no-edit"]).success(); // 20260604-beta
+    // Alpha superseded by Beta → Alpha moves to superseded/ with a link to Beta
+    // (still in proposed/ at this point).
+    run(&["supersede", "20260604-beta", "20260604-alpha"]).success();
+    // Move Beta to accepted/. With relink_scope=self, Alpha's inbound link to Beta
+    // is intentionally left stale (deferred to a later full `relink`).
+    run(&["set-status", "20260604-beta", "accepted"]).success();
+    // The stale link must be a warning, so `check` still passes (exit 0).
+    run(&["check"]).success();
+}
+
 #[test]
 fn set_review_sets_and_clears_deadline_format_preserving() {
     let dir = TempDir::new().unwrap();

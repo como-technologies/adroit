@@ -136,6 +136,24 @@ generation now routes through the one canonical engine.
 - **Fix:** add the `"naming" => cli.naming…` arm. (src/main.rs)
 - **Regression:** `tests/config_precedence.rs::precedence_participates_for_every_profile_key`.
 
+### 12. `check`'s cross-ADR link validation was numeric-only
+
+- **Found by:** the oracle once it varied `relink_scope` (#2): under
+  `relink_scope=self` + a slug scheme, `check` reported a moved ADR's deferred
+  inbound link as a **broken-link error**.
+- **Cause:** check #5 resolved a link to an ADR via `number_in_target` +
+  `by_number_path`, both empty for slug schemes (date/uuid/per_category), so it
+  couldn't distinguish a *stale* link (ADR moved — a warning) from a *broken* one
+  (no such ADR — an error) and wrongly flagged stale slug links as broken. That
+  **breaks the `relink_scope=self/none` heal-on-main flow for slug schemes** — a
+  deferred branch fails `check`.
+- **Fix:** check #5 now resolves links scheme-aware via
+  `naming::ref_in_link_from` against the identity set (mirroring `relink` and
+  check #4); numeric output stays byte-identical (`ADR-N`, the byte-identical
+  guard tests still pass). Removed the now-dead `by_number` map. (src/query.rs)
+- **Regression:** `tests/cli.rs::date_scheme_stale_link_passes_check_under_relink_scope_self`,
+  plus the oracle's `relink_scope` variation.
+
 ## Found — deferred (low severity)
 
 ### 4. `upsert_reference` is non-idempotent on input containing a lone `\r`

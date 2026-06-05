@@ -67,6 +67,10 @@ struct Profile {
     format: Format,
     layout: Layout,
     naming: NamingScheme,
+    /// How much a status-change *move* auto-relinks. `All` heals the whole repo
+    /// (so it stays link-canonical after every command); `SelfOnly`/`None` defer
+    /// inbound-link healing to a later explicit `relink` (the heal-on-main flow).
+    relink_scope: RelinkScope,
 }
 
 impl Profile {
@@ -78,7 +82,15 @@ impl Profile {
             review_overdue_days: None,
             date_source: DateSource::Filesystem,
             naming: self.naming,
-            relink_scope: RelinkScope::All,
+            relink_scope: self.relink_scope,
+        }
+    }
+
+    fn relink_scope_arg(&self) -> &'static str {
+        match self.relink_scope {
+            RelinkScope::All => "all",
+            RelinkScope::SelfOnly => "self",
+            RelinkScope::None => "none",
         }
     }
 
@@ -187,7 +199,7 @@ impl Harness {
                 "--date-source",
                 "filesystem",
                 "--relink-scope",
-                "all",
+                self.profile.relink_scope_arg(),
             ])
             .env("ADROIT_TODAY", TODAY)
             .env("EDITOR", "true")
@@ -435,17 +447,24 @@ impl Harness {
             errors
         );
 
-        // (E) The repo is link-canonical: a relink dry-run rewrites nothing.
-        let relink = store
-            .relink(false)
-            .map_err(|e| TestCaseError::fail(format!("relink dry-run: {e}")))?;
-        prop_assert_eq!(
-            relink.files_changed,
-            0,
-            "{:?} not link-canonical; relink would rewrite {:?}",
-            self.profile,
-            relink.changed_files
-        );
+        // (E) Under `relink_scope = all`, the repo is link-canonical after every
+        // command — a relink dry-run rewrites nothing. Under `self`/`none`,
+        // inbound links are intentionally left for a later explicit `relink`
+        // (heal-on-main), so per-command canonicality doesn't hold; that path is
+        // checked at end-of-sequence convergence instead (see `run_cell`). Any
+        // such stale link is a `check` Warning, not an Error, so (D) still holds.
+        if self.profile.relink_scope == RelinkScope::All {
+            let relink = store
+                .relink(false)
+                .map_err(|e| TestCaseError::fail(format!("relink dry-run: {e}")))?;
+            prop_assert_eq!(
+                relink.files_changed,
+                0,
+                "{:?} not link-canonical; relink would rewrite {:?}",
+                self.profile,
+                relink.changed_files
+            );
+        }
 
         Ok(())
     }
@@ -492,6 +511,7 @@ fn arb_profile() -> impl Strategy<Value = Profile> {
         format,
         layout,
         naming,
+        relink_scope: RelinkScope::All,
     };
     use Format::*;
     use Layout::*;
@@ -499,7 +519,7 @@ fn arb_profile() -> impl Strategy<Value = Profile> {
     // The `frontmatter` format is numeric-only, so it pairs only with the
     // `sequential` scheme (date / uuid / per_category are slug-based and adroit
     // refuses them under frontmatter — see the `new`-time guard).
-    prop_oneof![
+    let cell = prop_oneof![
         5 => Just(p(Markdown, ByStatus, Sequential)),
         2 => Just(p(Markdown, Flat, Sequential)),
         2 => Just(p(Frontmatter, ByStatus, Sequential)),
@@ -509,13 +529,43 @@ fn arb_profile() -> impl Strategy<Value = Profile> {
         3 => Just(p(Markdown, ByStatus, Uuid)),
         1 => Just(p(Markdown, Flat, Uuid)),
         2 => Just(p(Markdown, ByCategory, PerCategory)),
-    ]
+    ];
+    // Mostly `all` (keeps the strong per-command link-canonicality invariant);
+    // `self`/`none` exercise the deferred heal-on-main path (checked via
+    // end-of-sequence convergence in `run_cell`).
+    let scope = prop_oneof![
+        3 => Just(RelinkScope::All),
+        1 => Just(RelinkScope::SelfOnly),
+        1 => Just(RelinkScope::None),
+    ];
+    (cell, scope).prop_map(|(cell, relink_scope)| Profile {
+        relink_scope,
+        ..cell
+    })
 }
 
 fn run_cell(profile: Profile, ops: &[Op]) -> Result<(), TestCaseError> {
     let mut h = Harness::new(profile);
     for op in ops {
         h.apply(op)?;
+        h.check_invariants()?;
+    }
+    // Convergence (esp. for relink_scope = self/none, which defer inbound-link
+    // healing): an explicit full `relink` must leave the repo link-canonical and
+    // idempotent, with no loss of state.
+    if !h.model.is_empty() {
+        h.run(&["relink"])?;
+        let store = h.store()?;
+        let relink = store
+            .relink(false)
+            .map_err(|e| TestCaseError::fail(format!("relink convergence: {e}")))?;
+        prop_assert_eq!(
+            relink.files_changed,
+            0,
+            "{:?}: relink did not converge to canonical: {:?}",
+            h.profile,
+            relink.changed_files
+        );
         h.check_invariants()?;
     }
     Ok(())
@@ -582,6 +632,7 @@ fn logical_state(root: &Path) -> BTreeMap<u32, (String, Status)> {
         format: Format::Markdown,
         layout: Layout::ByStatus,
         naming: NamingScheme::Sequential,
+        relink_scope: RelinkScope::All,
     }
     .store_options();
     let store = Store::open_with(root, opts).unwrap();
