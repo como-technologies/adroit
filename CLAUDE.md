@@ -12,6 +12,11 @@ live-reload ships behind the `web` feature.
   expected; *publishing* is not. A one-time "push" or "create a PR" authorizes
   *that* action only — ask again every subsequent time. Do not infer standing
   permission.
+- **Never write a bare `#<number>` in any GitHub-rendered text** — commit messages,
+  PR titles/descriptions, PR/issue comments — because GitHub auto-links it to an
+  unrelated issue/PR. Use `bug N` / `finding N` / `rule N` / plain `N` (or a table
+  cell `| N |`, which does not link) instead. This applies to internal blitz / bug /
+  check-rule numbers, which are NOT GitHub issues.
 - **All documentation lives in the mdbook** (`docs/src/**`, wired into
   `docs/src/SUMMARY.md`, built with `just book`). Do NOT create standalone
   Markdown docs anywhere else (`docs/*.md`, parallel doc trees, ad-hoc reports).
@@ -21,6 +26,37 @@ live-reload ships behind the `web` feature.
   relevant mdbook page *and* this file in the same change, and verify by running
   the CLI — docs must reflect what the code ACTUALLY does. Periodically sweep
   code↔docs for drift. Run `just book` to confirm the manual builds.
+
+## Design principles — statelessness & idempotency (architectural invariant)
+
+adroit is **stateless** and its commands are **idempotent where it makes sense**.
+Treat both as invariants every change must preserve:
+
+- **The only state is the filesystem.** A command's entire input is the ADR
+  documents on disk *plus* the config resolved at startup (flag > process-env >
+  `.env` > `config.yaml` > default). There is no daemon, database, cache, index
+  file, lock file, or session/cross-command state. The single process-global
+  (`GIT_STRICT_WARNED` in `query.rs`) is a warn-once-per-process UX flag that
+  resets on every invocation and never affects output. `adroit serve` reopens the
+  store **per request**, so every response reflects current on-disk state; its only
+  in-process state is the active-dir pointer + the live-reload watcher, both scoped
+  to that one `serve` run.
+- **Converge, don't accumulate.** A mutating command reads current on-disk state,
+  computes the target, and writes **only what differs** (minimal-diff; a file
+  already in the target state round-trips byte-identical). Re-running the same
+  command with the same args on the same on-disk state is therefore a no-op.
+- **Idempotent verbs** (re-run = byte-identical): `set-status`, `supersede`,
+  `set-review`, `relink`, `migrate` (converges to a fixpoint, then "nothing to
+  migrate"), `index`, `link`/link-rewriting, `publish`, `check` (read-only).
+- **Intentionally non-idempotent verbs** are *imperative events*, not
+  *desired-state assertions*, so repeating them repeats the event — by design:
+  `new` (allocates the next ADR each run), `renumber old new` (one-shot rename;
+  re-running fails because `old` no longer exists), `notify` (posts a fresh
+  message), and the forge/git side effects (issue/PR creation, commit, push).
+- **New write paths must keep this true.** Don't introduce hidden persisted state
+  (caches, lock files, a daemon) or a mutation that changes a file it didn't need
+  to. The guard test `commands_are_idempotent` (in `tests/cli.rs`) runs the
+  idempotent verbs twice and asserts the repo is byte-identical — keep it green.
 
 ## Build & Test
 

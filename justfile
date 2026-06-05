@@ -81,9 +81,10 @@ serve *ARGS: web-build
 serve-forge *ARGS: web-build
     cargo run --features web,forge -- serve {{ARGS}}
 
-# Check for outdated dependencies
+# Check for outdated dependencies (skipped if cargo-outdated isn't installed;
+# `just init` installs it and GitHub CI always runs it)
 crate-outdated:
-    cargo outdated
+    @if command -v cargo-outdated >/dev/null 2>&1; then cargo outdated; else echo "skip: cargo-outdated not installed (run 'just init')"; fi
 
 # Upgrade dependencies (including incompatible versions)
 crate-upgrade:
@@ -93,9 +94,10 @@ crate-upgrade:
 crate-update:
     cargo update
 
-# Audit dependencies for known vulnerabilities
+# Audit dependencies for known vulnerabilities (skipped if cargo-audit isn't
+# installed; `just init` installs it and GitHub CI always runs it)
 crate-audit:
-    cargo audit
+    @if command -v cargo-audit >/dev/null 2>&1; then cargo audit; else echo "skip: cargo-audit not installed (run 'just init')"; fi
 
 # Upgrade deps, update lockfile, audit, and test
 crate-refresh: crate-upgrade crate-update crate-audit test

@@ -44,6 +44,26 @@ fn adr_files(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Snapshot every file under `root` (relative path → bytes), including
+/// `SUMMARY.md`. Used by the idempotency guards for byte-identical before/after
+/// comparisons of the whole tree.
+fn snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn walk(dir: &Path, root: &Path, out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, root, out);
+            } else {
+                let rel = p.strip_prefix(root).unwrap().to_path_buf();
+                out.insert(rel, fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Markdown / by_status (default) profile
 // ---------------------------------------------------------------------------
@@ -1323,6 +1343,80 @@ fn migrate_dry_run_does_not_apply() {
     // --dry-run wins over --yes: nothing moved.
     assert!(dir.path().join("proposed/0001-one.md").exists());
     assert!(!dir.path().join("0001-one.md").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Statelessness / idempotency invariant
+//
+// Guards the design principle (CLAUDE.md "Design principles", book dev/design.md):
+// the only state is the filesystem, and every converge-style verb is idempotent —
+// re-running it on an unchanged tree is a byte-for-byte no-op.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn commands_are_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let run = |args: &[&str]| adroit(&dir).args(args).assert().success();
+
+    // A small repo with a status change, a supersession, a review deadline, and a
+    // regenerated index — so relink/index/etc. all have real work to (not) redo.
+    run(&["new", "First", "--no-edit"]);
+    run(&["new", "Second", "--no-edit"]);
+    run(&["new", "Third", "--no-edit"]);
+    run(&["new", "Fourth", "--no-edit"]);
+    run(&["new", "Fifth", "--no-edit"]);
+
+    // The converge-style verbs: each asserts a desired state. Distinct ADRs per
+    // verb so the *first* loop pass below is already a no-op (1 is accepted, 4
+    // supersedes 5, 2 has a deadline — none conflict).
+    let converge: &[&[&str]] = &[
+        &["set-status", "1", "accepted"],
+        &["supersede", "4", "5"],
+        &["set-review", "2", "2030-01-01"],
+        &["index"],
+        &["relink"],
+    ];
+    for argv in converge {
+        run(argv);
+    }
+
+    // Re-running every converge verb on the now-canonical tree must change
+    // nothing — same files, byte-identical contents (incl. SUMMARY.md).
+    let before = snapshot(dir.path());
+    for argv in converge {
+        run(argv);
+    }
+    let after = snapshot(dir.path());
+    assert_eq!(
+        before, after,
+        "re-running converge-style verbs must be a byte-for-byte no-op"
+    );
+}
+
+#[test]
+fn migrate_is_idempotent_at_fixpoint() {
+    let dir = TempDir::new().unwrap();
+    let run = |args: &[&str]| adroit(&dir).args(args).assert().success();
+    run(&["new", "One", "--no-edit"]);
+    run(&["new", "Two", "--no-edit"]);
+    run(&["set-status", "2", "accepted"]);
+
+    // Converge to the flat layout.
+    run(&["--layout", "flat", "migrate", "--yes"]);
+    let before = snapshot(dir.path());
+
+    // A second migrate to the same target is a no-op: it reports nothing to do
+    // and leaves every file byte-identical.
+    adroit(&dir)
+        .args(["--layout", "flat", "migrate", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to migrate"));
+    assert_eq!(
+        before,
+        snapshot(dir.path()),
+        "re-running migrate at its fixpoint must change nothing"
+    );
 }
 
 #[test]
