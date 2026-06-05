@@ -4,9 +4,17 @@
 
 ### Repo selection
 
-Global — inherited by every subcommand and shown under **Repo selection** in each
-`--help`. They work before *or* after the subcommand (`adroit --dir X list` and
-`adroit list --dir X` are equivalent).
+`--dir` is **global** — inherited by every subcommand, shown under **Repo
+selection** in each `--help`, and accepted before *or* after the subcommand
+(`adroit --dir X list` and `adroit list --dir X` are equivalent).
+
+The on-disk **shape** flags below (`--format`, `--layout`, `--naming`,
+`--date-source`, `--relink-scope`) are **top-level only** — pass them *before*
+the subcommand (`adroit --format frontmatter migrate`) or, more usually, set them
+once via `config` / `.env` (the `ADROIT_*` env var binds everywhere regardless of
+position). They're listed on `adroit --help` (the full top-level reference) but
+kept **off** each subcommand's `--help` so per-command help stays terse — run
+`adroit --help` to see them.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -177,7 +185,7 @@ listed by `adroit show`, and drawn as a distinct edge in the dashboard's
 relationship graph. Adding validates that the target exists.
 
 This is a **frontmatter-profile** feature; under the markdown profile it errors
-with a hint to run `adroit migrate --format frontmatter`. See
+with a hint to run `adroit --format frontmatter migrate`. See
 [ADR Format → Relationships](./adr-format.md#relationships).
 
 ```sh

@@ -103,7 +103,12 @@ Options:
 {options}{after-help}")
 )]
 pub struct Cli {
-    // --- Repo selection (global: inherited by every subcommand) -------------
+    // --- Repo selection ------------------------------------------------------
+    // `--dir` is the one global (inherited by every subcommand); the on-disk
+    // *shape* flags below (format/layout/naming/date_source/relink_scope) are
+    // top-level-only so they don't clutter every subcommand's `--help`. The env
+    // var still binds everywhere and they're listed on `adroit --help`; set them
+    // in config / `.env`, or before the subcommand (e.g. `adroit --format … new`).
     /// ADR directory (overrides config; default `~/.local/share/adroit/`).
     ///
     /// Also settable via the `ADROIT_DIR` environment variable (e.g. from a
@@ -123,7 +128,6 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
-        global = true,
         env = "ADROIT_FORMAT",
         help_heading = "Repo selection"
     )]
@@ -135,7 +139,6 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
-        global = true,
         env = "ADROIT_LAYOUT",
         help_heading = "Repo selection"
     )]
@@ -148,7 +151,6 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
-        global = true,
         env = "ADROIT_NAMING",
         help_heading = "Repo selection"
     )]
@@ -162,7 +164,6 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
-        global = true,
         env = "ADROIT_DATE_SOURCE",
         help_heading = "Repo selection"
     )]
@@ -176,7 +177,6 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
-        global = true,
         env = "ADROIT_RELINK_SCOPE",
         help_heading = "Repo selection"
     )]

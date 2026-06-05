@@ -123,7 +123,7 @@ The link is recorded in the source ADR's frontmatter, shows in `adroit show`,
 and appears as a distinct, colored edge in the dashboard's
 [relationship graph](./web.md). Typed links are a **frontmatter-profile**
 feature (they're structured fields); under the markdown profile `adroit link`
-asks you to switch with `adroit migrate --format frontmatter`. The targets use
+asks you to switch with `adroit --format frontmatter migrate`. The targets use
 the same identifiers as everything else (number / slug / uuid / `category/NNNN`).
 
 ## Setting a review deadline
