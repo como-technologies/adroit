@@ -94,6 +94,9 @@ enum Op {
     SetStatus { which: usize, status: Status },
     Supersede { newer: usize, older: usize },
     SetReview { which: usize, clear: bool },
+    /// Renumber the selected ADR to a fresh (always-free) number. Sequential
+    /// scheme only — only emitted for sequential cells.
+    Renumber { which: usize },
     Relink,
 }
 
@@ -219,6 +222,23 @@ impl Harness {
                     self.model[i].review_by = Some(REVIEW_DATE.to_string());
                 }
             }
+            Op::Renumber { which } => {
+                let Some(i) = self.find(*which) else {
+                    return Ok(());
+                };
+                let old = self.model[i].number;
+                // max + 1 is always an unused number, so renumber never collides.
+                let new = self.next_number();
+                self.run(&["renumber", &old.to_string(), &new.to_string()])?;
+                self.model[i].number = new;
+                // renumber relabels every inbound `[ADR-old]` reference, so any
+                // supersession pointer at `old` now points at `new`.
+                for a in &mut self.model {
+                    if a.superseded_by == Some(old) {
+                        a.superseded_by = Some(new);
+                    }
+                }
+            }
             Op::Relink => {
                 self.run(&["relink"])?;
             }
@@ -271,20 +291,23 @@ impl Harness {
             );
 
             // by_status: the file must live in the directory its status implies.
-            let parent = path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            let dir_name = status_dir_name(m.status);
-            prop_assert_eq!(
-                parent,
-                dir_name.as_str(),
-                "ADR-{} is in `{}/` but status is {:?}",
-                n,
-                parent,
-                m.status
-            );
+            // (flat/by_category encode status in content, not the directory.)
+            if matches!(self.profile.layout, Layout::ByStatus) {
+                let parent = path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                let dir_name = status_dir_name(m.status);
+                prop_assert_eq!(
+                    parent,
+                    dir_name.as_str(),
+                    "ADR-{} is in `{}/` but status is {:?}",
+                    n,
+                    parent,
+                    m.status
+                );
+            }
 
             prop_assert_eq!(&adr.title, &m.title, "ADR-{} title mismatch", n);
 
@@ -359,7 +382,9 @@ fn arb_status() -> impl Strategy<Value = Status> {
     ]
 }
 
-fn arb_op() -> impl Strategy<Value = Op> {
+/// Commands valid under the **sequential** scheme (includes `renumber`, which is
+/// sequential-only).
+fn arb_op_sequential() -> impl Strategy<Value = Op> {
     prop_oneof![
         3 => arb_title().prop_map(|title| Op::New { title }),
         3 => (any::<usize>(), arb_status())
@@ -368,33 +393,55 @@ fn arb_op() -> impl Strategy<Value = Op> {
             .prop_map(|(newer, older)| Op::Supersede { newer, older }),
         1 => (any::<usize>(), any::<bool>())
             .prop_map(|(which, clear)| Op::SetReview { which, clear }),
+        1 => any::<usize>().prop_map(|which| Op::Renumber { which }),
         1 => Just(Op::Relink),
     ]
 }
 
-fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
-    prop::collection::vec(arb_op(), 1..16)
+fn arb_ops_sequential() -> impl Strategy<Value = Vec<Op>> {
+    prop::collection::vec(arb_op_sequential(), 1..16)
+}
+
+/// Run a generated command sequence against one matrix cell, asserting every
+/// invariant after each command.
+fn run_cell(profile: Profile, ops: &[Op]) -> Result<(), TestCaseError> {
+    let mut h = Harness::new(profile);
+    for op in ops {
+        h.apply(op)?;
+        h.check_invariants()?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// The oracle test (smallest matrix cell: markdown / by_status / sequential)
+// The oracle tests — one per matrix cell. Default 256 cases (the CI budget);
+// override with `PROPTEST_CASES=N` for a wider soak.
 // ---------------------------------------------------------------------------
 
 proptest! {
-    // Default 256 cases (the CI budget); override with `PROPTEST_CASES=N` for a
-    // wider soak — `ProptestConfig::default()` honors that env var.
     #![proptest_config(ProptestConfig::default())]
 
     #[test]
-    fn oracle_markdown_by_status_sequential(ops in arb_ops()) {
-        let mut h = Harness::new(Profile {
-            format: Format::Markdown,
-            layout: Layout::ByStatus,
-            naming: NamingScheme::Sequential,
-        });
-        for op in &ops {
-            h.apply(op)?;
-            h.check_invariants()?;
-        }
+    fn oracle_markdown_by_status_sequential(ops in arb_ops_sequential()) {
+        run_cell(
+            Profile {
+                format: Format::Markdown,
+                layout: Layout::ByStatus,
+                naming: NamingScheme::Sequential,
+            },
+            &ops,
+        )?;
+    }
+
+    #[test]
+    fn oracle_markdown_flat_sequential(ops in arb_ops_sequential()) {
+        run_cell(
+            Profile {
+                format: Format::Markdown,
+                layout: Layout::Flat,
+                naming: NamingScheme::Sequential,
+            },
+            &ops,
+        )?;
     }
 }
