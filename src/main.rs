@@ -691,9 +691,15 @@ fn add_supersedes_note(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) 
     let mut updated = content.trim_end_matches(['\n', '\r']).to_string();
     updated.push_str(newline);
     updated.push_str(newline);
-    // Relative link from new's dir to old's (now in superseded/).
+    // Relative link from new's dir to old's (now in superseded/). Use the same
+    // canonical engine `relink` uses (`links::rel_link`) so the note's link is
+    // born canonical (e.g. `./0002-x.md` for a same-dir target). Computing it any
+    // other way leaves the repo non-canonical — a follow-up `relink` would then
+    // rewrite this note, breaking the "relink is a no-op after a status op"
+    // invariant. (`relative_link` here would omit the `./` for a same-dir target.)
     let old_path = store.find_path_by_ref(old)?;
-    let link = relative_link(&path, &old_path);
+    let new_dir = path.parent().unwrap_or(std::path::Path::new(""));
+    let link = adroit::links::rel_link(new_dir, &old_path);
     updated.push_str(&format!("> Supersedes [{old_label}]({link})"));
     updated.push_str(newline);
     std::fs::write(&path, updated)?;

@@ -80,3 +80,7 @@ predicates = "3"
 tempfile = "3"
 # Used by the web feature's request-level tests (BodyExt::collect on responses).
 http-body-util = "0.1"
+# Model-based / property testing for the hardening blitz (tests/model.rs):
+# random command sequences against an in-memory oracle, asserting adroit's
+# documented invariants after every step.
+proptest = "1"

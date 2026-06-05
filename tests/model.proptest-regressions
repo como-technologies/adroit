@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 451c31badf93311eaccc2b9ed2b3faca41f5c5be97bb0e88b7c2b4da8b6886b2 # shrinks to ops = [New { title: "a" }, New { title: "a" }, SetStatus { which: 672874973566760346, status: Superseded }, Supersede { newer: 7022392096942162166, older: 1858520651692186987 }]
+cc 36ea4fb41b934a8a20c20bd1c741b1810c89c82eb261c664622b224adbe66d52 # shrinks to ops = [New { title: "a" }, New { title: "a" }, SetStatus { which: 1320049945356019766, status: Superseded }, Supersede { newer: 5121281396866283630, older: 4724764991557532843 }, Supersede { newer: 357369750586765169, older: 3055883782966506776 }]

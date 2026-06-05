@@ -196,6 +196,94 @@ fn supersede_moves_old_and_links_both() {
     assert!(new_content.contains("Supersedes [ADR-0001]"));
 }
 
+/// Regression (hardening blitz, model-based oracle): when the *newer* ADR is
+/// itself already in `superseded/`, `supersede` adds the reciprocal
+/// "Supersedes [..]" note with a **same-directory** link. That link must be in
+/// the canonical `./` form `relink` produces, so the repo stays link-canonical
+/// and a follow-up `relink` is a no-op (the documented invariant). Previously the
+/// note was written as a bare `0002-beta.md` (no `./`), so `relink` would then
+/// rewrite it — leaving `supersede` output non-canonical.
+#[test]
+fn supersede_when_new_is_already_superseded_leaves_links_canonical() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success(); // ADR-0001
+    adroit(&dir)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success(); // ADR-0002
+    // Move ADR-0001 into superseded/ via a plain status change.
+    adroit(&dir)
+        .args(["set-status", "1", "superseded"])
+        .assert()
+        .success();
+    // Supersede ADR-0002 by ADR-0001 — both now live in superseded/.
+    adroit(&dir)
+        .args(["supersede", "1", "2"])
+        .assert()
+        .success();
+
+    // The reciprocal note's same-dir link is canonical (`./`).
+    let new = fs::read_to_string(dir.path().join("superseded/0001-alpha.md")).unwrap();
+    assert!(
+        new.contains("Supersedes [ADR-0002](./0002-beta.md)"),
+        "reciprocal note must use the canonical ./ link form, got:\n{new}"
+    );
+
+    // And the repo is link-canonical: a relink dry-run rewrites nothing.
+    adroit(&dir)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
+/// Regression (hardening blitz, model-based oracle): superseding an ADR that is
+/// **already** in `superseded/` (the old ADR doesn't move) must still write a
+/// canonical `## Status` "Superseded by [..]" link. The old side's link is
+/// produced by `Store::supersede`, which previously only canonicalized links when
+/// the file moved dirs — so re-superseding in place left a bare `0002-x.md` link
+/// (no `./`), and the repo was no longer link-canonical.
+#[test]
+fn supersede_in_place_writes_canonical_status_link() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Alpha", "--no-edit"])
+        .assert()
+        .success(); // ADR-0001
+    adroit(&dir)
+        .args(["new", "Beta", "--no-edit"])
+        .assert()
+        .success(); // ADR-0002
+    // Put BOTH ADRs in superseded/ so the supersede target doesn't move.
+    adroit(&dir)
+        .args(["set-status", "1", "superseded"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["set-status", "2", "superseded"])
+        .assert()
+        .success();
+    // Supersede ADR-0001 by ADR-0002 — old is already in superseded/ (no move).
+    adroit(&dir)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .success();
+
+    let old = fs::read_to_string(dir.path().join("superseded/0001-alpha.md")).unwrap();
+    assert!(
+        old.contains("Superseded by [ADR-0002](./0002-beta.md)"),
+        "in-place supersede must write the canonical ./ status link, got:\n{old}"
+    );
+    adroit(&dir)
+        .args(["relink", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical"));
+}
+
 #[test]
 fn set_review_sets_and_clears_deadline_format_preserving() {
     let dir = TempDir::new().unwrap();

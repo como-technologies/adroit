@@ -1028,9 +1028,15 @@ impl Store {
 
     /// Compute the relative markdown link from the superseded dir (where the
     /// old ADR will live) to `to_path` (the superseding ADR's current file).
+    ///
+    /// Routes through the canonical link engine [`crate::links::rel_link`] (the
+    /// same one `relink` uses) so the written link is already canonical — e.g. a
+    /// same-dir target gets the `./` prefix. Otherwise an in-place supersede (the
+    /// old ADR already in `superseded/`, so no move triggers a relink) would leave
+    /// a non-canonical link and the repo would fail the relink-is-a-no-op invariant.
     fn relative_link_to(&self, to_path: &Path) -> String {
         let from_dir = self.status_dir(Status::Superseded);
-        pathdiff(&from_dir, to_path)
+        crate::links::rel_link(&from_dir, to_path)
     }
 }
 
@@ -1098,23 +1104,6 @@ fn today_local() -> time::Date {
     time::OffsetDateTime::now_local()
         .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
         .date()
-}
-
-/// Compute a relative path from a directory to a target file using `../`.
-/// Both inputs should share the same ancestor `root`.
-fn pathdiff(from_dir: &Path, to_file: &Path) -> String {
-    let from: Vec<_> = from_dir.components().collect();
-    let to: Vec<_> = to_file.components().collect();
-    let mut i = 0;
-    while i < from.len() && i < to.len() && from[i] == to[i] {
-        i += 1;
-    }
-    let ups = from.len() - i;
-    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), ups).collect();
-    for c in &to[i..] {
-        parts.push(c.as_os_str().to_string_lossy().into_owned());
-    }
-    parts.join("/")
 }
 
 #[cfg(test)]
