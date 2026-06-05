@@ -38,6 +38,12 @@ test-forge *ARGS:
 unit:
     cargo test --lib
 
+# Hardening-blitz soak: the model-based oracle + parser property tests at a wider
+# case budget. Override depth with PROPTEST_CASES, e.g. `PROPTEST_CASES=5000 just model`.
+# (Both also run in `just ci` via `just test` at proptest's default 256 cases.)
+model *ARGS:
+    PROPTEST_CASES="${PROPTEST_CASES:-2000}" cargo test --test model --test parsers {{ARGS}}
+
 # Type-check without building
 check:
     cargo check

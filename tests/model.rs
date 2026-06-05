@@ -16,6 +16,7 @@
 //! Spec: docs/superpowers/specs/2026-06-04-adroit-hardening-blitz-design.md
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::Command;
 
 use adroit::adr::Status;
@@ -445,3 +446,96 @@ proptest! {
         )?;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Migrate metamorphic property: a layout-only round-trip is byte-identical
+// ---------------------------------------------------------------------------
+
+/// Run `adroit` at `dir` with explicit profile `flags`, capturing output.
+fn adroit_at(dir: &Path, flags: &[&str], args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_adroit"))
+        .arg("--dir")
+        .arg(dir)
+        .args(flags)
+        .env("EDITOR", "true")
+        .env("VISUAL", "true")
+        .args(args)
+        .output()
+        .expect("spawn adroit")
+}
+
+/// Every ADR file under `root` (recursively), keyed by its leading number, as
+/// raw bytes — so the same ADR can be compared across a layout change that moves
+/// files between directories.
+fn adr_contents_by_number(root: &Path) -> BTreeMap<u32, String> {
+    fn walk(dir: &Path, out: &mut BTreeMap<u32, String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.eq_ignore_ascii_case("README.md")
+                    || name.eq_ignore_ascii_case("adr-template.md")
+                {
+                    continue;
+                }
+                let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(n) = digits.parse::<u32>() {
+                    out.insert(n, std::fs::read_to_string(&p).unwrap());
+                }
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(root, &mut out);
+    out
+}
+
+const MD_SEQ: [&str; 4] = ["--format", "markdown", "--naming", "sequential"];
+
+proptest! {
+    #![proptest_config(ProptestConfig::default())]
+
+    /// A markdown repo migrated by_status → flat → by_status must come back
+    /// byte-for-byte identical. The sequences are link-free (only `new` +
+    /// `set-status`, no `supersede`), so a layout migration is a verbatim file
+    /// move and the trailing relink is a no-op — the round-trip is the identity.
+    #[test]
+    fn migrate_layout_round_trip_is_byte_identical(
+        titles in prop::collection::vec(arb_title(), 1..6),
+        status_idx in prop::collection::vec(0usize..5, 1..6),
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let by_status: Vec<&str> = MD_SEQ.iter().chain(["--layout", "by_status"].iter()).copied().collect();
+        let flat: Vec<&str> = MD_SEQ.iter().chain(["--layout", "flat"].iter()).copied().collect();
+
+        for (i, title) in titles.iter().enumerate() {
+            let out = adroit_at(dir.path(), &by_status, &["new", title, "--no-edit"]);
+            prop_assert!(out.status.success(), "new failed: {}", String::from_utf8_lossy(&out.stderr));
+            let status = STATUSES[status_idx[i % status_idx.len()]];
+            let n = (i + 1).to_string();
+            let out = adroit_at(dir.path(), &by_status, &["set-status", &n, &status.to_string().to_lowercase()]);
+            prop_assert!(out.status.success(), "set-status failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+
+        let before = adr_contents_by_number(dir.path());
+
+        let out = adroit_at(dir.path(), &flat, &["migrate", "--yes"]);
+        prop_assert!(out.status.success(), "migrate to flat failed: {}", String::from_utf8_lossy(&out.stderr));
+        let out = adroit_at(dir.path(), &by_status, &["migrate", "--yes"]);
+        prop_assert!(out.status.success(), "migrate back failed: {}", String::from_utf8_lossy(&out.stderr));
+
+        let after = adr_contents_by_number(dir.path());
+        prop_assert_eq!(before, after, "layout round-trip was not byte-identical");
+    }
+}
+
+/// All five statuses, indexable by the generated `status_idx`.
+const STATUSES: [Status; 5] = [
+    Status::Proposed,
+    Status::Accepted,
+    Status::Rejected,
+    Status::Deprecated,
+    Status::Superseded,
+];
