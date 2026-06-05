@@ -27,9 +27,15 @@ minor API inconsistency:
 | 8 | `renumber` strands a frontmatter supersession ref | core | **Detect-fixed** ¹ |
 | 9 | `per_category` *same-category* cross-ADR links don't resolve | core | **Fixed** |
 | 10 | **Stored XSS** — dashboard rendered raw HTML / `javascript:` | web | **Fixed** |
+| 11 | `config show`/`get naming` ignored `--naming` / `ADROIT_NAMING` | config | **Fixed** |
+| 12 | `check`'s cross-ADR link validation was numeric-only (broke slug heal-on-main) | core | **Fixed** |
 | — | `Jira::with_transport` was `#[cfg(test)]`-gated unlike siblings | forge | **Fixed** |
 
-**9 of the 10 fixed (or detect-fixed), each with a regression test.** Only #4
+**12 findings total; 11 fixed (or detect-fixed), each with a regression test** —
+#11 and #12 came from the follow-up coverage-widening (config precedence + the
+oracle's `relink_scope` variation), documented in
+[`hardening-blitz-worklog.md`](hardening-blitz-worklog.md) and
+[`../testing.md`](../testing.md). Only #4
 (lone-CR) remains fully deferred; #8's *auto-fix* is deferred but it is no longer
 silent — ¹ `check` now validates frontmatter supersession and flags the stranded
 ref. (#9 and the #8 detection were fixed in a follow-up pass after the full-matrix

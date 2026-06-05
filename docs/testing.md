@@ -21,9 +21,13 @@ adroit is tested in layers, cheapest/most-deterministic first:
 |---|---|---|---|
 | **Unit tests** | `#[cfg(test)]` in each `src/*.rs` | pure functions behave | instant |
 | **CLI integration** | `tests/cli.rs` | the real binary does X on a temp repo (incl. every regression) | fast |
-| **Model-based oracle** | `tests/model.rs` | random command sequences never violate the invariants, across the format × layout × scheme matrix | ~40s |
-| **Parser properties / fuzz** | `tests/parsers.rs` | the parsers never panic and obey round-trip/idempotence laws on arbitrary input | ~1s |
+| **Model-based oracle** | `tests/model.rs` | random command sequences never violate the invariants, across the format × layout × scheme × relink_scope matrix | ~40s |
+| **Parser properties** | `tests/parsers.rs` | the parsers never panic and obey round-trip/idempotence laws on arbitrary input (random) | ~1s |
+| **Coverage-guided fuzz** | `tests/fuzz_parsers.rs` (bolero) | same parser laws, but coverage-guided under `cargo bolero` | ~1s |
+| **Config precedence** | `tests/config_precedence.rs` | a setting resolves flag > env > `.env` > `config.yaml` > default | fast |
+| **`date_source=git`** | `tests/date_source_git.rs` | the git-history timeline reconstruction is correct on real git repos | ~0.5s |
 | **Forge fault-injection** | `tests/forge_faults.rs` (`--features forge`) | the GitHub/GitLab/Jira HTTP adapters never panic on hostile responses | ~1s |
+| **Forge CLI graceful** | `tests/forge_cli.rs` (`--features forge`) | a down/inactive forge keeps the local ADR (never loses it) | ~0.1s |
 | **Web security** | `src/serve/mod.rs` tests (`--features web`) | the dashboard's markdown renderer can't be XSS'd; the dir picker can't crash | ~0.5s |
 
 The big one is the **oracle** (`tests/model.rs`): it generates a random matrix
@@ -175,17 +179,21 @@ but it is not exhaustive. The current coverage map, the known gaps (e.g.
 orchestration), and the deferred defects are documented in
 [`hardening-blitz-findings.md`](superpowers/hardening-blitz-findings.md) §4.
 
-### Roadmap (in progress)
+### Landed (the gap-closing suites)
 
-These are being added to close the highest-yield gaps; each lands as its own suite
-+ a section here:
+The highest-yield gaps from the findings doc §4 are now covered (the widening
+found two more bugs — #11 config-naming, #12 numeric-only link check):
 
-1. **Config/env precedence** — `tests/config_precedence.rs`: flag > env > `.env` >
-   `config.yaml` > default.
-2. **`relink_scope` in the oracle** — `all`/`self`/`none`, with the
-   link-canonicality invariant conditioned on scope.
-3. **Coverage-guided parser fuzzing** — `tests/fuzz_parsers.rs` (bolero). *(above)*
-4. **`date_source=git`** — a git-backed oracle variant exercising the timeline
-   reconstruction in `src/history.rs`.
-5. **Forge CLI orchestration** — the `--forge` flows end-to-end against a mock
-   HTTP server.
+1. ✅ **Config/env precedence** — `tests/config_precedence.rs` (found #11).
+2. ✅ **`relink_scope` in the oracle** — `all`/`self`/`none`, link-canonicality
+   conditioned on scope + end-of-sequence convergence (found #12).
+3. ✅ **Coverage-guided parser fuzzing** — `tests/fuzz_parsers.rs` (bolero, above).
+4. ✅ **`date_source=git`** — `tests/date_source_git.rs` (git timeline; no bug).
+5. ✅ **Forge CLI graceful degradation** — `tests/forge_cli.rs` (no bug).
+
+### Still open
+
+- **Forge happy-path live wiring** — issue+PR creation against a mock HTTP server
+  with a git remote (the heaviest piece; the orchestration cores are unit-tested
+  with mock adapters and the adapters are fuzzed, so this is the live-glue gap).
+- The deferred defects #4 (lone-CR) and #8's `renumber` auto-fix.
