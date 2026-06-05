@@ -119,6 +119,19 @@ runs the command against both, then `check_invariants()`:
 the only valid pairing for that scheme/layout), then generates a command
 sequence valid for that config.
 
+**Per-config command-validity gating (required).** The generator must only emit
+commands the active config actually accepts, or it will manufacture false
+"bugs" from the CLI's legitimate refusals. Known gates:
+- `Renumber` is **sequential-only** — the CLI bails for `date`/`uuid`/
+  `per_category`. Emit it only under `sequential`.
+- `Migrate` is **refused to/from `by_category`** — only emit it between the
+  other layout/format configs.
+- `New` requires `--category` under `by_category`; omit `category` otherwise.
+- `SetStatus`/`Supersede`/`SetReview`/`SetBody`/`Relink` are valid across all
+  configs.
+The plan should enumerate the full gate table so the generator and the model
+agree on which commands are legal in each cell.
+
 **Shrinking → reproducible script** — on failure proptest minimizes the
 `Vec<Command>` to a minimal failing sequence, which we render as a
 ready-to-paste `#[test]` that replays those commands. This is the
@@ -185,9 +198,15 @@ sequence becomes a regression `#[test]` via the same path.
 - **Deterministic replay** — proptest regression seeds are committed so every
   discovered failure replays identically.
 - **Nondeterminism risk (a): `now_local()`** — `review_by` / overdue math reads
-  the local clock. Tamed with a minimal fixed-date injection seam behind test
-  config (env / `ADROIT_DATE_SOURCE` + an injectable "today"). This is the only
-  production-code touch beyond bug fixes; it stays minimal and test-gated.
+  the local clock via `query::today()` (`OffsetDateTime::now_local()`, no
+  injection point today). Tamed with a minimal fixed-"today" injection seam.
+  **This is a *distinct* mechanism from `ADROIT_DATE_SOURCE`** — that var
+  selects the date *source* (`auto`/`git`/`filesystem`); it does **not** carry
+  an injected date value, so do not overload it. Introduce a separate test-only
+  channel (e.g. an `ADROIT_TODAY=YYYY-MM-DD` override read by `query::today()`,
+  or a clock parameter threaded through `StoreOptions`). This is the only
+  production-code touch beyond bug fixes; the default (unset) path stays
+  byte-identical to today and the override only activates under test config.
 - **Nondeterminism risk (b): git-derived history** — history/dates need a git
   work tree. The core oracle runs with `date_source = filesystem` to stay
   git-free; a separate, smaller suite inits a real git repo to exercise the
@@ -199,12 +218,17 @@ sequence becomes a regression `#[test]` via the same path.
 `tests/forge_faults.rs`, `proptest-regressions/`, the `just model` recipe + CI
 wiring, and a `WORKLOG`/docs note listing every bug → fix → guarding regression.
 
-**Stopping condition:**
-- The model-based harness runs its case budget green across the full
-  format × layout × scheme matrix.
-- Parser properties green.
-- Forge fault suite green.
-- Every bug found is fixed and guarded by a committed regression test.
+**Stopping condition** (concrete budgets — the plan may tune these):
+- **CI gate (`just ci`)** — a bounded run that stays fast: the model-based
+  harness at proptest's default `PROPTEST_CASES = 256` per entry point, parser
+  properties at the same default, forge faults exhaustive over their (small)
+  fault × verb × dir-match product. Target: well under a minute added to CI.
+- **Wide manual pass (`just model`)** — a longer soak, e.g.
+  `PROPTEST_CASES = 10_000` (or a fixed multi-minute wall-clock budget) across
+  the full format × layout × scheme matrix, run during the blitz and before
+  declaring done.
+- Both green, **and** every bug found is fixed and guarded by a committed
+  regression test (which replays at the CI budget).
 
 ## 7. Sequencing (by bug-yield)
 
