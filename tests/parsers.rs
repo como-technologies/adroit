@@ -9,7 +9,7 @@
 //!    `upsert_reference` / `links::rewrite_links` are idempotent, and a parsed
 //!    markdown ADR's body round-trips (parse → body → re-parse is a fixpoint).
 //!
-//! Spec: docs/superpowers/specs/2026-06-04-adroit-hardening-blitz-design.md
+//! See the book's Hardening & Quality page (docs/src/dev/hardening.md).
 
 use std::path::{Path, PathBuf};
 
@@ -88,16 +88,6 @@ fn arb_link_doc() -> impl Strategy<Value = String> {
         0..12,
     )
     .prop_map(|parts| parts.join(" "))
-}
-
-/// LF-only arbitrary text. The rewrite/upsert idempotence laws assume a
-/// consistent newline convention — adroit only ever writes `\n` (or preserves an
-/// existing `\r\n`), both of which are idempotent. A *lone* `\r` defeats the
-/// helpers' newline detection (it fuses with a joined `\n` into `\r\n` on the
-/// next pass) and is a **known, deferred** robustness gap, recorded in
-/// docs/superpowers/hardening-blitz-worklog.md — not exercised by these laws.
-fn arb_lf_text() -> impl Strategy<Value = String> {
-    arb_text().prop_map(|s| s.replace('\r', ""))
 }
 
 fn arb_ref() -> impl Strategy<Value = AdrRef> {
@@ -186,7 +176,7 @@ proptest! {
     /// Rewriting a document's status to S, then to S again, is a no-op the second
     /// time (the rewrite is idempotent).
     #[test]
-    fn rewrite_status_is_idempotent(text in arb_lf_text(), idx in 0usize..5) {
+    fn rewrite_status_is_idempotent(text in arb_text(), idx in 0usize..5) {
         let status = STATUSES[idx];
         let once = format::rewrite_status(&text, status, None);
         let twice = format::rewrite_status(&once, status, None);
@@ -195,7 +185,7 @@ proptest! {
 
     /// Removing the `Review by:` line twice is the same as removing it once.
     #[test]
-    fn rewrite_review_by_clear_is_idempotent(text in arb_lf_text()) {
+    fn rewrite_review_by_clear_is_idempotent(text in arb_text()) {
         let once = format::rewrite_review_by(&text, None);
         let twice = format::rewrite_review_by(&once, None);
         prop_assert_eq!(&once, &twice, "rewrite_review_by(None) not idempotent");
@@ -204,7 +194,7 @@ proptest! {
     /// Upserting the same `label: url` reference twice is byte-identical to once.
     #[test]
     fn upsert_reference_is_idempotent(
-        text in arb_lf_text(),
+        text in arb_text(),
         // A real bullet label has no newline or `:` and is non-empty; a url has no
         // newline. Generate valid ones directly rather than filtering.
         label in "[A-Za-z0-9._-][A-Za-z0-9 ._-]{0,14}",

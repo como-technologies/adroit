@@ -33,15 +33,16 @@ default path is unchanged.
 
 ## Findings
 
-12 defects found; 11 fixed (or detect-fixed), each guarded by a regression. Only
-#4 (lone-`\r`) and #8's `renumber` auto-fix remain deferred.
+12 defects found; **all fixed** (or detect-fixed), each guarded by a regression.
+Only #8's `renumber` *auto-fix* remains deferred — and it is no longer silent
+(`check` flags the stranded ref).
 
 | # | Defect | Surface | Status |
 |---|--------|---------|--------|
 | 1 | `supersede` reciprocal note used a non-canonical same-dir link | core | Fixed |
 | 2 | In-place `supersede` wrote a non-canonical `## Status` link | core | Fixed |
 | 3 | `NamingScheme::display` panicked on a multibyte uuid slug | parser | Fixed |
-| 4 | `upsert_reference` non-idempotent on a lone-`\r` document | parser | Deferred |
+| 4 | `upsert_reference` non-idempotent on a lone-`\r` document | parser | Fixed |
 | 5 | `uuid` supersede produced a repo that failed `check` | core | Fixed |
 | 6 | `frontmatter` + a slug scheme failed with a cryptic error | core | Fixed |
 | 7 | `by_category` supersede wrote a broken link | core | Fixed |
@@ -65,9 +66,10 @@ default path is unchanged.
   the canonical `links::rel_link` by dropping the same-dir `./`; supersession links
   now go through the one engine. A model-based invariant ("relink is always a
   no-op") catches this class that example tests miss.
-- **Robustness on hostile input** (#3, #10) — `display` byte-slicing and the
-  dashboard markdown renderer both trusted their input; fixed to operate on chars
-  and to escape raw HTML / neutralize dangerous URL schemes.
+- **Robustness on hostile input** (#3, #4, #10) — `display` byte-slicing, the
+  rewriters' newline detection (a lone `\r`), and the dashboard markdown renderer
+  all trusted their input; fixed to operate on chars, normalize a lone `\r`, and
+  escape raw HTML / neutralize dangerous URL schemes.
 
 ## Coverage & remaining gaps
 
@@ -81,5 +83,5 @@ Still open:
 - **Forge happy-path live wiring** — issue+PR creation against a mock HTTP server
   with a git remote (the orchestration cores are unit-tested with mock adapters and
   the adapters are fuzzed; this is the live-glue gap).
-- **#4** (lone-`\r` `upsert` idempotence) and **#8's `renumber` auto-fix** —
-  narrow; deferred (the `check` half of #8 is fixed, so #8 is no longer silent).
+- **#8's `renumber` auto-fix** — narrow; deferred. The `check` half of #8 is fixed,
+  so the stranded ref is no longer silent.

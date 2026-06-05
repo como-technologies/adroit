@@ -12,8 +12,8 @@
 //! assertions below also catch logic drift. When a run finds something, minimize it
 //! and add it to the target's corpus, then fix.
 //!
-//! See `docs/testing.md` and
-//! `docs/superpowers/hardening-blitz-findings.md`.
+//! See the book's Development pages: Testing & Fuzzing (docs/src/dev/testing.md)
+//! and Hardening & Quality (docs/src/dev/hardening.md).
 
 use std::path::{Path, PathBuf};
 
@@ -45,11 +45,7 @@ fn fuzz_format_helpers() {
 
         let once = format::rewrite_status(input, Status::Accepted, None);
         let twice = format::rewrite_status(&once, Status::Accepted, None);
-        // A lone `\r` defeats the newline detection (deferred bug #4); skip the
-        // idempotence claim for those, matching `tests/parsers.rs`.
-        if !input.contains('\r') {
-            assert_eq!(once, twice, "rewrite_status not idempotent");
-        }
+        assert_eq!(once, twice, "rewrite_status not idempotent");
     });
 }
 

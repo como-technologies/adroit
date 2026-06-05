@@ -11,7 +11,7 @@
 //! The file is empty without the `forge` feature; it runs under `just test-forge`
 //! (folded into `just ci`).
 //!
-//! Spec: docs/superpowers/specs/2026-06-04-adroit-hardening-blitz-design.md
+//! See the book's Hardening & Quality page (docs/src/dev/hardening.md).
 
 #![cfg(feature = "forge")]
 

@@ -360,9 +360,9 @@ fn frontmatter_rejects_slug_naming_with_clear_error() {
 /// segment) pointing at a nonexistent file. Cross-category links carry the
 /// category, so they now resolve and `check` passes.
 ///
-/// (A *same-category* supersede is a separate, deeper limitation — `ref_in_link`
-/// can't recover the per_category identity from a category-less `./<file>` link.
-/// Tracked in docs/superpowers/hardening-blitz-worklog.md.)
+/// (The *same-category* case — `ref_in_link` recovering the per_category identity
+/// from a category-less `./<file>` link — is now also fixed; see
+/// `per_category_same_category_supersede_passes_check`.)
 #[test]
 fn per_category_cross_category_supersede_passes_check() {
     let dir = TempDir::new().unwrap();

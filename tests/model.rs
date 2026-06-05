@@ -19,7 +19,7 @@
 //! Determinism: `ADROIT_TODAY` pins "today" so the `date` scheme's `YYYYMMDD-`
 //! slugs are stable; the oracle runs `date_source=filesystem` to stay git-free.
 //!
-//! Spec: docs/superpowers/specs/2026-06-04-adroit-hardening-blitz-design.md
+//! See the book's Hardening & Quality page (docs/src/dev/hardening.md).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
