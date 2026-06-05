@@ -33,9 +33,7 @@ default path is unchanged.
 
 ## Findings
 
-12 defects found; **all fixed** (or detect-fixed), each guarded by a regression.
-Only #8's `renumber` *auto-fix* remains deferred — and it is no longer silent
-(`check` flags the stranded ref).
+12 defects found; **all fixed**, each guarded by a regression.
 
 | # | Defect | Surface | Status |
 |---|--------|---------|--------|
@@ -46,15 +44,17 @@ Only #8's `renumber` *auto-fix* remains deferred — and it is no longer silent
 | 5 | `uuid` supersede produced a repo that failed `check` | core | Fixed |
 | 6 | `frontmatter` + a slug scheme failed with a cryptic error | core | Fixed |
 | 7 | `by_category` supersede wrote a broken link | core | Fixed |
-| 8 | `renumber` strands a frontmatter supersession ref | core | Detect-fixed¹ |
+| 8 | `renumber` strands a frontmatter supersession ref | core | Fixed¹ |
 | 9 | `per_category` same-category cross-ADR links didn't resolve | core | Fixed |
 | 10 | Stored XSS — dashboard rendered raw HTML / `javascript:` | web | Fixed |
 | 11 | `config show`/`get naming` ignored `--naming` / `ADROIT_NAMING` | config | Fixed |
 | 12 | `check`'s cross-ADR link validation was numeric-only | core | Fixed |
 | — | `Jira::with_transport` was `#[cfg(test)]`-gated unlike siblings | forge | Fixed |
 
-¹ `check` now validates frontmatter supersession and flags the stranded ref; the
-`renumber` *auto-fix* is deferred.
+¹ Two-layer fix: `renumber` now retargets the bare-number frontmatter ref through
+the model (`frontmatter::remap_numeric_refs`), reaching what the markdown-link
+relabeler can't, and `check`'s frontmatter-supersession validation remains as a
+backstop.
 
 ### Notable themes
 
@@ -83,5 +83,3 @@ Still open:
 - **Forge happy-path live wiring** — issue+PR creation against a mock HTTP server
   with a git remote (the orchestration cores are unit-tested with mock adapters and
   the adapters are fuzzed; this is the live-glue gap).
-- **#8's `renumber` auto-fix** — narrow; deferred. The `check` half of #8 is fixed,
-  so the stranded ref is no longer silent.

@@ -442,11 +442,12 @@ fn per_category_same_category_supersede_passes_check() {
         .stdout(predicate::str::contains("canonical"));
 }
 
-/// Regression (hardening blitz, #8 check-half): `check` now validates frontmatter
+/// Regression (hardening blitz, #8 check-half): `check` validates frontmatter
 /// supersession refs (the YAML `superseded_by:` field), not just markdown
-/// `## Status` links. A `renumber` that strands a frontmatter pointer is no longer
-/// silent — `check` reports it and exits non-zero. (Auto-fixing the pointer in
-/// `renumber` is deferred; catching it loudly is the win.)
+/// `## Status` links. This is the backstop that keeps a dangling pointer from
+/// being silent — e.g. when the target ADR is removed out-of-band. (`renumber`
+/// itself no longer strands these; it remaps the YAML ref — see
+/// `renumber_rewrites_frontmatter_supersession_ref`.)
 #[test]
 fn frontmatter_check_flags_stranded_supersession() {
     let dir = TempDir::new().unwrap();
@@ -468,13 +469,10 @@ fn frontmatter_check_flags_stranded_supersession() {
         .success(); // ADR-1 superseded_by: 2
     adroit(&dir).args(fm).args(["check"]).assert().success();
 
-    // Renumbering ADR-2 strands ADR-1's `superseded_by: 2` (renumber doesn't
-    // rewrite YAML refs) — check must now catch it.
-    adroit(&dir)
-        .args(fm)
-        .args(["renumber", "2", "3"])
-        .assert()
-        .success();
+    // Remove ADR-2 out-of-band, stranding ADR-1's `superseded_by: 2`. The check
+    // rule resolves the bare-number YAML ref against the identity set and must
+    // flag it as a broken supersession.
+    fs::remove_file(dir.path().join("proposed/0002-beta.md")).unwrap();
     adroit(&dir)
         .args(fm)
         .args(["check"])
@@ -1236,6 +1234,53 @@ fn renumber_resolves_duplicate_with_file_flag() {
         "the other 0009 is untouched"
     );
     adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn renumber_rewrites_frontmatter_supersession_ref() {
+    // In the frontmatter profile, supersession is a bare-number YAML field
+    // (`superseded_by: N`), not a markdown link. Renumbering the *superseding*
+    // ADR must retarget that inbound ref so it isn't stranded (the markdown
+    // profile heals the equivalent `## Status` link via relabeling).
+    let dir = TempDir::new().unwrap();
+    adroit_flat(&dir)
+        .args(["new", "First", "--no-edit"])
+        .assert()
+        .success();
+    adroit_flat(&dir)
+        .args(["new", "Second", "--no-edit"])
+        .assert()
+        .success();
+    // ADR 2 supersedes ADR 1 -> ADR 1's YAML gains `superseded_by: 2`.
+    adroit_flat(&dir)
+        .args(["supersede", "2", "1"])
+        .assert()
+        .success();
+    let one = dir.path().join("0001-first.md");
+    assert!(
+        fs::read_to_string(&one)
+            .unwrap()
+            .contains("superseded_by: 2"),
+        "precondition: ADR 1 records the supersession"
+    );
+
+    // Renumber the superseding ADR 2 -> 9.
+    adroit_flat(&dir)
+        .args(["renumber", "2", "9"])
+        .assert()
+        .success();
+
+    let one_after = fs::read_to_string(&one).unwrap();
+    assert!(
+        one_after.contains("superseded_by: 9"),
+        "the inbound frontmatter ref must follow the renumber:\n{one_after}"
+    );
+    assert!(
+        !one_after.contains("superseded_by: 2"),
+        "the stranded ref must be gone:\n{one_after}"
+    );
+    // No stranded supersession -> `check` is clean.
+    adroit_flat(&dir).arg("check").assert().success();
 }
 
 // ---------------------------------------------------------------------------

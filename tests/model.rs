@@ -318,33 +318,16 @@ impl Harness {
                     return Ok(());
                 };
                 let old = self.model[i].addr.clone();
-                // #8 (deferred auto-fix): under frontmatter, renumber doesn't
-                // rewrite the YAML `superseded_by:` field, so renumbering an ADR
-                // that another points at would strand that pointer — which `check`
-                // now flags. Skip that case (the bug is documented; the fix is
-                // making renumber format-aware).
-                if self.profile.format == Format::Frontmatter
-                    && self
-                        .model
-                        .iter()
-                        .any(|a| a.superseded_by.as_deref() == Some(old.as_str()))
-                {
-                    return Ok(());
-                }
                 let new = self.next_number().to_string();
                 self.run(&["renumber", &old, &new])?;
                 self.model[i].addr = new.clone();
-                // renumber relabels inbound markdown `[ADR-old]` links, so a
-                // supersession pointer at `old` follows to `new` — but ONLY in the
-                // markdown profile. In the frontmatter profile the supersession is
-                // a YAML field that renumber's text relabel doesn't touch, so the
-                // pointer is left dangling at `old` (a known, deferred bug — see
-                // hardening-blitz-worklog.md). Model the actual behavior.
-                if self.profile.format == Format::Markdown {
-                    for a in &mut self.model {
-                        if a.superseded_by.as_deref() == Some(old.as_str()) {
-                            a.superseded_by = Some(new.clone());
-                        }
+                // renumber retargets every inbound reference to this ADR: markdown
+                // `[ADR-old]` links via relabeling, and (since #8 was fixed) the
+                // frontmatter YAML `superseded_by:` field via the model remap. So a
+                // supersession pointer at `old` follows to `new` in BOTH profiles.
+                for a in &mut self.model {
+                    if a.superseded_by.as_deref() == Some(old.as_str()) {
+                        a.superseded_by = Some(new.clone());
                     }
                 }
             }

@@ -796,9 +796,19 @@ impl Store {
                 continue;
             }
             let content = std::fs::read_to_string(&path)?;
-            let (rewritten, n) = crate::links::relabel_links_to(
+            let (mut rewritten, mut n) = crate::links::relabel_links_to(
                 &content, &old_base, &new_base, &old_label, &new_label,
             );
+            // Frontmatter ADRs carry their supersession + typed-link refs as bare
+            // numbers in the YAML block, not as markdown links, so the relabel
+            // above can't reach them — remap them through the model so a renumber
+            // doesn't strand e.g. another ADR's `superseded_by: <old>`.
+            if self.opts.format == Format::Frontmatter
+                && let Some(remapped) = crate::frontmatter::remap_numeric_refs(&rewritten, old, new)
+            {
+                rewritten = remapped;
+                n += 1;
+            }
             if n > 0 && rewritten != content {
                 std::fs::write(&path, rewritten)?;
                 report.files_updated += 1;

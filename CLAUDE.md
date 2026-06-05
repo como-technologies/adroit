@@ -358,7 +358,11 @@ prints `OK: N ADRs, M warning(s)` and exits 0. `query.rs` reuses
 number: rename the file, rewrite its heading + self-refs, then
 `links::relabel_links_to` retargets+relabels inbound `[ADR-old](…)` links
 matched by **basename** (so a same-number/different-slug sibling is untouched),
-then `relink`. `--file` disambiguates when `old` has two files.
+then `relink`. `--file` disambiguates when `old` has two files. In the
+**frontmatter** profile supersession/typed-link refs are bare numbers in the
+YAML block (not markdown links), so renumber also remaps those through the model
+(`frontmatter::remap_numeric_refs`) — otherwise an inbound `superseded_by: <old>`
+would be stranded; `check`'s frontmatter-supersession rule is the backstop.
 
 The naming/identity **seam** (`src/naming.rs`) — `AdrRef` + `NamingScheme`
 (`sequential`/`date`/`uuid`/`per_category`) + `Scope` — owns all scheme behavior
