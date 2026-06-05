@@ -11,275 +11,267 @@
 
 ## 1. Executive summary
 
-I built a deterministic, bug-hunting test backbone for adroit and drove it hard.
-The campaign found **4 real defects** and a minor API inconsistency:
+I built a deterministic, bug-hunting test backbone for adroit and drove it hard
+across the whole feature surface. The campaign found **10 real defects** plus a
+minor API inconsistency:
 
-| # | Defect | Severity | Status |
-|---|--------|----------|--------|
-| 1 | `supersede` reciprocal note used a non-canonical same-dir link | Low–med | **Fixed** + regression |
-| 2 | In-place `supersede` wrote a non-canonical `## Status` link (no relink on a non-move) | Low–med | **Fixed** + regression |
-| 3 | `NamingScheme::display` **panicked** on a multibyte uuid slug (`&s[..8]` byte slice) | Medium | **Fixed** + regression |
-| 4 | `upsert_reference` non-idempotent on a lone-`\r` document | Low | **Deferred** (documented) |
-| — | `Jira::with_transport` was `#[cfg(test)]`-gated unlike its siblings | Trivial | **Fixed** (consistency) |
+| # | Defect | Surface | Status |
+|---|--------|---------|--------|
+| 1 | `supersede` reciprocal note used a non-canonical same-dir link | core | **Fixed** |
+| 2 | In-place `supersede` wrote a non-canonical `## Status` link | core | **Fixed** |
+| 3 | `NamingScheme::display` **panicked** on a multibyte uuid slug | parser | **Fixed** |
+| 4 | `upsert_reference` non-idempotent on a lone-`\r` document | parser | Deferred |
+| 5 | `uuid` supersede produced a repo that **failed `check`** | core | **Fixed** |
+| 6 | `frontmatter` + a slug scheme failed with a cryptic error | core | **Fixed** |
+| 7 | `by_category` supersede wrote a **broken link** | core | **Fixed** |
+| 8 | `renumber` leaves stale frontmatter supersession refs | core | Deferred |
+| 9 | `per_category` *same-category* cross-ADR links don't resolve | core | Deferred |
+| 10 | **Stored XSS** — dashboard rendered raw HTML / `javascript:` | web | **Fixed** |
+| — | `Jira::with_transport` was `#[cfg(test)]`-gated unlike siblings | forge | **Fixed** |
 
-Bugs #1–#3 are fixed at the root cause, each guarded by a focused regression test.
-Bug #4 is a genuine but degenerate-input robustness gap (adroit never *writes*
-lone-CR files); it is documented with a fix recommendation rather than chased with
-a risky cross-cutting change.
+**7 fixed at root cause, each with a regression test; 3 deferred** (each a real
+but narrow/peripheral defect whose proper fix is cross-cutting and risky — they
+are documented with a fix recommendation rather than chased without a deliberate
+go-ahead).
 
-The lasting artifacts are **three reusable test suites** that now run in CI and a
-`just model` soak recipe:
+The lasting artifacts are **four reusable test suites** wired into CI, a small
+production test-seam, and a `just model` soak recipe:
 
-- `tests/model.rs` — a model-based ("oracle") tester for the core write path.
+- `tests/model.rs` — the model-based ("oracle") tester for the core write path,
+  covering the full **format × layout × naming** matrix (9 valid cells) plus
+  migrate round-trips.
 - `tests/parsers.rs` — property/fuzz tests for the pure parsers.
 - `tests/forge_faults.rs` — fault-injection for the forge HTTP adapters.
+- `src/serve/mod.rs` tests — markdown-render XSS + directory-picker crash-safety
+  (now run in CI via the new `just test-web`).
 
-Full suite after the campaign: **213 lib unit + 73 CLI + 3 model + 9 parser + 1
-forge-fault** tests green; `cargo clippy` clean in both feature modes; `cargo fmt`
-clean.
+Suite totals after the campaign: **243 lib unit + 76 CLI + 3 model + 9 parser +
+1 forge-fault** green (`--features web`), all serve tests green; `cargo clippy`
+and `cargo fmt` clean across the default, `forge`, and `web` feature builds.
 
 ---
 
 ## 2. Approach — how I tested
 
-The guiding idea (chosen with the user up front): a **deterministic Rust backbone**
-that encodes adroit's *documented* invariants, with **Claude as the live
-explorer** that drives the binary, triages anomalies, and crystallizes each one
-into a permanent regression. The AI finds unknown-unknowns; the deterministic
-layer locks them down forever. Three complementary modalities:
+The guiding idea (agreed with the user up front): a **deterministic Rust backbone**
+that encodes adroit's *documented* invariants, with **Claude as the live explorer**
+that drives the binary, triages anomalies, and crystallizes each one into a
+permanent regression. The AI finds unknown-unknowns; the deterministic layer locks
+them down forever. Four complementary modalities:
 
 ### 2.1 Model-based "oracle" testing (the core)
 
-adroit advertises unusually strong invariants — *byte-identical round-trips*,
-*idempotent relink → no-op on a canonical repo*, *status-encoded-by-directory*,
-*scheme-agnostic identity*. That is ideal ground for model-based testing.
+adroit advertises strong invariants — *byte-identical round-trips*, *idempotent
+relink → no-op on a canonical repo*, *status-encoded-by-directory*,
+*scheme-agnostic identity*. Ideal ground for model-based testing.
 
-`tests/model.rs` generates a **random sequence of mutating CLI commands** and runs
-each against the **real `adroit` binary** on a throwaway `TempDir`. Crucially, it
-drives the *actual binary* (not the library) so the full stack — `main.rs`
-dispatch, template rendering, the `Store` write path — is exercised exactly as a
-user runs it. In parallel, a tiny **in-memory oracle** tracks what the repo
-*should* contain. The oracle is a pure **outcome predictor** — it never
-re-implements adroit's serialization or move logic, only the *observable result*
-of each verb — so the oracle itself stays small and is unlikely to carry its own
-bugs (a risk the spec review explicitly flagged).
+`tests/model.rs` generates a random **matrix cell** (format × layout × scheme) and
+a random **sequence of mutating CLI commands**, runs each command against the
+**real `adroit` binary** on a throwaway `TempDir` (so the full stack — `main.rs`
+dispatch, templates, the `Store` write path — runs exactly as a user runs it), and
+tracks what the repo *should* contain in a tiny in-memory **oracle**. The oracle is
+a pure **outcome predictor**: it never re-implements adroit's serialization/move
+logic. For schemes whose identity isn't deterministic (uuid; date with dedup) it
+**reads the assigned identity back** from disk after `new`, then predicts
+everything else — so the oracle stays small and is unlikely to carry its own bugs
+(a risk the spec review flagged).
 
 After **every** command it asserts:
+- **(A)** the set of ADR identities on disk equals the oracle's (no lost / extra /
+  duplicate ADRs);
+- **(B)** in `by_status`, each ADR sits in the directory its status implies;
+- **(C)** title, status, supersession pointer, review date, and category match;
+- **(D)** `adroit check` reports zero `Error`-severity problems;
+- **(E)** the repo is link-canonical — a `relink` dry-run rewrites **nothing**.
 
-- **(A) State agreement** — the set of ADRs on disk equals the oracle's, by
-  identity; no missing, extra, or duplicate ADRs.
-- **(B) Status ↔ directory** — in `by_status`, each ADR lives in the directory its
-  status implies; in `flat`, status is read from content.
-- **(C) Field agreement** — title, status, supersession pointer, and review date
-  match the oracle.
-- **(D) Clean `check`** — `query::check` reports zero `Error`-severity problems.
-- **(E) Link-canonicality** — a `relink` dry-run rewrites **nothing** (the repo is
-  always canonical after a status operation; relink is a true no-op).
+**Matrix covered (9 valid cells):** `{markdown,frontmatter} × {by_status,flat} ×
+sequential`, `markdown × {by_status,flat} × {date,uuid}`, and `markdown ×
+by_category × per_category`. (frontmatter pairs only with sequential — see #6.)
+Commands: `new`, `set-status`, `supersede`, `set-review`, `renumber`, `relink`,
+gated per cell. Two **metamorphic** properties cover migrate: a
+`by_status ↔ flat` round-trip is **byte-identical**, and a `markdown ↔ frontmatter`
+round-trip is **logically lossless** (number/title/status preserved, `check` clean).
 
-Commands generated: `new`, `set-status`, `supersede`, `set-review`, `renumber`,
-`relink`. Indices are taken modulo the live ADR count, so a sequence is always
-valid. Commands are gated per cell (e.g. `renumber` is sequential-only).
-**Matrix cells covered:** `markdown × by_status × sequential` and
-`markdown × flat × sequential`.
+This modality found bugs #1, #2, #5, #6, #7, #8, #9. Invariant (E) alone caught
+the supersession link-canonicality bugs; (A)/(C) caught the identity and
+stale-reference bugs; the `new`-time success check caught the cryptic frontmatter
+failure.
 
-A separate **metamorphic** property checks the gnarliest verb: a
-`by_status → flat → by_status` **migrate round-trip is byte-identical** for
-link-free repos (a verbatim layout move plus a no-op relink is the identity).
+**Determinism seam.** The `date` scheme's slug and review-due math read the local
+clock. I added a minimal, test-only `ADROIT_TODAY` override
+(`config::today_override`, consulted by `query::today` + `store::today_local`) so
+the oracle is reproducible; the default (unset) path is unchanged, and it is
+distinct from `ADROIT_DATE_SOURCE`.
 
-Invariant **(E)** alone found bugs #1 and #2.
-
-### 2.2 Parser property/fuzz testing
+### 2.2 Parser property / fuzz testing
 
 `tests/parsers.rs` feeds the pure parse/serialize/rewrite/link/naming helpers
-**arbitrary input** — including ASCII control characters, newlines, and multibyte
-unicode placed at byte-prefix boundaries (the codebase already carried a
-regression for an em-dash boundary panic, a hint this area was fragile). Two kinds
-of property:
-
-- **No panic** — every helper must tolerate any input without panicking. This
-  found bug #3.
-- **Algebraic laws** — `rewrite_status`, `rewrite_review_by(.., None)`,
-  `upsert_reference`, and `links::rewrite_links` are **idempotent**; a parsed
-  markdown ADR's body **round-trips** (parse → body → re-parse is a fixpoint).
-  This found bug #4.
+**arbitrary input** — control chars, newlines, multibyte unicode at byte-prefix
+boundaries (the codebase already carried a regression for an em-dash boundary
+panic). Properties: **no panic**, and **algebraic laws** (`rewrite_status`,
+`rewrite_review_by(.., None)`, `upsert_reference`, `links::rewrite_links` are
+idempotent; a parsed markdown ADR's body round-trips). Found bugs #3 and #4.
 
 ### 2.3 Forge fault-injection ("pen-testing" the HTTP adapters)
 
-The forge adapters (GitHub / GitLab / Jira) parse **untrusted** HTTP responses
-from third-party APIs. `tests/forge_faults.rs` builds each adapter over a
-`HostileTransport` that returns arbitrary status codes and malformed / truncated /
-wrong-typed / oversized / null bodies (plus an injected connection failure), then
-calls **every** `Forge` and `Tracker` method, asserting the adapters **never
-panic** and always return a clean `Result` — a garbage response must become an
-`Err`, never a crash or a bogus `Ok`. At 5000 cases the adapters held up: a
-**positive finding** that the response parsing is already robustly defensive.
-(One adapter API inconsistency surfaced and was fixed; see §3.)
+`tests/forge_faults.rs` builds each adapter (GitHub/GitLab/Jira) over a
+`HostileTransport` returning arbitrary status codes and malformed/truncated/
+wrong-typed/null bodies (plus injected offline), then calls **every** `Forge`/
+`Tracker` method, asserting **no panic** and a clean `Result`. At 5000 cases the
+adapters held up — a **positive finding** (robust response parsing). One adapter
+API inconsistency surfaced and was fixed.
 
-### 2.4 The explore → triage → crystallize loop
+### 2.4 Web / serve security
 
-For each failure the harness shrank to a minimal sequence, I:
-1. **Reproduced** it by hand with the real binary and inspected the on-disk files.
-2. **Triaged** — real bug vs. spec ambiguity vs. harness/test bug.
-3. **Crystallized** — wrote a focused, fast regression test (`tests/cli.rs` or a
-   unit test) that fails on the bug.
-4. **Fixed** the production code at root cause and confirmed the regression and the
-   whole suite go green.
+The dashboard renders ADR bodies to HTML and exposes a directory picker. New
+`serve` tests cover (a) the markdown→HTML render as an **XSS surface** — raw HTML
+and dangerous URL schemes — and (b) the directory-picker endpoints' **crash-safety**
+on hostile paths. Found bug #10.
 
-This is why every fix below is paired with a named regression: the property
-tester *discovers*, the regression *locks it down* permanently.
+### 2.5 The explore → triage → crystallize loop
+
+For each failure (proptest shrank it to a minimal sequence) I reproduced it by hand
+with the real binary, inspected the on-disk files, triaged (real bug / spec
+ambiguity / harness bug), wrote a focused fast regression, fixed at root cause, and
+confirmed the regression + whole suite go green. Every fix below is paired with a
+named regression: the property tester *discovers*, the regression *locks it down*.
 
 ---
 
 ## 3. Findings in detail
 
-### Bug #1 — `supersede` reciprocal note: non-canonical same-dir link
+### Fixed
 
-- **Found by:** oracle invariant (E). Minimal sequence: `new; new;
-  set-status 1 superseded; supersede 1 2` — i.e. the *newer* ADR is itself already
-  in `superseded/`.
-- **Symptom:** after `supersede`, a `relink` would still rewrite a file, so the
-  repo was left non-canonical.
-- **Root cause:** `cmd_supersede` → `add_supersedes_note` (src/main.rs) appended a
-  reciprocal `> Supersedes [..](link)` note to the newer ADR using a local
-  `relative_link` helper that omits the `./` prefix for a same-directory target.
-  The canonical engine `links::rel_link` (which `relink` uses) emits `./`, so the
-  note was born non-canonical and `relink` would "fix" it.
-- **Fix & why:** compute the note's link with `links::rel_link` — the one
-  canonical engine — so the note is born canonical. Routing through the single
-  source of truth is the principled fix, not hand-patching the `./`.
-- **Regression:** `tests/cli.rs::supersede_when_new_is_already_superseded_leaves_links_canonical`.
+**#1 — `supersede` reciprocal note: non-canonical same-dir link.** The reciprocal
+`> Supersedes [..](link)` note (main.rs `add_supersedes_note`) used a local helper
+that dropped the same-dir `./` the canonical `links::rel_link` emits, so a follow-up
+`relink` would rewrite it. *Fix:* use `links::rel_link`.
+Regression: `supersede_when_new_is_already_superseded_leaves_links_canonical`.
 
-### Bug #2 — in-place `supersede`: non-canonical `## Status` link
+**#2 — In-place `supersede`: non-canonical `## Status` link.** `set_status_at` only
+reconciles links when the file moves dirs; superseding an ADR already in
+`superseded/` left the freshly-written link non-canonical. *Fix:* route
+`relative_link_to` (now folded into `supersede`) through `links::rel_link`; removed
+the dead `pathdiff`. Regression: `supersede_in_place_writes_canonical_status_link`.
 
-- **Found by:** oracle invariant (E), deeper soak. Trigger: superseding an ADR that
-  is **already** in `superseded/`, so it doesn't move.
-- **Root cause:** `Store::set_status_at` only reconciles links (`relink_after_move`)
-  when the file actually changes directory. `Store::relative_link_to` built the
-  `Superseded by [..](link)` link with a local `pathdiff` helper that drops the
-  same-dir `./`. On a normal supersede the old ADR moves, so the follow-up relink
-  canonicalized it — but with no move, the non-canonical link survived.
-- **Fix & why:** `Store::relative_link_to` now routes through `links::rel_link`, so
-  the link is canonical *regardless* of whether a move follows. The now-dead
-  `pathdiff` helper was deleted.
-- **Regression:** `tests/cli.rs::supersede_in_place_writes_canonical_status_link`.
+> #1 and #2 shared a root cause: ad-hoc copies of the relative-path computation
+> (`store::pathdiff`, `main::relative_link`) that drifted from the canonical
+> `links::rel_link`. A model-based invariant ("relink is always a no-op") catches
+> this class that example-based tests miss.
 
-> **Shared root cause (lesson).** Bugs #1 and #2 both came from *ad-hoc copies* of
-> the relative-link computation (`store::pathdiff`, `main::relative_link`) that
-> drifted from the canonical `links::rel_link` by dropping the same-dir `./`.
-> Supersession-link generation now routes through the one engine. The general
-> lesson — duplicated "compute a relative path" helpers are a canonicalization
-> hazard — is the kind of thing a model-based invariant ("relink is always a
-> no-op") catches that example-based tests miss.
+**#3 — `display` panicked on a multibyte uuid slug.** The uuid branch sliced
+`&s[..s.len().min(8)]` (bytes), panicking when byte 8 split a multibyte char —
+reachable via a crafted id / filename (`adroit show`/`list` would crash). *Fix:*
+take the first 8 *chars*. Regression: `uuid_display_tolerates_multibyte_slug`.
 
-### Bug #3 — `NamingScheme::display` panics on a multibyte uuid slug
+**#5 — `uuid` supersede failed its own `check`.** `naming::ref_in_link` returned the
+full `{uuid}-{slug}` filename stem, but a uuid ADR's identity is the bare `{uuid}`
+(`parse` splits the title off), so the supersession link never resolved and
+`check` reported it broken. *Fix:* `ref_in_link` splits the title slug off for
+uuid, mirroring `parse`. Regression: `uuid_scheme_supersede_passes_check`.
 
-- **Found by:** `tests/parsers.rs::naming_helpers_never_panic`. Input:
-  `display(Slug("a𐀀𐀀"))` under the uuid scheme.
-- **Symptom:** `end byte index 8 is not a char boundary` — a panic. Reachable via a
-  crafted id (`adroit show <…>`) or a crafted uuid-slug filename in the repo, which
-  would crash `adroit list` / `show`.
-- **Root cause:** the uuid branch shortened the slug with `&s[..s.len().min(8)]`, a
-  **byte** slice that panics when byte 8 lands inside a multibyte char.
-- **Fix & why:** take the first 8 **chars** (`s.chars().take(8)`). Byte-identical
-  for a real ASCII-hex uuid; panic-free for any slug. Operating on chars, not raw
-  byte offsets, is the correct way to truncate user-facing text.
-- **Regression:** `src/naming.rs::uuid_display_tolerates_multibyte_slug`.
+**#6 — `frontmatter` + a slug scheme failed cryptically.** frontmatter is
+numeric-only (its YAML persists a `number:`), so it can't hold slug identity
+(date/uuid/per_category); `new` failed deep in the serializer with "ADR number must
+be assigned before serializing" on a user-reachable config. *Fix:* a clear up-front
+guard in `main.rs`. Regression: `frontmatter_rejects_slug_naming_with_clear_error`.
 
-### Bug #4 — `upsert_reference` non-idempotent on a lone `\r` (deferred)
+**#7 — `by_category` supersede wrote a broken link.** `Store::supersede` built the
+link relative to `status_dir(Superseded)` unconditionally, but in `flat`/`by_category`
+the old ADR stays in its dir (it doesn't move to `superseded/`), so the link got a
+spurious `./<category>/` segment pointing nowhere. *Fix:* compute the link relative
+to where the old ADR actually ends up (`status_target_dir`). Regression:
+`per_category_cross_category_supersede_passes_check`.
 
-- **Found by:** `tests/parsers.rs::upsert_reference_is_idempotent`. Input `"#\r"`
-  + label `A`: the second call appends a **duplicate** `## References` section.
-- **Root cause:** the helper detects the newline style as `\n` (no `\r\n` present),
-  splits/joins on `\n`, which fuses the lone `\r` with the joined `\n` into a
-  `\r\n`. The next call then detects `\r\n`, mis-splits the document, fails to find
-  the existing heading, and creates a second one. The same class affects
-  `rewrite_status` / `rewrite_review_by`.
-- **Why deferred:** adroit only ever *writes* `\n` (or preserves an existing
-  `\r\n`) — both idempotent — so this triggers only on an externally-corrupted
-  lone-CR (classic-Mac) file, which adroit never produces. A correct fix is a
-  cross-cutting newline-normalization change across `format.rs` with real
-  byte-preservation risk to the many round-trip-identical tests; not worth that
-  risk for a degenerate input without a deliberate go-ahead.
-- **Containment:** the idempotence property tests are scoped to consistent-newline
-  inputs (`arb_lf_text`) so they stay meaningful for realistic documents. Fix
-  candidate: route all three rewriters through one newline-aware split that
-  recognizes a lone `\r` as a separator.
+**#10 — Stored XSS in the dashboard.** `render_markdown` emitted raw HTML
+(`<script>`, `<img onerror=…>`) verbatim and didn't vet link schemes
+(`javascript:`), since pulldown-cmark is not a sanitizer — a crafted ADR body
+executed script when viewed in `adroit serve`. *Fix:* escape raw HTML events to
+text and route every link/image `dest_url` through a new `sanitize_href`
+(`javascript:`/`data:`/`vbscript:` → `#`). Regressions: three `render_markdown_*`
+security tests.
 
-### Minor — `Jira::with_transport` visibility
+**Minor — `Jira::with_transport` visibility.** Was `#[cfg(test)]`-gated while the
+GitHub/GitLab equivalents are public; exposed it to match, for the fault-injection
+suite.
 
-The GitHub and GitLab adapters expose a public `with_transport` (transport
-injection) constructor; Jira's was `#[cfg(test)]`-gated. Exposed it to match, so
-the fault-injection suite can build all three adapters uniformly. (Also note:
-`Jira`'s `Forge` impl is an intentional `unreachable!` guard — Jira is only ever
-wired as a Tracker — so the suite exercises only its tracker side.)
+### Deferred (real, but narrow + cross-cutting to fix)
+
+**#4 — `upsert_reference` non-idempotent on a lone `\r`.** A lone CR (no `\r\n`)
+defeats the helper's newline detection, duplicating the `## References` section on
+the second call. adroit never *writes* lone-CR files, so this only triggers on
+externally-corrupted input; a correct fix is a cross-cutting newline-normalization
+across `format.rs` with byte-preservation risk. The idempotence property tests are
+scoped to consistent newlines (`arb_lf_text`).
+
+**#8 — `renumber` leaves stale frontmatter supersession refs.** `renumber` updates
+references by text-relabeling markdown links; in frontmatter, supersession is a
+YAML field, so a pointer at the renumbered ADR is left dangling (and `check` doesn't
+validate frontmatter supersession). Narrow (frontmatter + renumber + supersession);
+the fix makes `renumber` format-aware. The oracle models the actual behavior.
+
+**#9 — `per_category` same-category links don't resolve.** `ref_in_link` recovers a
+per_category identity from the link's path, which works for cross-category
+(`../infra/0001-x.md`) but not for a canonical same-category `./0002-x.md` link
+(no category segment). Resolution needs the *source* file's category, which the
+scheme-agnostic `ref_in_link` (used by `relink` + `check`) isn't given. The fix
+threads source context through several call sites. Cross-category supersession
+works after #7; the oracle exercises that and skips same-category.
 
 ---
 
-## 4. Coverage achieved — and what is *not* covered
-
-Honesty about the blast radius matters more than a green checkmark.
+## 4. Coverage — and what is *not* covered
 
 **Covered**
-- Core write-path invariants under `markdown × {by_status, flat} × sequential`,
-  across `new` / `set-status` / `supersede` / `set-review` / `renumber` / `relink`,
-  soaked to ~1500 cases per cell.
-- Migrate `by_status ↔ flat` round-trip byte-identity (link-free), ~800 cases.
-- All pure parsers (markdown status region, supersession, references, review-by,
-  link rewriting/relabeling, naming for all four schemes, `parse_remote_url`,
-  frontmatter deserialize) for no-panic + idempotence/round-trip, ~1500 cases.
-- Forge GitHub/GitLab/Jira response parsing against hostile HTTP, ~5000 cases.
+- Core write-path invariants across the full 9-cell format × layout × scheme matrix
+  (`new`/`set-status`/`supersede`/`set-review`/`renumber`/`relink`), soaked to
+  ~1500 cases.
+- Migrate `by_status ↔ flat` (byte-identical) and `markdown ↔ frontmatter`
+  (logically lossless) round-trips.
+- All pure parsers for no-panic + idempotence/round-trip (~1500 cases).
+- Forge GitHub/GitLab/Jira response parsing against hostile HTTP (~5000 cases).
+- Dashboard markdown-render XSS + directory-picker crash-safety.
 
-**Not covered (remaining axes / out of scope)**
-- **Matrix cells not yet driven by the oracle:** `frontmatter` format, and the
-  `date` / `uuid` / `by_category`+`per_category` schemes. These need (a)
-  format-aware oracle logic — e.g. under `frontmatter`, a plain `set-status` does
-  **not** clear `superseded_by` (it persists as a YAML field), unlike `markdown`;
-  and (b) a fixed-"today" clock seam (distinct from `ADROIT_DATE_SOURCE`) so the
-  `date` scheme's `YYYYMMDD-` slug and review-due flagging are deterministic. The
-  harness's `Profile` abstraction is built to extend to these cells.
-- **`migrate` format-change round-trips** (markdown ↔ frontmatter) beyond the
-  layout-only byte-identity check.
-- **Web / `serve` security** (path traversal in the `/api/browse` directory picker,
-  markdown→HTML autolink injection, SSE/JSON abuse) — explicitly de-scoped by the
-  user at the outset.
-- **git-history paths** (`src/history.rs`) — the oracle runs with
-  `date_source=filesystem` to stay git-free; a git-backed suite would exercise the
-  history + relink-commit paths.
-- **Bug #4** remains unfixed by design (see §3).
+**Not covered**
+- The three deferred defects (#4, #8, #9) remain unfixed by design.
+- `frontmatter` validation of supersession references (a gap surfaced by #8).
+- The dashboard SPA itself (JS), SSE backpressure, and the live-reload watcher
+  beyond its existing unit tests.
+- git-history paths (`src/history.rs`) — the oracle runs `date_source=filesystem`
+  to stay git-free; a git-backed suite would exercise the history + relink-commit
+  paths.
 
 ---
 
 ## 5. How to run & extend
 
 ```sh
-just test            # everything, incl. the blitz suites at proptest's default 256 cases
-just test-forge      # adds the forge feature (runs tests/forge_faults.rs)
+just test            # default-feature suite (incl. oracle + parsers) at 192/256 cases
+just test-forge      # + forge feature (tests/forge_faults.rs)
+just test-web        # + web feature (serve JSON API + markdown-render security)
 just model           # wide soak of the oracle + parser tests (PROPTEST_CASES, default 2000)
-PROPTEST_CASES=10000 just model            # deeper soak
-cargo test --features forge --test forge_faults    # forge fuzz only
+PROPTEST_CASES=5000 just model
 ```
 
-- The blitz suites run inside `just ci` (via `just test` / `just test-forge`) at
-  256 cases — fast enough for the gate. Use `just model` for the heavier soak.
-- proptest persists any failure's seed under `tests/*.proptest-regressions`, which
-  are **committed**, so a discovered failure replays deterministically forever.
-- **To add a matrix cell:** add a `Profile { format, layout, naming }` and a new
-  `#[test]` calling `run_cell(profile, &ops)` in `tests/model.rs`, plus any
-  format-aware branches in the oracle's `apply` (see the `frontmatter` notes in
-  §4). Gate per-scheme commands in `arb_op_sequential` accordingly.
+- All four suites now run in `just ci` (added `lint-web`/`test-web`; the `web`
+  feature builds without a Vue SPA via the embed `.gitkeep`).
+- proptest persists each failure's seed under `tests/*.proptest-regressions`
+  (committed) so a discovered failure replays deterministically forever.
+- **To add a matrix cell:** add a weighted arm to `arb_profile()` in
+  `tests/model.rs`; per-scheme command behavior is gated in `Harness::apply`.
+  Identity is read back from disk, so new schemes need no oracle prediction.
 
 ---
 
 ## 6. Recommendations
 
-1. **Land the fixes.** Bugs #1–#3 are clean, root-caused, regression-guarded fixes;
-   they harden real user-facing behavior (`supersede` canonicality, crash-safety of
-   `show`/`list`).
-2. **Decide on bug #4.** If lone-CR robustness matters, route all three `format.rs`
-   rewriters through a single newline-aware splitter — a focused, testable change.
-3. **Extend the oracle to the remaining cells** (`frontmatter`, `date`, `uuid`,
-   `by_category`) when convenient. The `frontmatter` cell in particular will likely
-   surface the most new behavior because its set-status / supersession semantics
-   diverge from `markdown`. Add the fixed-"today" seam first.
-4. **Keep the suites in CI** (already wired). They are cheap at 256 cases and pay
-   for themselves the next time the write path or a parser is touched.
+1. **Land the fixes.** #1–#3, #5–#7, #10 are clean, root-caused, regression-guarded
+   fixes hardening real user-facing behavior (supersede correctness across every
+   scheme/layout, crash-safety of `show`/`list`, and a genuine dashboard XSS).
+2. **Schedule the deferred three.** #9 (per_category same-category links) is the
+   most user-visible; the fix is a source-category-aware `ref_in_link_from`. #8 and
+   #4 are narrower; pair #8's fix with extending `check` to validate frontmatter
+   supersession.
+3. **Keep the suites in CI** (done). They're cheap at the default budgets and pay
+   for themselves the next time the write path, a parser, or the renderer is
+   touched. Use `just model` for deeper soaks before a release.
