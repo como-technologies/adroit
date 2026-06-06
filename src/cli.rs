@@ -31,12 +31,14 @@ pub enum OutputFormat {
 // `-h` and `--help` show the SAME concise help (command list + the everyday
 // options); `--help-all` shows every option in full. Implemented with the
 // canonical clap recipe (disable the built-in flag, then HelpShort/HelpLong
-// custom flags); the repo-shape options carry `hide_short_help` so they appear
-// only under `--help-all`.
+// custom flags); the config-override options carry `hide_short_help` so they
+// appear only under `--help-all`. `max_term_width` caps wrapping on wide
+// terminals (from `cli: tighten --help output`).
 #[command(
     name = "adroit",
     version,
     about,
+    max_term_width = 100,
     disable_help_flag = true,
     after_help = "Run `adroit --help-all` to see every option, or `adroit <command> --help` for one command."
 )]
@@ -146,115 +148,78 @@ Options:
 {options}{after-help}")
 )]
 pub struct Cli {
-    // --- Repo selection ------------------------------------------------------
-    // `--dir` is the one global (inherited by every subcommand); the on-disk
-    // *shape* flags below (format/layout/naming/date_source/relink_scope) are
-    // top-level-only so they don't clutter every subcommand's `--help`. The env
-    // var still binds everywhere and they're listed on `adroit --help`; set them
-    // in config / `.env`, or before the subcommand (e.g. `adroit --format … new`).
-    /// ADR directory (overrides config; default `~/.local/share/adroit/`).
-    ///
-    /// Also settable via the `ADROIT_DIR` environment variable (e.g. from a
-    /// `.env` file), so you don't have to pass `--dir` on every command.
-    #[arg(
-        short,
-        long,
-        global = true,
-        env = "ADROIT_DIR",
-        help_heading = "Repo selection"
-    )]
+    // --- Config / repo-selection flags --------------------------------------
+    // `--dir` is the everyday global, shown in the concise help. The on-disk
+    // shape + behavior flags below stay `global` (so they bind on any command,
+    // per `cli: tighten --help output`) but carry `hide_short_help`, so they
+    // surface only under `--help-all` rather than being fully hidden — set them
+    // once via `adroit config` / the `ADROIT_*` env vars.
+    /// ADR directory (overrides config; default `~/.local/share/adroit/`). [env: ADROIT_DIR]
+    #[arg(short, long, global = true, env = "ADROIT_DIR")]
     pub dir: Option<PathBuf>,
 
-    /// On-disk format: `markdown` or `frontmatter` (overrides config).
-    ///
-    /// Also settable via `ADROIT_FORMAT`.
+    /// On-disk format: `markdown` or `frontmatter` (overrides config) [env: ADROIT_FORMAT]
     #[arg(
         long,
         value_enum,
-        hide_short_help = true,
+        global = true,
         env = "ADROIT_FORMAT",
-        help_heading = "Repo selection"
+        hide_short_help = true
     )]
     pub format: Option<Format>,
 
-    /// Directory layout: `by_status`, `by_category`, or `flat` (overrides config).
-    ///
-    /// Also settable via `ADROIT_LAYOUT`.
+    /// Directory layout: `by_status`, `by_category`, or `flat` (overrides config) [env: ADROIT_LAYOUT]
     #[arg(
         long,
         value_enum,
-        hide_short_help = true,
+        global = true,
         env = "ADROIT_LAYOUT",
-        help_heading = "Repo selection"
+        hide_short_help = true
     )]
     pub layout: Option<Layout>,
 
-    /// How ADR identifiers/filenames are formed (overrides config).
-    ///
-    /// `sequential` (NNNN, default), `date` (YYYYMMDD-title), `uuid`, or
-    /// `per_category`. Also settable via `ADROIT_NAMING`.
+    /// ADR naming scheme: `sequential`, `date`, `uuid`, `per_category` (overrides config) [env: ADROIT_NAMING]
     #[arg(
         long,
         value_enum,
-        hide_short_help = true,
+        global = true,
         env = "ADROIT_NAMING",
-        help_heading = "Repo selection"
+        hide_short_help = true
     )]
     pub naming: Option<NamingScheme>,
 
-    /// Where ADR dates/lifecycle come from (overrides config).
-    ///
-    /// `auto` (git when available, else filesystem), `git` (require git; warn if
-    /// unavailable/shallow), or `filesystem` (never shell git). Also settable via
-    /// `ADROIT_DATE_SOURCE`.
+    /// Date/lifecycle source: `auto`, `git`, `filesystem` (overrides config) [env: ADROIT_DATE_SOURCE]
     #[arg(
         long,
         value_enum,
-        hide_short_help = true,
+        global = true,
         env = "ADROIT_DATE_SOURCE",
-        help_heading = "Repo selection"
+        hide_short_help = true
     )]
     pub date_source: Option<DateSource>,
 
-    /// How much a status-change move auto-relinks (overrides config).
-    ///
-    /// `all` (heal every inbound link, default), `self` (only the moved file's
-    /// own links — defer the rest to a post-merge `adroit relink`), or `none`
-    /// (move only). Also settable via `ADROIT_RELINK_SCOPE`.
+    /// Link-rewrite scope on status moves: `all`, `self`, `none` (overrides config) [env: ADROIT_RELINK_SCOPE]
     #[arg(
         long,
         value_enum,
-        hide_short_help = true,
+        global = true,
         env = "ADROIT_RELINK_SCOPE",
-        help_heading = "Repo selection"
+        hide_short_help = true
     )]
     pub relink_scope: Option<RelinkScope>,
 
-    // --- Command-specific defaults (top-level only; env binds everywhere) ----
-    // These are NOT `global` — the env var still binds (clap reads env
-    // regardless), but the flag stays off every subcommand's `--help` since only
-    // a few commands use each. Set them in config / `.env`, or before the
-    // subcommand (e.g. `adroit --theme gruvbox`).
-    /// TUI markdown-preview color theme: `default` or `gruvbox` (overrides config).
-    ///
-    /// Only the TUI (bare `adroit`) and `serve` consult it. Also settable via
-    /// `ADROIT_THEME`.
-    #[arg(long, value_enum, hide_short_help = true, env = "ADROIT_THEME")]
+    // These are NOT `global` (only a few commands use each), but the env var
+    // still binds and they show under `--help-all`.
+    /// TUI/serve markdown theme: `default` or `gruvbox` (overrides config) [env: ADROIT_THEME]
+    #[arg(long, value_enum, env = "ADROIT_THEME", hide_short_help = true)]
     pub theme: Option<MarkdownTheme>,
 
-    /// Default template for `new`: a built-in (`madr`, `nygard`) or a path.
-    ///
-    /// Overrides config; `new --template` still wins per-invocation. Also
-    /// settable via `ADROIT_TEMPLATE`.
-    #[arg(long, hide_short_help = true, env = "ADROIT_TEMPLATE")]
+    /// Default template for `new` — a built-in name or path (overrides config) [env: ADROIT_TEMPLATE]
+    #[arg(long, env = "ADROIT_TEMPLATE", hide_short_help = true)]
     pub default_template: Option<String>,
 
-    /// Days after which a still-Proposed ADR with no `review_by` is flagged
-    /// review-due — `0` disables (overrides config).
-    ///
-    /// Used by `list` / `stats` / `check` and the dashboard. Also settable via
-    /// `ADROIT_REVIEW_OVERDUE_DAYS`.
-    #[arg(long, hide_short_help = true, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
+    /// Days before a Proposed ADR with no deadline is flagged review-due; `0` disables (overrides config) [env: ADROIT_REVIEW_OVERDUE_DAYS]
+    #[arg(long, env = "ADROIT_REVIEW_OVERDUE_DAYS", hide_short_help = true)]
     pub review_overdue_days: Option<u32>,
 
     /// Output format for read verbs: `human` (default) or `json`.
