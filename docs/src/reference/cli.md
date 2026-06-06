@@ -105,7 +105,16 @@ adroit new "Adopt feature flags" --interview   # AI drafts the body from a short
 | `--template <name\|path>` | Template to scaffold from (`madr`, `nygard`, or a file path) |
 | `--no-edit` | Do not open the editor after creating the ADR |
 | `--category <name>` / `-c` | Category subdirectory — **required** under the `by_category` layout, rejected otherwise |
+| `--force` | Create even if an ADR with this exact title already exists (skip the duplicate guard) |
 | `--interview` | Run a short Socratic interview and have the configured AI provider draft the body from your answers + the existing corpus (opt-in). See [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring) |
+
+**Duplicate guard.** `new` is an imperative event — it always allocates the next
+number, so it is **not** idempotent (running it twice makes two ADRs). To catch
+the *accidental* re-run, it checks for an ADR with the same (case-insensitive)
+title first: it warns and lists the match plus the most similar existing ADRs
+(via the same engine as [`dedupe`](#adroit-related-id--adroit-dedupe-id)), then,
+on a terminal, prompts `[y/N]` before creating. On a non-terminal (scripts/CI) it
+warns and proceeds; `--force` skips the check entirely.
 
 With `--interview`, the identity, status, and heading stay mechanical — the AI
 only writes the prose sections, marked `<!-- adroit:ai-suggested -->` for you to

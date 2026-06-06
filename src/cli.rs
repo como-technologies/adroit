@@ -303,6 +303,10 @@ pub enum Command {
         /// layout; rejected by the others).
         #[arg(short, long)]
         category: Option<String>,
+        /// Create even if an ADR with this exact title already exists (skip the
+        /// duplicate guard). `new` always allocates a fresh number regardless.
+        #[arg(long)]
+        force: bool,
         /// Run a short Socratic interview and have the configured AI provider
         /// draft the ADR body from your answers + the existing corpus. The draft
         /// is marked `<!-- adroit:ai-suggested -->` for you to review/edit before

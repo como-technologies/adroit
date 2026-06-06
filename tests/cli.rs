@@ -2835,3 +2835,53 @@ fn subcommand_h_and_help_also_match() {
         "`new -h` and `new --help` must match"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `new` duplicate-title guard (non-idempotent, but catches the accidental re-run)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_duplicate_title_warns_but_proceeds_non_interactive() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    // Non-interactive (assert_cmd has no TTY): warn + proceed, still allocating 0002.
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already use this title"))
+        .stderr(predicate::str::contains("ADR-0001"));
+    let v = json_ok(&dir, &["list", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(2));
+}
+
+#[test]
+fn new_force_skips_the_dup_guard() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit", "--force"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already use this title").not());
+}
+
+#[test]
+fn new_unique_title_has_no_dup_warning() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Use a message queue", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already use this title").not());
+}

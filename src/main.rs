@@ -176,12 +176,18 @@ fn main() -> Result<()> {
             template,
             no_edit,
             category,
+            force,
             interview,
             #[cfg(feature = "forge")]
             forge,
             #[cfg(feature = "forge")]
             dry_run,
         }) => {
+            // Duplicate guard (`new` stays non-idempotent — this only catches the
+            // accidental re-run). Aborts before allocating a number.
+            if !dup_guard(&store, &cfg, &title, force)? {
+                return Ok(());
+            }
             let (path, r) = cmd_new(
                 &store,
                 &cfg,
@@ -467,6 +473,85 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
         naming: cfg.naming,
         relink_scope: cfg.relink_scope,
     }
+}
+
+/// Guard against accidentally creating a duplicate ADR. On an exact
+/// (case-insensitive) title match it warns and lists the matches plus the top
+/// similar ADRs; on a terminal it then prompts to confirm. Returns `false` to
+/// abort (no ADR created). `--force` and non-interactive contexts proceed — `new`
+/// stays non-idempotent by design, so this only catches the accidental re-run.
+fn dup_guard(store: &Store, cfg: &Config, title: &str, force: bool) -> Result<bool> {
+    use std::io::{IsTerminal, Write};
+    if force {
+        return Ok(true);
+    }
+    let summaries = query::summaries(store, &Filter::default())?;
+    let exact: Vec<&AdrSummary> = summaries
+        .iter()
+        .filter(|s| s.title.trim().eq_ignore_ascii_case(title.trim()))
+        .collect();
+    if exact.is_empty() {
+        return Ok(true);
+    }
+
+    eprintln!(
+        "{}",
+        format!(
+            "warning: {} existing ADR(s) already use this title:",
+            exact.len()
+        )
+        .yellow()
+    );
+    for s in &exact {
+        eprintln!(
+            "  {} {} [{}]",
+            s.reference.bold(),
+            s.title,
+            status_color(s.status)
+        );
+    }
+
+    // Top similar existing ADRs (excluding the exact matches), via the same
+    // TF-IDF engine as `dedupe` — the question text is the new title.
+    let exact_refs: std::collections::HashSet<&str> =
+        exact.iter().map(|s| s.reference.as_str()).collect();
+    let mut docs = corpus_docs(store, cfg)?;
+    docs.push(adroit::similar::Doc {
+        id: "__new__".to_string(),
+        reference: String::new(),
+        title: title.to_string(),
+        text: title.to_string(),
+    });
+    let similar: Vec<_> = adroit::similar::rank(&docs, "__new__")
+        .into_iter()
+        .filter(|m| !exact_refs.contains(m.reference.as_str()))
+        .take(3)
+        .collect();
+    if !similar.is_empty() {
+        eprintln!("similar existing ADRs:");
+        for m in &similar {
+            eprintln!(
+                "  {:.2}  {} {}",
+                m.score,
+                m.reference.bold(),
+                m.title.dimmed()
+            );
+        }
+    }
+
+    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        eprint!("Create another ADR with this title anyway? [y/N] ");
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            eprintln!("Aborted — no ADR created. (use --force to skip this check)");
+            return Ok(false);
+        }
+    } else {
+        eprintln!("(non-interactive: proceeding — pass --force to silence, or use a new title)");
+    }
+    Ok(true)
 }
 
 fn cmd_new(

@@ -53,6 +53,12 @@ Treat both as invariants every change must preserve:
   `new` (allocates the next ADR each run), `renumber old new` (one-shot rename;
   re-running fails because `old` no longer exists), `notify` (posts a fresh
   message), and the forge/git side effects (issue/PR creation, commit, push).
+  `new` keeps its non-idempotent semantics but adds a **duplicate guard**
+  (`dup_guard` in `main.rs`): on an exact (case-insensitive) title match it warns,
+  lists the match + the top similar ADRs (`similar::rank` over the new title), and
+  prompts `[y/N]` on a TTY (non-TTY warns + proceeds; `--force` skips). This
+  catches the *accidental* re-run without pretending `new` is idempotent — and is
+  the RFC's "dedupe before commit" idea wired into `new`.
 - **New write paths must keep this true.** Don't introduce hidden persisted state
   (caches, lock files, a daemon) or a mutation that changes a file it didn't need
   to. The guard test `commands_are_idempotent` (in `tests/cli.rs`) runs the
