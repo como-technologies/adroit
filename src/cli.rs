@@ -210,7 +210,7 @@ pub struct Cli {
 
     // These are NOT `global` (only a few commands use each), but the env var
     // still binds and they show under `--help-all`.
-    /// TUI/serve markdown theme: `default` or `gruvbox` (overrides config) [env: ADROIT_THEME]
+    /// TUI color theme: `gruvbox` (default), `warm`, or `default` (overrides config) [env: ADROIT_THEME]
     #[arg(long, value_enum, env = "ADROIT_THEME", hide_short_help = true)]
     pub theme: Option<MarkdownTheme>,
 

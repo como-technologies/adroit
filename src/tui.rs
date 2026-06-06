@@ -312,6 +312,8 @@ pub struct TuiState {
     md_theme: MarkdownTheme,
     /// When true, the preview shows raw markdown source instead of rendered.
     preview_raw: bool,
+    /// When true, the keybinding help overlay is shown over everything.
+    show_help: bool,
 }
 
 impl TuiState {
@@ -412,6 +414,21 @@ impl TuiState {
     pub fn toggle_preview_raw(&mut self) {
         self.preview_raw = !self.preview_raw;
         self.preview_scroll = 0;
+    }
+
+    /// Whether the keybinding help overlay is currently shown.
+    pub fn show_help(&self) -> bool {
+        self.show_help
+    }
+
+    /// Toggle the help overlay.
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
+    }
+
+    /// Dismiss the help overlay (any key closes it).
+    pub fn close_help(&mut self) {
+        self.show_help = false;
     }
 
     /// A transient status-bar message, if any.
@@ -1016,7 +1033,7 @@ mod driver {
     };
     use ratatui::{
         prelude::*,
-        widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+        widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     };
     use std::io::{Stdout, stdout};
     use std::time::Duration;
@@ -1025,6 +1042,9 @@ mod driver {
 
     pub fn run(config: &Config, store: &Store) -> Result<()> {
         let mut state = TuiState::new();
+        // Apply the configured theme (`--theme` / `ADROIT_THEME` / config) — this
+        // drives both the chrome palette and the markdown preview.
+        state.set_md_theme(config.tui_theme);
         reload(&mut state, store)?;
 
         let mut terminal = setup()?;
@@ -1137,6 +1157,11 @@ mod driver {
     /// Map a key press (in the current mode) to an [`Action`], mutating state
     /// for navigation/input that has no filesystem effect.
     fn handle_key(state: &mut TuiState, key: KeyEvent) -> Action {
+        // The help overlay swallows the next key (any key dismisses it).
+        if state.show_help() {
+            state.close_help();
+            return Action::None;
+        }
         match state.mode().clone() {
             Mode::List => handle_list_key(state, key),
             Mode::Preview => handle_preview_key(state, key),
@@ -1206,6 +1231,10 @@ mod driver {
             }
             KeyCode::Char('m') => {
                 state.toggle_preview_raw();
+                Action::None
+            }
+            KeyCode::Char('?') => {
+                state.toggle_help();
                 Action::None
             }
             KeyCode::Char('r') => Action::Refresh,
@@ -1380,6 +1409,70 @@ mod driver {
         if let Mode::PickStatus { .. } = state.mode() {
             render_status_picker(f, state, chunks[0]);
         }
+        if state.show_help() {
+            render_help(f, state, f.area());
+        }
+    }
+
+    /// The `?` keybinding cheat-sheet, a centered overlay grouped by task.
+    fn render_help(f: &mut Frame, state: &TuiState, area: Rect) {
+        let c = chrome(state.md_theme());
+        let sect = |s: &str| {
+            Line::from(Span::styled(
+                s.to_string(),
+                Style::default().fg(c.title).add_modifier(Modifier::BOLD),
+            ))
+        };
+        let row = |k: &str, d: &str| {
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{k:<9}"),
+                    Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(d.to_string(), Style::default().fg(c.muted)),
+            ])
+        };
+        let lines = vec![
+            sect("Navigate"),
+            row("j / k", "move selection (or ↑ / ↓)"),
+            row("g / G", "first / last"),
+            row("Enter", "focus the preview pane"),
+            Line::from(""),
+            sect("Find"),
+            row("/", "search title + body"),
+            row("f", "cycle status filter"),
+            row("o", "cycle sort order"),
+            row("r", "refresh"),
+            Line::from(""),
+            sect("Author"),
+            row("n", "new ADR"),
+            row("s", "set status"),
+            row("S", "supersede (this supersedes …)"),
+            row("i", "edit body in-terminal"),
+            row("e", "open in $EDITOR"),
+            Line::from(""),
+            sect("Preview"),
+            row("j / k", "scroll"),
+            row("m", "toggle rendered / raw"),
+            row("Esc", "back to list"),
+            Line::from(""),
+            sect("General"),
+            row("?", "toggle this help"),
+            row("q", "quit"),
+        ];
+        let height = lines.len() as u16 + 2;
+        let popup = centered(46, height.min(area.height), area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(c.accent))
+            .title(Span::styled(
+                " Keybindings — any key to close ",
+                Style::default().fg(c.title).add_modifier(Modifier::BOLD),
+            ));
+        f.render_widget(Clear, popup);
+        f.render_widget(Paragraph::new(lines).block(block), popup);
     }
 
     /// Render the in-TUI body editor in the right pane and place the terminal
@@ -1392,10 +1485,12 @@ mod driver {
             }
             _ => " Edit ".to_string(),
         };
+        let c = chrome(state.md_theme());
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .title(title);
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(c.accent))
+            .title(Span::styled(title, Style::default().fg(c.title)));
         let inner = block.inner(area);
         f.render_widget(block, area);
 
@@ -1441,13 +1536,14 @@ mod driver {
             filter_label,
             sort_label(state.sort()),
         );
+        let c = chrome(state.md_theme());
         let items: Vec<ListItem> = state
             .visible_rows()
             .iter()
             .map(|s| {
                 let num = Span::styled(
                     format!("{:<5}", s.number_display),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(c.muted),
                 );
                 let status = Span::styled(
                     format!("{:<11}", s.status),
@@ -1461,15 +1557,25 @@ mod driver {
         let mut list_state = ListState::default();
         list_state.select(state.selected_index());
 
+        // The list is the primary pane: accent border unless the preview/editor
+        // has focus.
+        let focused = matches!(state.mode(), Mode::List);
+        let border = if focused { c.accent } else { c.border };
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(border))
+                    .title(Span::styled(title, Style::default().fg(c.title))),
+            )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
+                    .bg(c.selection_bg)
+                    .fg(c.accent)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol("▶ ");
         f.render_stateful_widget(list, area, &mut list_state);
     }
 
@@ -1506,6 +1612,79 @@ mod driver {
         }
     }
 
+    /// The warm, Claude-Code-style markdown theme: one orange accent on warm
+    /// neutrals, headings in amber/orange.
+    fn warm_theme() -> MdTheme {
+        let fg = Color::Rgb(212, 190, 152); // d4be98 warm parchment
+        let muted = Color::Rgb(124, 111, 100); // 7c6f64
+        let accent = Color::Rgb(254, 128, 25); // fe8019 — the one accent
+        let amber = Color::Rgb(232, 167, 78); // e8a74e
+        let soft = Color::Rgb(216, 166, 87); // d8a657
+        let bold = Modifier::BOLD;
+        MdTheme {
+            h1: Style::new().fg(accent).add_modifier(bold),
+            h2: Style::new().fg(amber).add_modifier(bold),
+            h3: Style::new().fg(soft).add_modifier(bold),
+            h4: Style::new().fg(soft).add_modifier(bold),
+            h5: Style::new().fg(soft).add_modifier(bold),
+            h6: Style::new().fg(soft).add_modifier(bold),
+            strong: Style::new().fg(fg).add_modifier(bold),
+            emphasis: Style::new().fg(fg).add_modifier(Modifier::ITALIC),
+            strikethrough: Style::new().fg(muted).add_modifier(Modifier::CROSSED_OUT),
+            inline_code: Style::new().fg(amber),
+            code_block: Style::new().fg(amber),
+            block_quote: Style::new().fg(muted).add_modifier(Modifier::ITALIC),
+            link: Style::new().fg(accent).add_modifier(Modifier::UNDERLINED),
+            list_marker: Style::new().fg(accent),
+            table_header: Style::new().fg(amber).add_modifier(bold),
+            rule: Style::new().fg(muted),
+            ..MdTheme::default()
+        }
+    }
+
+    /// The TUI chrome palette (borders, selection, titles, hints) for a theme.
+    /// Centralizes every chrome color so the whole UI re-skins from one place.
+    pub(super) struct Chrome {
+        /// The single accent (focused border, active key hints, selection text).
+        pub accent: Color,
+        /// Muted text — inactive hints, the footer, secondary metadata.
+        pub muted: Color,
+        /// Unfocused pane border.
+        pub border: Color,
+        /// Selected-row background.
+        pub selection_bg: Color,
+        /// Pane / section titles.
+        pub title: Color,
+    }
+
+    /// Resolve the chrome palette for a theme. `Default` uses ANSI named colors
+    /// (respects the terminal); gruvbox/warm use true-color.
+    pub(super) fn chrome(theme: MarkdownTheme) -> Chrome {
+        match theme {
+            MarkdownTheme::Gruvbox => Chrome {
+                accent: Color::Rgb(254, 128, 25),     // fe8019 orange
+                muted: Color::Rgb(146, 131, 116),     // 928374
+                border: Color::Rgb(102, 92, 84),      // 665c54
+                selection_bg: Color::Rgb(60, 56, 54), // 3c3836
+                title: Color::Rgb(250, 189, 47),      // fabd2f
+            },
+            MarkdownTheme::Warm => Chrome {
+                accent: Color::Rgb(254, 128, 25),     // fe8019
+                muted: Color::Rgb(124, 111, 100),     // 7c6f64
+                border: Color::Rgb(80, 73, 69),       // 504945
+                selection_bg: Color::Rgb(60, 56, 54), // 3c3836
+                title: Color::Rgb(232, 167, 78),      // e8a74e amber
+            },
+            MarkdownTheme::Default => Chrome {
+                accent: Color::Cyan,
+                muted: Color::DarkGray,
+                border: Color::DarkGray,
+                selection_bg: Color::Blue,
+                title: Color::Cyan,
+            },
+        }
+    }
+
     /// Render an ADR body to a themed ratatui `Text` (GitHub-Flavored Markdown).
     ///
     /// The crate's default heading renderer keeps the literal `#`/`##` prefix,
@@ -1517,6 +1696,7 @@ mod driver {
         let md_theme = match theme {
             MarkdownTheme::Default => MdTheme::default(),
             MarkdownTheme::Gruvbox => gruvbox_theme(),
+            MarkdownTheme::Warm => warm_theme(),
         };
         let renderer = RendererBuilder::new()
             .with_theme(md_theme)
@@ -1573,8 +1753,9 @@ mod driver {
             }
             None => Paragraph::new("No ADR selected."),
         };
+        let c = chrome(state.md_theme());
         let focused = matches!(state.mode(), Mode::Preview);
-        let border = if focused { Color::Blue } else { Color::Gray };
+        let border = if focused { c.accent } else { c.border };
         let title = if state.preview_raw() {
             " Preview (raw) "
         } else {
@@ -1584,8 +1765,9 @@ mod driver {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(border))
-                    .title(title),
+                    .title(Span::styled(title, Style::default().fg(c.title))),
             )
             .wrap(Wrap { trim: false })
             .scroll((state.preview_scroll(), 0));
@@ -1596,9 +1778,9 @@ mod driver {
         let help = match state.mode() {
             Mode::List => {
                 "j/k move  g/G top/bottom  Enter preview  / search  f filter  o sort  \
-                 n new  s status  S supersede  i edit-body  e $EDITOR  r refresh  q quit"
+                 n new  s status  S supersede  i edit-body  e $EDITOR  r refresh  ? help  q quit"
             }
-            Mode::Preview => "j/k scroll  Enter/Esc back  q quit",
+            Mode::Preview => "j/k scroll  g/G top/bottom  Enter/Esc back  ? help  q quit",
             Mode::Search { .. } => "type to search  Enter apply  Esc cancel",
             Mode::NewTitle { .. } => "type title  Enter create  Esc cancel",
             Mode::PickStatus { .. } => "j/k pick  Enter apply  Esc cancel",
@@ -1622,9 +1804,17 @@ mod driver {
             } => Some("Unsaved changes — discard? (y/n)".to_string()),
             _ => state.message().map(|m| m.to_string()),
         };
-        let text = format!("{}\n{help}", prompt.unwrap_or_default());
-        let para = Paragraph::new(text).style(Style::default().fg(Color::Gray));
-        f.render_widget(para, area);
+        // Line 1: the active prompt or a transient message, in the accent color;
+        // line 2: the context-aware key hints, muted.
+        let c = chrome(state.md_theme());
+        let lines = vec![
+            Line::from(Span::styled(
+                prompt.unwrap_or_default(),
+                Style::default().fg(c.accent),
+            )),
+            Line::from(Span::styled(help, Style::default().fg(c.muted))),
+        ];
+        f.render_widget(Paragraph::new(lines), area);
     }
 
     fn render_status_picker(f: &mut Frame, state: &TuiState, area: Rect) {
@@ -1638,14 +1828,25 @@ mod driver {
             .collect();
         let mut list_state = ListState::default();
         list_state.select(Some(*index));
+        let c = chrome(state.md_theme());
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Set status (Enter) "),
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(c.accent))
+                    .title(Span::styled(
+                        " Set status (Enter) ",
+                        Style::default().fg(c.title),
+                    )),
             )
-            .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
-            .highlight_symbol("> ");
+            .highlight_style(
+                Style::default()
+                    .bg(c.selection_bg)
+                    .fg(c.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
         f.render_widget(Clear, popup);
         f.render_stateful_widget(list, popup, &mut list_state);
     }
@@ -1955,11 +2156,35 @@ mod tests {
     }
 
     #[test]
-    fn md_theme_defaults_to_default_and_is_settable() {
+    fn md_theme_defaults_to_gruvbox_and_is_settable() {
         let mut s = TuiState::new();
-        assert_eq!(s.md_theme(), MarkdownTheme::Default);
-        s.set_md_theme(MarkdownTheme::Gruvbox);
         assert_eq!(s.md_theme(), MarkdownTheme::Gruvbox);
+        s.set_md_theme(MarkdownTheme::Warm);
+        assert_eq!(s.md_theme(), MarkdownTheme::Warm);
+        s.set_md_theme(MarkdownTheme::Default);
+        assert_eq!(s.md_theme(), MarkdownTheme::Default);
+    }
+
+    #[test]
+    fn help_overlay_toggles_and_any_key_closes_it() {
+        let mut s = TuiState::new();
+        assert!(!s.show_help());
+        s.toggle_help();
+        assert!(s.show_help());
+        s.close_help();
+        assert!(!s.show_help());
+    }
+
+    #[test]
+    fn every_theme_yields_a_chrome_and_markdown_palette() {
+        for t in [
+            MarkdownTheme::Gruvbox,
+            MarkdownTheme::Warm,
+            MarkdownTheme::Default,
+        ] {
+            let _ = driver::chrome(t);
+            let _ = driver::render_markdown_body("# H\n\nbody", t);
+        }
     }
 
     /// The preview renderer must actually RENDER markdown, not pass it through:

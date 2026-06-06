@@ -35,7 +35,7 @@ everywhere regardless; the flag is kept off the concise help (it's under
 
 | Flag | Default | Description |
 |---|---|---|
-| `--theme <default\|gruvbox>` | `default` | TUI markdown-preview color theme; only the TUI and `serve` use it (env: `ADROIT_THEME`; overrides config) |
+| `--theme <gruvbox\|warm\|default>` | `gruvbox` | TUI color theme (chrome + markdown preview); the TUI and `serve` use it (env: `ADROIT_THEME`; overrides config) |
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables. Used by `list`/`stats`/`check` (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
 
@@ -725,7 +725,7 @@ editor: vim
 | `review_days` | int | `3` | Default review period (business days) for `review`. |
 | `review_quorum` | int | `3` | Default approvals required for `review`. |
 | `review_overdue_days` | int | `30` | A Proposed ADR older than this many days is flagged review-due even with no `review_by`. `0` disables age-based flagging. |
-| `tui_theme` | `default`\|`gruvbox` | `default` | Color theme for the TUI markdown preview. |
+| `tui_theme` | `gruvbox`\|`warm`\|`default` | `gruvbox` | Color theme for the whole TUI (chrome + markdown preview). |
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 | `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
 | `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |

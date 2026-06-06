@@ -39,7 +39,8 @@ pub enum Layout {
     Flat,
 }
 
-/// Color theme for the TUI markdown preview.
+/// Color theme for the whole TUI — the chrome (borders, selection, status badges,
+/// footer) and the markdown preview.
 #[derive(
     Debug,
     Clone,
@@ -57,11 +58,13 @@ pub enum Layout {
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum MarkdownTheme {
-    /// 16-color ANSI palette — respects the user's terminal colors. Default.
+    /// Gruvbox (true-color), matching the house mdBook/doxygen theme. The default.
     #[default]
-    Default,
-    /// Gruvbox (true-color), matching the house mdBook/doxygen theme.
     Gruvbox,
+    /// A warm, Claude-Code-style palette: one orange accent on a neutral base.
+    Warm,
+    /// 16-color ANSI palette — respects the user's terminal colors (no true-color).
+    Default,
 }
 
 /// Where adroit reads ADR creation / lifecycle dates from.
@@ -399,7 +402,7 @@ pub struct Config {
     /// (deadline-only). Default: 30.
     pub review_overdue_days: u32,
 
-    /// Color theme for the TUI markdown preview (default: `default`/ANSI).
+    /// Color theme for the whole TUI (chrome + markdown preview; default: `gruvbox`).
     pub tui_theme: MarkdownTheme,
 
     /// Where ADR creation / lifecycle dates come from: `auto` (git when
@@ -537,7 +540,9 @@ impl Config {
                 self.review_overdue_days = value.parse().map_err(|_| bad("number"))?
             }
             "tui_theme" => {
-                self.tui_theme = value.parse().map_err(|_| bad("theme (default|gruvbox)"))?
+                self.tui_theme = value
+                    .parse()
+                    .map_err(|_| bad("theme (gruvbox|warm|default)"))?
             }
             "date_source" => {
                 self.date_source = value
