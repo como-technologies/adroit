@@ -1446,7 +1446,11 @@ mod driver {
         },
     };
     use std::io::{Stdout, stdout};
+    use std::sync::OnceLock;
     use std::time::Duration;
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::{FontStyle, Style as SynStyle, ThemeSet};
+    use syntect::parsing::SyntaxSet;
 
     type Term = Terminal<CrosstermBackend<Stdout>>;
 
@@ -2303,13 +2307,92 @@ mod driver {
             MarkdownTheme::Gruvbox => gruvbox_theme(),
             MarkdownTheme::Warm => warm_theme(),
         };
+        let syn_theme = syntect_theme_name(theme);
         let renderer = RendererBuilder::new()
             .with_theme(md_theme)
             // Drop the `# ` prefix: the spans are already styled per heading
             // level, so emit them as-is (one line, no literal hashes).
             .with_heading(|_level, spans| vec![Line::from(spans)])
+            // Syntax-highlight fenced code blocks via syntect.
+            .with_code_block(move |lang, content| highlight_code(lang, content, syn_theme))
             .build();
         into_text_with_renderer(body, &renderer)
+    }
+
+    /// The process-wide syntect syntax definitions (embedded defaults), built
+    /// once on first use. Read-only — no per-invocation state.
+    fn syntax_set() -> &'static SyntaxSet {
+        static SS: OnceLock<SyntaxSet> = OnceLock::new();
+        SS.get_or_init(SyntaxSet::load_defaults_newlines)
+    }
+
+    /// The process-wide syntect theme set (embedded defaults), built once.
+    fn theme_set() -> &'static ThemeSet {
+        static TS: OnceLock<ThemeSet> = OnceLock::new();
+        TS.get_or_init(ThemeSet::load_defaults)
+    }
+
+    /// Map the TUI theme to a bundled syntect theme for code blocks.
+    fn syntect_theme_name(theme: MarkdownTheme) -> &'static str {
+        match theme {
+            // Warm/eighties pairs with the warm + gruvbox chrome; ocean for ANSI.
+            MarkdownTheme::Gruvbox | MarkdownTheme::Warm => "base16-eighties.dark",
+            MarkdownTheme::Default => "base16-ocean.dark",
+        }
+    }
+
+    /// Highlight a fenced code block into themed ratatui lines. Resolves the
+    /// language by token (falling back to plain text), then converts each
+    /// syntect-highlighted span to a ratatui [`Span`]. Backgrounds are dropped so
+    /// the code sits on the pane background, not a patchy per-token block.
+    pub(super) fn highlight_code(
+        lang: &str,
+        content: &str,
+        theme_name: &str,
+    ) -> Vec<Line<'static>> {
+        let ss = syntax_set();
+        let syntax = (!lang.is_empty())
+            .then(|| ss.find_syntax_by_token(lang))
+            .flatten()
+            .unwrap_or_else(|| ss.find_syntax_plain_text());
+        let ts = theme_set();
+        // The bundled names always exist, but fall back defensively rather than
+        // panic on an Index miss.
+        let theme = ts
+            .themes
+            .get(theme_name)
+            .or_else(|| ts.themes.values().next())
+            .expect("syntect ships at least one default theme");
+        let mut hl = HighlightLines::new(syntax, theme);
+        content
+            .lines()
+            .map(|line| {
+                let spans = hl
+                    .highlight_line(line, ss)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(style, text)| to_ratatui_span(style, text))
+                    .collect::<Vec<_>>();
+                Line::from(spans)
+            })
+            .collect()
+    }
+
+    /// Convert a syntect style + text into a ratatui span (foreground + bold/
+    /// italic/underline; background intentionally ignored).
+    fn to_ratatui_span(style: SynStyle, text: &str) -> Span<'static> {
+        let fg = style.foreground;
+        let mut s = Style::default().fg(Color::Rgb(fg.r, fg.g, fg.b));
+        if style.font_style.contains(FontStyle::BOLD) {
+            s = s.add_modifier(Modifier::BOLD);
+        }
+        if style.font_style.contains(FontStyle::ITALIC) {
+            s = s.add_modifier(Modifier::ITALIC);
+        }
+        if style.font_style.contains(FontStyle::UNDERLINE) {
+            s = s.add_modifier(Modifier::UNDERLINED);
+        }
+        Span::styled(text.to_string(), s)
     }
 
     /// Trim an RFC 3339 timestamp to its `YYYY-MM-DD` date for the header.
@@ -3048,6 +3131,24 @@ mod tests {
         // Switching to a shorter ADR must pull the offset back in range.
         s.set_preview_metrics(12, 10);
         assert_eq!(s.preview_scroll(), 2);
+    }
+
+    #[test]
+    fn highlight_code_colors_known_lang_and_falls_back() {
+        use super::driver::highlight_code;
+        use ratatui::style::Color;
+        let code = "fn main() {\n    let x = 1;\n}";
+        let lines = highlight_code("rust", code, "base16-eighties.dark");
+        assert_eq!(lines.len(), 3);
+        // Highlighting happened: at least one span carries a syntect RGB color.
+        let has_rgb = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| matches!(s.style.fg, Some(Color::Rgb(..))));
+        assert!(has_rgb, "expected syntect to color the rust snippet");
+        // Unknown language falls back to plain text — no panic, same line count.
+        let plain = highlight_code("not-a-real-language", code, "base16-eighties.dark");
+        assert_eq!(plain.len(), 3);
     }
 
     #[test]

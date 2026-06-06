@@ -87,8 +87,10 @@ The preview pane renders the ADR body as **GitHub-Flavored Markdown** —
 headings, bold/italic, strikethrough, inline code, fenced code blocks, block
 quotes, lists, task lists, links, horizontal rules, and tables. Press `m` to
 toggle between the rendered view and the raw markdown source (the in-TUI editor,
-`i`, always shows raw source — you need it to edit). Code blocks are styled but
-not yet syntax-highlighted.
+`i`, always shows raw source — you need it to edit). Fenced code blocks are
+**syntax-highlighted** (via [syntect](https://github.com/trishume/syntect)) when
+they carry a language tag (e.g. ` ```rust `); the highlight theme tracks the TUI
+theme. Untagged blocks render as plain monospace text.
 
 The theme drives the **whole** interface — markdown body, border accents,
 selection marker, breadcrumb, and footer — not just the preview. Three themes are

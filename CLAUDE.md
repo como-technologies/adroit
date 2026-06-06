@@ -213,8 +213,14 @@ header and `m` toggles `TuiState::preview_raw` (rendered ↔ raw source). Themes
 `config::MarkdownTheme { Gruvbox (#[default]), Warm, Default }`, resolved from
 `--theme` / `ADROIT_THEME` / `tui_theme` config (flag > env > config) and applied
 via `TuiState::set_md_theme` (wired in `driver::run` after `TuiState::new`).
-Code-block syntax highlighting is deferred. The editor (`i`) always shows raw
-source.
+Fenced code blocks are **syntax-highlighted** via syntect: `render_markdown_body`
+installs a `.with_code_block` hook (`highlight_code`) that resolves the language,
+highlights through process-wide `OnceLock<SyntaxSet>`/`OnceLock<ThemeSet>` (the
+embedded defaults; pure-Rust fancy-regex, no onig/C), and converts each syntect
+style to a ratatui span (`to_ratatui_span` — fg + bold/italic/underline, bg
+dropped). The syntect theme tracks the TUI theme (`syntect_theme_name`). We
+hand-roll the span conversion because `syntect-tui` targets ratatui 0.29 and would
+duplicate ratatui in the tree. The editor (`i`) always shows raw source.
 
 **Whole-UI chrome.** The selected theme drives the entire interface, not just the
 markdown body. `driver::chrome(theme) -> Chrome` centralizes the palette (accent,
