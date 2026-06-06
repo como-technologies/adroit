@@ -71,6 +71,11 @@ review and edit before committing.
 mechanical in the write path. If no provider is available, `--interview` degrades
 to the plain template (the ADR is still created).
 
+`adroit draft <ID>` is the after-the-fact version of `--interview`: if you created
+an ADR as a plain template, `draft` AI-completes its body from the current content
++ corpus (no interview), splices it in (heading/status stay mechanical), marks it
+`<!-- adroit:ai-suggested -->`, and opens your editor for review.
+
 `adroit plan <ID>` is the read-only companion: it reads an (accepted) ADR plus
 the corpus and asks the provider for an ordered implementation checklist (steps,
 components touched, testing, rollout, risks). It prints to stdout (or `--out`) and

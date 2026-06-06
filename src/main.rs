@@ -124,6 +124,7 @@ fn main() -> Result<()> {
     let needs_editor = match &cli.command {
         Some(Command::Edit { .. }) => true,
         Some(Command::New { no_edit, .. }) => !no_edit && cfg.open_on_new,
+        Some(Command::Draft { no_edit, .. }) => !no_edit,
         _ => false,
     };
     let editor = if needs_editor {
@@ -344,6 +345,9 @@ fn main() -> Result<()> {
         Some(Command::Ask { question }) => cmd_ask(&store, &cfg, &question, output)?,
         Some(Command::Plan { id, out }) => {
             cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
+        }
+        Some(Command::Draft { id, no_edit }) => {
+            cmd_draft(&store, &cfg, &resolve_ref(&cfg, &id)?, no_edit, editor)?
         }
         Some(Command::Relink {
             dry_run,
@@ -674,11 +678,20 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
         }
     };
 
-    // Splice the draft in: keep the mechanical header (identity / status /
-    // stakeholders) — every line before the first `## Context…` prose section —
-    // and replace the prose. In the markdown profile `adr.body` is the whole
-    // document, so this is what preserves the H1 + `## Status`; in frontmatter it
-    // is the prose after the YAML. AI never touches identity/status.
+    splice_ai_draft(store, r, &draft)?;
+    eprintln!(
+        "AI-drafted the body (marked `{}`). Review and edit before committing.",
+        ai::AI_MARKER
+    );
+    Ok(true)
+}
+
+/// Splice a marker-wrapped AI `draft` into the ADR at `r`: keep the mechanical
+/// header (every line before the first `## Context…` prose section) and replace
+/// the prose. In the markdown profile `adr.body` is the whole document, so this
+/// is what preserves the H1 + `## Status`; in frontmatter it's the prose after the
+/// YAML. AI never touches identity/status. Shared by `new --interview` + `draft`.
+fn splice_ai_draft(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
     let path = store
         .find_path_by_ref(r)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -697,11 +710,41 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
     store
         .set_body_ref(r, &new_body)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+/// `adroit draft <ID>`: AI-complete an existing (template / partial) ADR body —
+/// for when `new --interview` wasn't used. Works from the current body + corpus
+/// (no interview), splices the marked draft over the prose, and opens the editor
+/// for review. Read-only on identity/status; needs a provider.
+fn cmd_draft(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    no_edit: bool,
+    editor: Option<Option<String>>,
+) -> Result<()> {
+    let provider = require_provider(cfg, "draft")?;
+    let path = store.find_path_by_ref(r)?;
+    let adr = store.read(&path)?;
+    let reference = cfg.naming.display(&adr.reference());
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .filter(|s| !s.title.eq_ignore_ascii_case(&adr.title))
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+    eprintln!("Drafting {reference} with {} …", provider.id());
+    let draft = adroit::ai::draft_fill(provider.as_ref(), &adr.title, &adr.body, &corpus)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    splice_ai_draft(store, r, &draft)?;
     eprintln!(
-        "AI-drafted the body (marked `{}`). Review and edit before committing.",
-        ai::AI_MARKER
+        "AI-drafted the body of {reference} (marked `{}`). Review before committing.",
+        adroit::ai::AI_MARKER
     );
-    Ok(true)
+    if !no_edit {
+        open_in_editor(editor, &path)?;
+    }
+    Ok(())
 }
 
 /// Print any `view` type as pretty JSON — the `-o json` path for the read verbs.

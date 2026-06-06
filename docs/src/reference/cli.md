@@ -516,6 +516,25 @@ adroit plan 21 --out plan-0021.md    # write it to a file
 |---|---|
 | `--out <PATH>` | Write the plan to a file instead of stdout |
 
+### `adroit draft <ID>`
+
+**AI-complete an existing ADR's body** — for an ADR you created as a plain
+template (without [`new --interview`](#adroit-new-title)) and now want filled in
+before review. Unlike `new --interview`, it doesn't ask questions: it works from
+the ADR's *current* (template or partial) body plus the corpus, then **splices**
+the draft over the prose — the `# ADR-NNNN` heading and `## Status` stay
+mechanical — marks it `<!-- adroit:ai-suggested -->`, and opens your editor.
+Needs an AI provider.
+
+```sh
+adroit draft 2            # fill in ADR-0002's template body, then open the editor
+adroit draft 2 --no-edit  # fill it in without opening the editor
+```
+
+| Flag | Description |
+|---|---|
+| `--no-edit` | Do not open the editor after drafting |
+
 ### `adroit edit <ID>`
 
 Open an ADR in your editor (`<ID>` resolved as in [`show`](#adroit-show-id)).

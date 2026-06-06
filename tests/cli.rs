@@ -2935,3 +2935,51 @@ fn check_warns_on_duplicate_titles_but_exits_zero() {
             .any(|p| p["kind"] == "duplicate_title" && p["severity"] == "warning")
     );
 }
+
+// ---------------------------------------------------------------------------
+// `adroit draft <ID>` — AI-complete an existing template ADR
+// ---------------------------------------------------------------------------
+
+#[test]
+fn draft_fills_an_existing_template_adr_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Heal on main", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "## Context and Problem Statement\n\nDrafted by the fake.\n\n\
+             ## Decision Outcome\n\nChosen: relink on main.",
+        )
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("AI-drafted"));
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    assert!(body.contains("# ADR-0001: Heal on main"), "heading kept");
+    assert!(body.contains("## Status"), "status kept");
+    assert!(body.contains("adroit:ai-suggested"));
+    assert!(body.contains("Drafted by the fake."));
+    assert!(
+        !body.contains("- Driver 1"),
+        "template placeholders replaced"
+    );
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn draft_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}

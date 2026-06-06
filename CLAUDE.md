@@ -593,6 +593,12 @@ the prose with the marked draft, written through `Store::set_body_ref`. AI only
 ever writes prose — identity/status/dates/links stay mechanical. Degrades to the
 plain template when no provider is available, so the ADR is always created.
 
+**`draft <ID>`** (`cmd_draft`, `ai::build_fill_request`/`draft_fill`): AI-completes
+an **existing** template/partial ADR body (no interview — works from the current
+body + corpus), via the shared `splice_ai_draft` helper (keeps the header before
+`## Context…`), then opens the editor. The retroactive twin of `new --interview`;
+needs a provider (no template fallback — the ADR already exists).
+
 **`plan <ID>`** (`cmd_plan`, `ai::build_plan_request`/`draft_plan`): the
 **read-only** companion — reads an ADR (`query::detail_at`) + corpus, asks the
 provider for an ordered implementation checklist, prints it (or `--out`). Never
