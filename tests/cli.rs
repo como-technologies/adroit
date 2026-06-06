@@ -2907,3 +2907,31 @@ fn new_interview_keeps_template_when_the_ai_call_fails() {
         "no AI draft on failure"
     );
 }
+
+#[test]
+fn check_warns_on_duplicate_titles_but_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit", "--force"])
+        .assert()
+        .success();
+    // A warning (not an error): reported on stderr, but `check` still exits 0.
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("duplicate title"))
+        .stdout(predicate::str::contains("warning"));
+    let v = json_ok(&dir, &["check", "-o", "json"]);
+    assert!(
+        v["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "duplicate_title" && p["severity"] == "warning")
+    );
+}

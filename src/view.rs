@@ -271,6 +271,9 @@ pub enum Severity {
 pub enum ProblemKind {
     /// Two ADR files share one identity (number / slug / uuid).
     DuplicateId,
+    /// Two or more ADRs share the same (case-insensitive) title — usually an
+    /// accidental re-run of `new`. Advisory (a `Warning`): titles *can* repeat.
+    DuplicateTitle,
     /// A markdown ADR's `## Status` disagrees with its directory (by_status).
     StatusDirMismatch,
     /// A `.md` ADR with no parseable `# ADR-NNNN: Title` heading.

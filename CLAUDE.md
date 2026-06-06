@@ -147,10 +147,10 @@ output). `graph`'s human view is a **tree** (edges grouped under each source nod
 the by-status breakdown + created-per-month as `print_bars` horizontal bar charts
 (rnought/talaria `█`/`░` style). `-o json` output is never colored or charted.
 
-**Repo validation is shared here too.** `query::check` runs the five `adroit
-check` rules (status/dir mismatch, duplicate identifiers, unparseable files,
-broken supersession, broken/stale links) and returns a structured
-`view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). Both the
+**Repo validation is shared here too.** `query::check` runs the `adroit check`
+rules (status/dir mismatch, duplicate identifiers, unparseable files, broken
+supersession, broken/stale links, and a **duplicate-title** `Warning`) and returns
+a structured `view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). Both the
 supersession and the cross-ADR-link checks are **scheme-aware** — they resolve a
 link/ref to an ADR via the naming seam (`ref_in_link_from`), so date/uuid/
 per_category links classify *stale* (ADR moved → warning) vs *broken* (no such ADR

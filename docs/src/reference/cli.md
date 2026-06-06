@@ -344,6 +344,9 @@ It checks for:
    **warning** — `adroit relink` fixes it); if it names no existing ADR it's a
    **broken** link (an **error**). External URLs, anchors, and non-ADR links are
    ignored.
+6. **Duplicate titles** (a **warning**): two or more ADRs share the same
+   (case-insensitive) title — usually an accidental re-run of `new`. Titles *can*
+   legitimately repeat, so this never fails the gate; it just surfaces the dups.
 
 Of these, duplicate identifiers, status↔directory mismatch, unparseable files,
 broken supersession links, and broken links are **errors** (they fail `check`);

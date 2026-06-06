@@ -247,6 +247,9 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     // cross-ADR links / supersession refs — works for every naming scheme, not
     // just the numeric ones).
     let mut by_ident: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
+    // Group by normalized title for the duplicate-title check (value: the
+    // original-case title + the files that share it).
+    let mut by_title: BTreeMap<String, (String, Vec<std::path::PathBuf>)> = BTreeMap::new();
     let scheme = store.options().naming;
     let markdown = store.options().format == Format::Markdown;
     // Frontmatter supersession refs (YAML fields, not markdown links), collected
@@ -284,6 +287,14 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             by_ident
                 .entry(ident_key(&r))
                 .or_default()
+                .push(path.clone());
+        }
+        let norm_title = adr.title.trim().to_lowercase();
+        if !norm_title.is_empty() {
+            by_title
+                .entry(norm_title)
+                .or_insert_with(|| (adr.title.trim().to_string(), Vec::new()))
+                .1
                 .push(path.clone());
         }
         if !markdown {
@@ -547,6 +558,38 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 summary: format!("duplicate {noun}"),
                 paths: files,
                 message,
+            });
+        }
+    }
+
+    // (6) Duplicate titles (advisory). Titles may legitimately repeat, so this is
+    // a Warning — `check` still exits 0 — but it surfaces the accidental `new`.
+    for (title, paths) in by_title.values() {
+        if paths.len() > 1 {
+            let files: Vec<ProblemFile> = paths
+                .iter()
+                .map(|p| {
+                    let path = p
+                        .strip_prefix(store.root())
+                        .unwrap_or(p)
+                        .display()
+                        .to_string();
+                    let (lines, bytes) = file_stats(p);
+                    ProblemFile { path, lines, bytes }
+                })
+                .collect();
+            let list = files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            problems.push(Problem {
+                severity: Severity::Warning,
+                kind: ProblemKind::DuplicateTitle,
+                label: title.clone(),
+                summary: "duplicate title".to_string(),
+                paths: files,
+                message: format!("duplicate title \"{title}\" used by {list}"),
             });
         }
     }
