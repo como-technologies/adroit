@@ -2,10 +2,12 @@
 //! and distinct from `check` (which validates *structural* repo integrity).
 //!
 //! The mechanical checks here need no AI: they catch the ways an ADR draft is
-//! obviously unfinished — leftover template placeholders, no honest negative
-//! consequences, only one option considered. `adroit lint --ai` layers a model
-//! review on top (handled in `main`); these stay deterministic so `lint` is
-//! usable in CI without a provider. Tuned for the default MADR template.
+//! obviously unfinished — sections left as nothing but their italic `_…_`
+//! prompt, no honest negative consequences, only one option considered. The
+//! prompt check is template-agnostic (any section that's still just its shipped
+//! prompt), so it tracks `template::MADR` without a hardcoded list. `adroit lint
+//! --ai` layers a model review on top (handled in `main`); these stay
+//! deterministic so `lint` is usable in CI without a provider.
 
 use serde::Serialize;
 
@@ -27,36 +29,25 @@ pub struct LintFinding {
     pub message: String,
 }
 
-/// The default MADR template's placeholder lines — their presence means the ADR
-/// is unfinished.
-const PLACEHOLDERS: &[&str] = &[
-    "Describe the architectural challenge or decision to be made.",
-    "- Driver 1",
-    "- Driver 2",
-    "1. Option A",
-    "2. Option B",
-    "Chosen option: **Option A**, because justification.",
-    "- Benefit 1",
-    "- Trade-off 1",
-    "- Role / Person",
-    "Notes on how the decision is being carried out.",
-];
-
 /// Run the mechanical authoring checks over an ADR body, returning findings
 /// (empty = clean). Pure and deterministic — no network, no `ai` feature.
 pub fn lint(body: &str) -> Vec<LintFinding> {
     let mut out = Vec::new();
 
-    // 1. Leftover template placeholders → the draft isn't filled in.
-    for ph in PLACEHOLDERS {
-        if body.contains(ph) {
+    // 1. Sections left as nothing but their italic `_…_` prompt → unfilled.
+    //    This is template-agnostic: any section whose only content is the
+    //    shipped prompt (see `template::MADR`) is the author's to write.
+    for (heading, content) in sections(body) {
+        if prompt_only(&content) {
+            let name = heading.trim_start_matches('#').trim();
             out.push(mech(format!(
-                "template placeholder still present: \"{ph}\""
+                "`{name}` still holds only its prompt — replace it with real content"
             )));
         }
     }
 
-    // 2. Honest negative consequences (people skip these).
+    // 2. Honest negative consequences (people skip these). A prompt-only section
+    //    is already caught above, so only flag a missing or genuinely empty one.
     match section(body, "### Negative Consequences") {
         None => out.push(mech(
             "no `### Negative Consequences` section — document the trade-offs honestly".into(),
@@ -68,7 +59,9 @@ pub fn lint(body: &str) -> Vec<LintFinding> {
     }
 
     // 3. More than one option considered (record the alternatives you rejected).
+    //    Skip while the section is still the prompt — that's covered by (1).
     if let Some(opts) = section(body, "## Considered Options")
+        && !prompt_only(&opts)
         && list_items(&opts) < 2
     {
         out.push(mech(
@@ -78,6 +71,59 @@ pub fn lint(body: &str) -> Vec<LintFinding> {
         ));
     }
 
+    out
+}
+
+/// True if `line` is an italic authoring prompt — `_…_` with non-empty inner
+/// text — after stripping an optional leading list marker (`- `, `* `, `N. `).
+fn is_prompt_line(line: &str) -> bool {
+    let t = line.trim();
+    let t = t
+        .strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .or_else(|| {
+            t.split_once(". ")
+                .filter(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                .map(|(_, rest)| rest)
+        })
+        .unwrap_or(t)
+        .trim();
+    t.len() >= 2
+        && t.starts_with('_')
+        && t.ends_with('_')
+        && !t[1..t.len() - 1].trim_matches('_').trim().is_empty()
+}
+
+/// True if a section's `content` is nothing but its prompt: at least one prompt
+/// line and no other (non-blank) content. Empty sections are *not* prompt-only.
+fn prompt_only(content: &str) -> bool {
+    let mut saw_prompt = false;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if is_prompt_line(line) {
+            saw_prompt = true;
+        } else {
+            return false;
+        }
+    }
+    saw_prompt
+}
+
+/// Split `body` into `(heading_line, content)` pairs — each heading's text runs
+/// up to the next heading of any level. Lines before the first heading are
+/// dropped (there's no section to attribute them to).
+fn sections(body: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in body.lines() {
+        if line.trim_start().starts_with('#') {
+            out.push((line.trim_start().to_string(), String::new()));
+        } else if let Some((_, content)) = out.last_mut() {
+            content.push_str(line);
+            content.push('\n');
+        }
+    }
     out
 }
 
@@ -124,12 +170,22 @@ fn list_items(block: &str) -> usize {
 mod tests {
     use super::*;
 
-    const FRESH_TEMPLATE: &str = "# ADR-0001: X\n\n## Status\n\nProposed\n\n\
-        ## Context and Problem Statement\n\nDescribe the architectural challenge or decision to be made.\n\n\
-        ## Decision Drivers\n\n- Driver 1\n- Driver 2\n\n\
-        ## Considered Options\n\n1. Option A\n2. Option B\n\n\
-        ## Decision Outcome\n\nChosen option: **Option A**, because justification.\n\n\
-        ### Negative Consequences\n\n- Trade-off 1\n";
+    use crate::adr::Status;
+    use crate::naming::{AdrRef, NamingScheme};
+    use crate::template::{self, MADR};
+
+    /// The real shipped MADR template, rendered — so this test can't drift from
+    /// `template::MADR`'s actual prompts.
+    fn fresh_madr() -> String {
+        template::render(
+            MADR,
+            NamingScheme::Sequential,
+            &AdrRef::Number(1),
+            "X",
+            Status::Proposed,
+            "2026-01-01",
+        )
+    }
 
     const FINISHED: &str = "# ADR-0001: Adopt feature flags\n\n## Status\n\nProposed\n\n\
         ## Context and Problem Statement\n\nWe ship risky changes and want to decouple deploy from release.\n\n\
@@ -139,13 +195,32 @@ mod tests {
 
     #[test]
     fn fresh_template_is_flagged_unfinished() {
-        let f = lint(FRESH_TEMPLATE);
+        let f = lint(&fresh_madr());
         assert!(!f.is_empty());
         assert!(f.iter().all(|x| x.source == LintSource::Mechanical));
         assert!(
-            f.iter().any(|x| x.message.contains("placeholder")),
-            "should flag leftover placeholders"
+            f.iter().any(|x| x.message.contains("still holds only its prompt")),
+            "should flag sections left as their prompt, got: {f:?}"
         );
+        // Every prose section the template ships a prompt for should be caught.
+        assert!(
+            f.iter()
+                .any(|x| x.message.contains("Context and Problem Statement")),
+            "context prompt should be flagged, got: {f:?}"
+        );
+    }
+
+    #[test]
+    fn prompt_only_detects_list_and_prose_prompts() {
+        assert!(is_prompt_line("_a prose prompt_"));
+        assert!(is_prompt_line("  - _a bulleted prompt_"));
+        assert!(is_prompt_line("1. _a numbered prompt_"));
+        assert!(!is_prompt_line("- a real bullet"));
+        assert!(!is_prompt_line("real prose"));
+        assert!(!is_prompt_line("_emphasis_ inside real prose")); // not the whole line
+        assert!(prompt_only("\n_just the prompt_\n"));
+        assert!(!prompt_only("\nreal content\n"));
+        assert!(!prompt_only("\n")); // empty is not prompt-only
     }
 
     #[test]

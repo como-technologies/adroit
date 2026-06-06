@@ -15,6 +15,13 @@ use time::{Date, Weekday};
 use crate::adr::{Number, Status};
 
 /// The built-in MADR template.
+///
+/// Each author-filled section ships with an *italic prompt* (`_…_`) that says
+/// what belongs there — instructive, not the usual throwaway "Option A". A
+/// section left as nothing but its prompt is what `adroit lint` flags as
+/// unfinished (see [`crate::lint`]), so the prompts double as the authoring
+/// checklist. AI `--interview`/`draft` replace the prose from
+/// `## Context and Problem Statement` onward.
 pub const MADR: &str = "{{heading}}\n\
 \n\
 > State: {{status}}\n\
@@ -25,37 +32,41 @@ pub const MADR: &str = "{{heading}}\n\
 \n\
 ## Stakeholders\n\
 \n\
-- Role / Person\n\
+_Who owns this decision, and who needs to sign off? List the roles or people involved._\n\
 \n\
 ## Context and Problem Statement\n\
 \n\
-Describe the architectural challenge or decision to be made.\n\
+_What situation is forcing a decision? Describe the problem and the forces at play — \
+technical constraints, business goals, team context — and why it has to be settled now._\n\
 \n\
 ## Decision Drivers\n\
 \n\
-- Driver 1\n\
-- Driver 2\n\
+_What should drive the choice? List the requirements and constraints that matter — a \
+quality attribute, a deadline, a cost ceiling, a compatibility need. One per line._\n\
 \n\
 ## Considered Options\n\
 \n\
-1. Option A\n\
-2. Option B\n\
+_List the options you actually weighed — at least two, including the one(s) you \
+rejected — so the trade-off is on the record._\n\
 \n\
 ## Decision Outcome\n\
 \n\
-Chosen option: **Option A**, because justification.\n\
+_Name the chosen option and the core reason in one line (\"Chosen: **X**, because …\"), \
+then explain how it answers the drivers above._\n\
 \n\
 ### Positive Consequences\n\
 \n\
-- Benefit 1\n\
+_What gets better, easier, or safer as a result?_\n\
 \n\
 ### Negative Consequences\n\
 \n\
-- Trade-off 1\n\
+_What gets worse, harder, or riskier? Every decision has trade-offs — name them \
+honestly, including any new debt or follow-up this creates._\n\
 \n\
 ## Implementation\n\
 \n\
-Notes on how the decision is being carried out.\n";
+_How will the decision be carried out — rollout, migration, the follow-up tasks? \
+Optional: draft it later with `adroit plan`, or delete this section if it doesn't apply._\n";
 
 /// The built-in Nygard template.
 pub const NYGARD: &str = "{{heading}}\n\

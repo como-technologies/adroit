@@ -83,9 +83,9 @@ components touched, testing, rollout, risks). It prints to stdout (or `--out`) a
 never modifies the ADR.
 
 `adroit lint <ID>` checks one ADR's authoring quality. Its mechanical checks
-(leftover placeholders, missing negative consequences, single option) need **no
-provider** and exit non-zero on findings, so `lint` is usable as an authoring gate
-in CI; `lint --ai` adds an advisory model review on top.
+(sections still left as their `_…_` prompt, missing negative consequences, single
+option) need **no provider** and exit non-zero on findings, so `lint` is usable as
+an authoring gate in CI; `lint --ai` adds an advisory model review on top.
 
 `adroit summarize <ID>` prints a one-paragraph plain-language TL;DR of an ADR —
 handy for a PR description, a notification, or a decision-log entry (read-only).

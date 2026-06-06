@@ -367,9 +367,11 @@ there — see [Web Dashboard](../usage/web.md).
 ### `adroit lint <ID>`
 
 Check one ADR's **authoring quality** (read-only) — distinct from `check`, which
-validates structural repo integrity. The mechanical checks need no AI: leftover
-template placeholders, a missing or empty `### Negative Consequences`, and fewer
-than two `## Considered Options`. `--ai` adds a model review against ADR best
+validates structural repo integrity. The mechanical checks need no AI: sections
+still left as their italic `_…_` prompt, a missing or empty
+`### Negative Consequences`, and fewer than two `## Considered Options`. The
+prompt check is template-agnostic — any section whose only content is the prompt
+the template shipped. `--ai` adds a model review against ADR best
 practices + house style (needs a provider; see
 [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)). Exits
 **non-zero** on mechanical findings, so it works as an authoring gate; the AI

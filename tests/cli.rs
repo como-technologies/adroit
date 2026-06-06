@@ -2571,7 +2571,7 @@ fn lint_flags_a_fresh_template_and_exits_nonzero() {
         .args(["lint", "1"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("placeholder"));
+        .stdout(predicate::str::contains("still holds only its prompt"));
 }
 
 #[test]
@@ -2966,8 +2966,8 @@ fn draft_fills_an_existing_template_adr_via_fake_provider() {
     assert!(body.contains("adroit:ai-suggested"));
     assert!(body.contains("Drafted by the fake."));
     assert!(
-        !body.contains("- Driver 1"),
-        "template placeholders replaced"
+        !body.contains("What should drive the choice"),
+        "the template's post-Context prompts are replaced by the AI draft"
     );
     adroit(&dir).arg("check").assert().success();
 }

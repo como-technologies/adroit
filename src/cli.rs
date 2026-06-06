@@ -433,8 +433,8 @@ pub enum Command {
     },
     /// Lint an ADR draft for authoring quality (read-only).
     ///
-    /// Mechanical checks by default — leftover template placeholders, no honest
-    /// negative consequences, only one option considered. `--ai` adds a model
+    /// Mechanical checks by default — sections still left as their `_…_` prompt,
+    /// no honest negative consequences, only one option considered. `--ai` adds a model
     /// review against ADR best practices + house style. Exits non-zero on
     /// mechanical findings; distinct from `check` (structural repo validity).
     Lint {
