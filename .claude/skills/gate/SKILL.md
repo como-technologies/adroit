@@ -17,9 +17,11 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo clippy --features forge --all-targets -- -D warnings
 cargo clippy --features web --all-targets -- -D warnings
+cargo clippy --features ai --all-targets -- -D warnings
 cargo test                       # default features
 cargo test --features forge      # incl. forge_faults.rs, forge_cli.rs
 cargo test --features web         # incl. the serve security tests
+cargo test --features ai          # incl. the AI module + interview tests
 just book                         # the manual builds, no broken links
 ```
 (`just ci` runs the full pipeline including `crate-audit`/`crate-outdated`.)

@@ -14,9 +14,10 @@ e.g. `/harden` or `/gate`.
 | Skill | When to use | What it does |
 |---|---|---|
 | `/harden` | "find bugs in X", "harden / fuzz X", widening coverage, before a release | Runs a bug-hunting campaign: build/extend the oracle or a property/fuzz/fault-injection harness, soak it, and turn every finding into a root-cause fix + regression. |
-| `/gate` | before committing or finishing work | The pre-commit quality gate: fmt + clippy and tests across default/forge/web + `just book`; commit only the changed files; **stop before pushing**. |
+| `/gate` | before committing or finishing work | The pre-commit quality gate: fmt + clippy and tests across default/forge/web/ai + `just book`; commit only the changed files; **stop before pushing**. |
 | `/doc-sync` | after changing behavior, or a periodic sweep | Keep code and docs in sync: update `CLAUDE.md` + the mdbook, verify by running the CLI, build the book. |
 | `/extend` | "add a gitea/bitbucket provider", "add a naming scheme", "add a publish adapter", "add a config key" | Scaffold a new variant of an adroit seam (forge provider, tracker, naming scheme, format, layout, publish adapter, template, config key, CLI subcommand) with the tests + docs each requires. |
+| `/adr` | making an architectural decision while working on adroit | Record the decision in adroit's own `adr/` corpus, authored with the `adroit` binary (dogfooding). Always `--dir adr`; keep it generic. |
 
 ## `/harden`
 
@@ -51,6 +52,26 @@ one module + one match arm; this skill is the per-seam checklist (files, pattern
 tests, docs) for forge providers, trackers, naming schemes, formats, layouts,
 publish adapters, templates, config keys, and CLI subcommands — including the gotcha
 that a flag-settable config key must also be wired into `config_cli_value`.
+
+## `/adr`
+
+Dogfooding adroit on its own architecture. When a decision while working on adroit
+is worth recording (a dependency, a sync/async boundary, a seam design, an on-disk
+format change), this skill drafts it into the top-level **`adr/`** corpus with the
+`adroit` binary — always `--dir adr` (since `ADROIT_DIR` points at the dogfood
+target), filling Context / Drivers / Options / Outcome (honest negative
+consequences) and moving it through `set-status` once decided. Keeps the ADRs
+generic (no client names), and deliberately separate from the mdbook.
+
+## Using adroit in another project (`use-adroit`)
+
+`use-adroit` is the **odd one out**: not a workflow for developing adroit, but a
+skill for a Claude session in *any* project that manages its ADRs with adroit.
+Copy `.claude/skills/use-adroit/` into that project. It teaches the CLI surface —
+reads via `-o json` (`list`/`show`/`search`/`stats`/`graph`/`check`), authoring
+(`new`, `new --interview`), the lifecycle (`set-status`/`supersede`/`set-review`),
+and `plan` — with the rule to drive the verbs rather than hand-edit ADR files. See
+[Automation & AI](../usage/automation.md).
 
 > These skills and the always-on rules in `CLAUDE.md` overlap on purpose:
 > `CLAUDE.md` is the guardrail that's always loaded; a skill is the invokable
