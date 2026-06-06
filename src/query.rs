@@ -923,27 +923,16 @@ fn pair_matches(e: &GraphEdge, a: &str, b: &str) -> bool {
 /// through the naming `scheme` (e.g. `[ADR-0006](../accepted/0006-foo.md)` →
 /// `Number(6)`, or `[x](20260601-foo.md)` → `Slug(..)`).
 fn linked_refs(body: &str, scheme: NamingScheme) -> Vec<crate::naming::AdrRef> {
+    // Reuse the one markdown `](target)` scanner (`links::for_each_link`) rather
+    // than a second copy; resolve each target to an ADR ref via the naming seam.
     let mut out = Vec::new();
-    // Scan each "](...)" link target for an ADR reference.
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b']'
-            && i + 1 < bytes.len()
-            && bytes[i + 1] == b'('
-            && let Some(end) = body[i + 2..].find(')')
+    crate::links::for_each_link(body, |target, _, _| {
+        if let Some(r) = scheme.ref_in_link(target)
+            && !out.contains(&r)
         {
-            let target = &body[i + 2..i + 2 + end];
-            if let Some(r) = scheme.ref_in_link(target)
-                && !out.contains(&r)
-            {
-                out.push(r);
-            }
-            i = i + 2 + end + 1;
-            continue;
+            out.push(r);
         }
-        i += 1;
-    }
+    });
     out
 }
 

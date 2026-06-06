@@ -175,7 +175,7 @@ pub fn relabel_links_to(
 /// Scan `content` for markdown link targets `](target)` and invoke `f` with the
 /// target text and its byte span `[start, end)` (exclusive of the parens). The
 /// `]` `(` `)` delimiters are ASCII, so byte indexing stays on char boundaries.
-fn for_each_link<'a>(content: &'a str, mut f: impl FnMut(&'a str, usize, usize)) {
+pub(crate) fn for_each_link<'a>(content: &'a str, mut f: impl FnMut(&'a str, usize, usize)) {
     let bytes = content.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
