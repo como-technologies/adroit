@@ -46,7 +46,7 @@ RAG without compromising that invariant.
 ## Decision Outcome
 
 Chosen option: **Option 1 — adopt `rig` behind an `ai` feature.** `rig-core`
-(0.35) ships native **Anthropic** and **Ollama** providers (both phase-1 targets)
+(pinned at 0.38) ships native **Anthropic** and **Ollama** providers (both phase-1 targets)
 plus embeddings, a vector-store abstraction, RAG, and agentic / tool-calling —
 exactly the surface the later `plan` / `related` / `dedupe` verbs need.
 Hand-rolling (option 2) would duplicate a large, maintained surface; the hybrid

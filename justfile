@@ -8,7 +8,7 @@ init:
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
 # Run all CI checks (used by .github/workflows/ci.yml)
-ci: fmt-check lint lint-forge lint-web test test-forge test-web book crate-outdated crate-audit
+ci: fmt-check lint lint-forge lint-web lint-ai test test-forge test-web test-ai book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -30,6 +30,10 @@ lint-forge:
 lint-web:
     cargo clippy --features web -- -D warnings
 
+# Run clippy with the ai feature (rig-backed Anthropic/Ollama adapter)
+lint-ai:
+    cargo clippy --features ai -- -D warnings
+
 # Run all tests
 test *ARGS:
     cargo test {{ARGS}}
@@ -42,6 +46,11 @@ test-forge *ARGS:
 # Builds without a Vue SPA present (the embed dir has a .gitkeep).
 test-web *ARGS:
     cargo test --features web {{ARGS}}
+
+# Run tests with the ai feature enabled (rig-backed adapter compiles + the
+# always-on interview flow). Live calls still need a key/Ollama at runtime.
+test-ai *ARGS:
+    cargo test --features ai {{ARGS}}
 
 # Run only unit tests (skip integration tests)
 unit:

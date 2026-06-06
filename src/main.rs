@@ -170,12 +170,13 @@ fn main() -> Result<()> {
             template,
             no_edit,
             category,
+            interview,
             #[cfg(feature = "forge")]
             forge,
             #[cfg(feature = "forge")]
             dry_run,
         }) => {
-            let path = cmd_new(
+            let (path, r) = cmd_new(
                 &store,
                 &cfg,
                 &title,
@@ -183,6 +184,11 @@ fn main() -> Result<()> {
                 category.as_deref(),
             )?;
             println!("Created {}", path.display());
+            // Opt-in AI draft (writes over the template body before the forge
+            // hook commits it / the editor opens for review).
+            if interview {
+                run_interview(&store, &cfg, &title, &r)?;
+            }
             // Opt-in forge hook (issue + draft PR + ## References). The forge
             // flags only exist in `--features forge` builds; otherwise the hook
             // gets disabled flags and no-ops. Runs before the editor so the
@@ -447,7 +453,7 @@ fn cmd_new(
     title: &str,
     template: Option<&str>,
     category: Option<&str>,
-) -> Result<std::path::PathBuf> {
+) -> Result<(std::path::PathBuf, AdrRef)> {
     let mut adr = adroit::adr::Adr::new(title)?;
     adr.status = cfg.default_status;
     // Assign the identity up front (so the heading renders correctly), via the
@@ -477,7 +483,86 @@ fn cmd_new(
         adr.body = adroit::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
     }
 
-    Ok(store.write(&mut adr)?)
+    let path = store.write(&mut adr)?;
+    Ok((path, r))
+}
+
+/// `new --interview`: a short Socratic interview whose answers + the existing
+/// corpus drive an AI draft of the ADR body, written over the template via
+/// `Store::set_body_ref` (identity / status / heading stay mechanical) and
+/// marked `<!-- adroit:ai-suggested -->` for the human to review. Degrades to a
+/// note (keeping the plain template) when no AI provider is available, so the
+/// ADR is always created.
+fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result<()> {
+    use adroit::ai::{self, INTERVIEW_QUESTIONS, Interview};
+    use std::io::{BufRead, Write};
+
+    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
+        eprintln!(
+            "note: --interview needs an AI provider (set `ai.enabled` in a build with \
+             `--features ai`, or `ADROIT_AI_FAKE` for testing) — kept the plain template."
+        );
+        return Ok(());
+    };
+
+    // Plain stdin prompts (robust on a non-TTY, e.g. piped test input). Prompts
+    // go to stderr so stdout stays clean for the `Created …` line.
+    let stdin = std::io::stdin();
+    let mut lines = stdin.lock().lines();
+    let mut answers: Vec<String> = Vec::with_capacity(INTERVIEW_QUESTIONS.len());
+    for q in INTERVIEW_QUESTIONS {
+        eprintln!("\n{q}");
+        eprint!("> ");
+        std::io::stderr().flush().ok();
+        let a = lines.next().transpose()?.unwrap_or_default();
+        answers.push(a.trim().to_string());
+    }
+
+    let iv = Interview {
+        title: title.to_string(),
+        context: answers[0].clone(),
+        drivers: answers[1].clone(),
+        options: answers[2].clone(),
+        risks: answers[3].clone(),
+    };
+    // Corpus context: existing `reference — title` lines, for house voice.
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+
+    eprintln!("\nDrafting with {} …", provider.id());
+    let draft =
+        ai::draft_body(provider.as_ref(), &iv, &corpus).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Splice the draft in: keep the mechanical header (identity / status /
+    // stakeholders) — every line before the first `## Context…` prose section —
+    // and replace the prose. In the markdown profile `adr.body` is the whole
+    // document, so this is what preserves the H1 + `## Status`; in frontmatter it
+    // is the prose after the YAML. AI never touches identity/status.
+    let path = store
+        .find_path_by_ref(r)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let adr = store.read(&path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let prefix: String = adr
+        .body
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with("## Context"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_body = if prefix.trim().is_empty() {
+        format!("{}\n", draft.trim())
+    } else {
+        format!("{}\n\n{}\n", prefix.trim_end(), draft.trim())
+    };
+    store
+        .set_body_ref(r, &new_body)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    eprintln!(
+        "AI-drafted the body (marked `{}`). Review and edit before committing.",
+        ai::AI_MARKER
+    );
+    Ok(())
 }
 
 /// Print any `view` type as pretty JSON — the `-o json` path for the read verbs.

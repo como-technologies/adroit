@@ -262,6 +262,13 @@ pub enum Command {
         /// layout; rejected by the others).
         #[arg(short, long)]
         category: Option<String>,
+        /// Run a short Socratic interview and have the configured AI provider
+        /// draft the ADR body from your answers + the existing corpus. The draft
+        /// is marked `<!-- adroit:ai-suggested -->` for you to review/edit before
+        /// commit. Opt-in; needs `ai.enabled` (build with `--features ai`) or the
+        /// `ADROIT_AI_FAKE` test seam.
+        #[arg(long)]
+        interview: bool,
         /// Also create the linked tracker issue + a draft PR and record their
         /// URLs in `## References` (opt-in; requires a configured `forge`).
         #[cfg(feature = "forge")]

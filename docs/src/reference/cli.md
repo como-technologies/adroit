@@ -91,6 +91,7 @@ Create a new ADR with the given title. The ADR directory is created automaticall
 adroit new "Use PostgreSQL for primary datastore"
 adroit new "Use Redis" --template nygard   # pick a template by name or path
 adroit new "Use Redis" --no-edit           # skip opening the editor
+adroit new "Adopt feature flags" --interview   # AI drafts the body from a short Q&A
 ```
 
 | Flag | Description |
@@ -98,6 +99,12 @@ adroit new "Use Redis" --no-edit           # skip opening the editor
 | `--template <name\|path>` | Template to scaffold from (`madr`, `nygard`, or a file path) |
 | `--no-edit` | Do not open the editor after creating the ADR |
 | `--category <name>` / `-c` | Category subdirectory — **required** under the `by_category` layout, rejected otherwise |
+| `--interview` | Run a short Socratic interview and have the configured AI provider draft the body from your answers + the existing corpus (opt-in). See [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring) |
+
+With `--interview`, the identity, status, and heading stay mechanical — the AI
+only writes the prose sections, marked `<!-- adroit:ai-suggested -->` for you to
+review and edit before committing. If no provider is configured it degrades to
+the plain template (the ADR is still created).
 
 ### `adroit list [--status <STATUS>]`
 

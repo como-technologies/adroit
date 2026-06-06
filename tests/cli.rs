@@ -2463,3 +2463,59 @@ fn read_verbs_default_to_human_output() {
         .stdout(predicate::str::contains("Status"))
         .stdout(predicate::str::starts_with("[").not());
 }
+
+// ---------------------------------------------------------------------------
+// `new --interview` (AI-assisted authoring; FakeProvider via ADROIT_AI_FAKE)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_interview_drafts_body_but_keeps_mechanical_heading_and_status() {
+    let dir = TempDir::new().unwrap();
+    let canned = "## Context and Problem Statement\n\nDrafted by the fake provider.\n\n\
+                  ## Decision Outcome\n\nChosen option: **A**.";
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--interview", "--no-edit"])
+        .env("ADROIT_AI_FAKE", canned)
+        .write_stdin("ctx\ndrivers\noptions\nrisks\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"));
+
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    // Identity + status stay mechanical; the AI prose lands under the marker.
+    assert!(
+        body.contains("# ADR-0001: Adopt feature flags"),
+        "heading preserved"
+    );
+    assert!(body.contains("## Status"), "status section preserved");
+    assert!(
+        body.contains("<!-- adroit:ai-suggested -->"),
+        "AI marker present"
+    );
+    assert!(
+        body.contains("Drafted by the fake provider."),
+        "AI prose present"
+    );
+
+    // The result is a valid repo and the status getter still works.
+    adroit(&dir).arg("check").assert().success();
+    adroit(&dir)
+        .args(["status", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("proposed"));
+}
+
+#[test]
+fn new_interview_without_a_provider_keeps_the_plain_template() {
+    let dir = TempDir::new().unwrap();
+    // No ADROIT_AI_FAKE and no `ai` feature → no provider → degrade gracefully.
+    adroit(&dir)
+        .args(["new", "Some decision", "--interview", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("needs an AI provider"));
+    // The ADR still exists and is valid (the plain template).
+    adroit(&dir).arg("check").assert().success();
+}

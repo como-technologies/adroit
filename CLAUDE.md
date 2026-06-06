@@ -539,6 +539,43 @@ env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
 `get_str`/`set_str`/`CONFIG_KEYS`. `just lint-forge`/`test-forge` (folded into
 `just ci`) cover the feature build.
 
+## AI authoring (`ai` feature)
+
+Opt-in AI-assisted authoring (RFC: issue 5; the rig-adoption decision is dogfooded
+in `adr/accepted/0001-…`). Same shape as `forge`: a **synchronous** `AiProvider`
+trait so verb handlers stay sync, with the async work bridged by a single
+`block_on` at the CLI boundary — so `--no-default-features`/`tui`/`forge` never
+pull in tokio.
+
+**Always compiled** (`src/ai/mod.rs`, `src/ai_hook.rs`): the `AiProvider` trait,
+`CompletionRequest`/`AiError` value types, the Socratic `Interview` +
+`build_request`/`draft_body` logic, the `AI_MARKER`, and the `FakeProvider`
+stand-in. So the interview flow is unit-testable with **no network and no `ai`
+feature**. `ai_hook::open_provider(cfg)` is the facade (mirrors `forge_hook`):
+it returns a `Box<dyn AiProvider>` or `None`, resolving in order — the
+`ADROIT_AI_FAKE` test seam (offline echo) → the configured rig provider (only
+under `--features ai` + `ai.enabled`) → `None`.
+
+**`ai`-gated** (`src/ai/rig_provider.rs`): `RigProvider` wraps rig (aliased from
+`rig-core` so `use rig::…` works) — Anthropic (`Client::builder().api_key(k)`) and
+Ollama (`Client::new(Nothing)`, local) — holding a current-thread tokio runtime
+and `block_on`-ing rig's async `agent(model).preamble(system).prompt(...)`.
+
+**`new --interview`** (`run_interview` in `main.rs`): asks the fixed
+`INTERVIEW_QUESTIONS` over **plain stdin** (robust on a non-TTY / piped test
+input; prompts go to stderr), builds a corpus summary from `query::summaries`,
+drafts via the provider, then **splices**: it keeps every line before the first
+`## Context…` (the mechanical heading / `## Status` / stakeholders) and replaces
+the prose with the marked draft, written through `Store::set_body_ref`. AI only
+ever writes prose — identity/status/dates/links stay mechanical. Degrades to the
+plain template when no provider is available, so the ADR is always created.
+
+**Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
+`model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by
+default); the key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY`
+/ the credential store). `serde_json` is a core dep; `rig`+`tokio` are `ai`-only.
+`just lint-ai`/`test-ai` (folded into `just ci`) cover the feature build.
+
 ## Conventions
 
 - Lib/bin separation: all logic in the library crate, `main.rs` is glue only

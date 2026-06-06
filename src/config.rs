@@ -240,6 +240,71 @@ impl Default for ForgeConfig {
     }
 }
 
+/// AI provider for `ai`-assisted authoring.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProviderKind {
+    /// Anthropic Claude (hosted). Key from `ADROIT_ANTHROPIC_KEY` / the
+    /// credential store. The default.
+    #[default]
+    Anthropic,
+    /// A local Ollama model (no key; air-gapped). Set `ai.host` to override the URL.
+    Ollama,
+}
+
+/// Opt-in AI-assisted authoring (`new --interview`; future `plan` / `lint`).
+/// Absent by default — bare `adroit` makes no AI calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    /// Which provider to use (default `anthropic`).
+    pub provider: AiProviderKind,
+    /// Model id (e.g. `claude-sonnet-4-6`, or an Ollama model like `llama3.2`).
+    pub model: String,
+    /// Kill-switch: AI calls only happen when this is `true`.
+    pub enabled: bool,
+    /// Base URL override for `ollama` (default `http://localhost:11434`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// API key — env-only, never persisted (`#[serde(skip)]`). Resolved from
+    /// `ADROIT_ANTHROPIC_KEY` / the credential store at construction.
+    #[serde(skip)]
+    pub key: Option<String>,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            provider: AiProviderKind::default(),
+            model: "claude-sonnet-4-6".to_string(),
+            enabled: false,
+            host: None,
+            key: None,
+        }
+    }
+}
+
+/// Resolve the Anthropic API key: `ADROIT_ANTHROPIC_KEY` env first, else the
+/// credential store. `None` if unset (Ollama needs no key).
+pub fn anthropic_key() -> Option<String> {
+    std::env::var("ADROIT_ANTHROPIC_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| load_credential("anthropic"))
+}
+
 /// Application configuration, persisted as YAML.
 ///
 /// New keys all carry serde defaults so older config files keep loading.
@@ -313,6 +378,11 @@ pub struct Config {
     /// to a post-merge `adroit relink`), or `none` (move only). Default: `all`.
     pub relink_scope: RelinkScope,
 
+    /// Opt-in AI-assisted authoring (`new --interview`; future verbs).
+    /// Absent by default — bare `adroit` makes no AI calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai: Option<AiConfig>,
+
     /// Opt-in forge/tracker integration (issue + PR/MR creation, etc.).
     /// Absent by default — bare `adroit` never touches a forge.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -332,6 +402,7 @@ impl Default for Config {
             open_on_new: true,
             templates_dir: None,
             summary_path: None,
+            ai: None,
             review_days: 3,
             review_quorum: 3,
             review_overdue_days: 30,

@@ -58,6 +58,52 @@ way a human does:
 - `adroit completions <bash|zsh|fish|…>` prints a shell-completion script that
   enumerates subcommands, flags, and enum values.
 
+## AI-assisted authoring
+
+`adroit new --interview` runs a short Socratic interview (problem, drivers,
+options, risks) and has a configured AI provider draft the ADR body from your
+answers plus the existing corpus, so a new ADR matches the team's voice. The
+draft is marked `<!-- adroit:ai-suggested -->` and opened in your editor — you
+review and edit before committing.
+
+**Determinism guard:** the AI only ever writes *prose*. Identity, the
+`# ADR-NNNN: Title` heading, status, dates, and supersession links stay
+mechanical in the write path. If no provider is available, `--interview` degrades
+to the plain template (the ADR is still created).
+
+### Enabling it
+
+The AI adapters live behind the `ai` Cargo feature (it brings rig + tokio; the
+core CLI stays sync). Build with it, then opt in via config:
+
+```sh
+cargo build --features ai          # or: just build (after adding the feature)
+adroit auth anthropic              # store the key (or export ADROIT_ANTHROPIC_KEY)
+```
+
+```yaml
+# config.yaml
+ai:
+  enabled: true            # kill-switch — AI calls only happen when true
+  provider: anthropic      # or: ollama (local, no key; air-gapped)
+  model: claude-sonnet-4-6 # or an Ollama model like llama3.2
+  # host: http://localhost:11434   # ollama base URL override (optional)
+```
+
+| Provider | Auth | Notes |
+|---|---|---|
+| `anthropic` | `ADROIT_ANTHROPIC_KEY` / `adroit auth anthropic` | Hosted Claude |
+| `ollama` | none | Local models; set `ai.host` for a remote instance |
+
+The decision to build the AI layer on rig is recorded in
+[ADR-0001](https://github.com/como-technologies/adroit/blob/main/adr/accepted/0001-adopt-rig-for-adroit-s-ai-integration.md).
+
+### Testing without a provider
+
+Set `ADROIT_AI_FAKE=<canned response>` to drive `new --interview` with an offline
+stand-in (no network, no `ai` feature) — useful in tests and CI to exercise the
+flow without spending tokens.
+
 ## Why this exists
 
 This structured surface is the foundation for AI-assisted authoring — see the
