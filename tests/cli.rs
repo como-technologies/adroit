@@ -2555,3 +2555,78 @@ fn plan_without_a_provider_errors() {
         .failure()
         .stderr(predicate::str::contains("needs an AI provider"));
 }
+
+// ---------------------------------------------------------------------------
+// `adroit lint` (authoring-quality checks; read-only)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_flags_a_fresh_template_and_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["lint", "1"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("placeholder"));
+}
+
+#[test]
+fn lint_json_emits_findings_on_stdout() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    let out = adroit(&dir)
+        .args(["lint", "1", "-o", "json"])
+        .assert()
+        .failure();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(!v.as_array().unwrap().is_empty());
+    assert_eq!(v[0]["source"], "mechanical");
+}
+
+#[test]
+fn lint_passes_a_complete_adr() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    // Overwrite with a fully-filled ADR (no placeholders, 2 options, real downside).
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    fs::write(
+        &file,
+        "# ADR-0001: Adopt feature flags\n\n> State: Proposed\n\n## Status\n\nProposed\n\n\
+         ## Stakeholders\n\n- Platform team\n\n## Context and Problem Statement\n\n\
+         We ship risky changes and want to decouple deploy from release.\n\n\
+         ## Considered Options\n\n1. Feature flags\n2. Long-lived branches\n\n\
+         ## Decision Outcome\n\nChosen: feature flags, to decouple deploy from release.\n\n\
+         ### Negative Consequences\n\n- Flag debt accumulates and needs periodic cleanup.\n",
+    )
+    .unwrap();
+    adroit(&dir)
+        .args(["lint", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no lint findings"));
+}
+
+#[test]
+fn lint_ai_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["lint", "1", "--ai"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs an AI provider"));
+}

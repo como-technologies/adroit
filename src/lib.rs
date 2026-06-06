@@ -17,6 +17,7 @@ pub mod git;
 pub mod history;
 pub mod index;
 pub mod links;
+pub mod lint;
 pub mod naming;
 pub mod publish;
 pub mod query;

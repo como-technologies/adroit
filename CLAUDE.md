@@ -576,6 +576,15 @@ provider for an ordered implementation checklist, prints it (or `--out`). Never
 modifies the ADR; bails (not degrades) when no provider is available, since a
 plan is inherently AI.
 
+**`lint <ID>`** (`cmd_lint`, `src/lint.rs`): authoring-quality checks on one ADR,
+**distinct from `check`** (structural repo validity). `lint::lint(body)` is the
+deterministic core — leftover MADR placeholders, missing/empty
+`### Negative Consequences`, `## Considered Options` with <2 items — returning
+`Vec<LintFinding>` (`LintSource::Mechanical`/`Ai`, serde). It needs **no AI**, so
+it's CI-usable; `--ai` appends one advisory finding from `ai::draft_lint`. Exits
+non-zero on **mechanical** findings only (AI is advisory); `-o json` emits the
+findings.
+
 **Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
 `model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by
 default); the key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY`

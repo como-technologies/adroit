@@ -313,6 +313,9 @@ fn main() -> Result<()> {
             let forge_on = false;
             cmd_check(&store, &cfg, forge_on, output)?;
         }
+        Some(Command::Lint { id, ai }) => {
+            cmd_lint(&store, &cfg, &resolve_ref(&cfg, &id)?, ai, output)?
+        }
         Some(Command::Stats) => cmd_stats(&store, output)?,
         Some(Command::Graph) => cmd_graph(&store, output)?,
         Some(Command::Plan { id, out }) => {
@@ -1363,6 +1366,69 @@ fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Pat
             println!("Wrote implementation plan to {}", p.display());
         }
         None => println!("{plan}"),
+    }
+    Ok(())
+}
+
+/// `adroit lint <ID>`: authoring-quality checks on one ADR (read-only).
+/// Mechanical findings by default; `--ai` adds a model review. Exits non-zero on
+/// mechanical findings (distinct from `check`'s structural gate). `-o json` emits
+/// the findings.
+fn cmd_lint(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    ai_review: bool,
+    output: OutputFormat,
+) -> Result<()> {
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    let mut findings = adroit::lint::lint(&detail.body);
+    let mechanical = findings.len();
+
+    if ai_review {
+        let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
+            anyhow::bail!(
+                "`lint --ai` needs an AI provider — set `ai.enabled` in a `--features ai` \
+                 build (or `ADROIT_AI_FAKE` for testing)"
+            );
+        };
+        let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+            .iter()
+            .filter(|s| s.address != detail.summary.address)
+            .map(|s| format!("{} — {}", s.reference, s.title))
+            .collect();
+        eprintln!(
+            "Reviewing {} with {} …",
+            detail.summary.reference,
+            provider.id()
+        );
+        let review = adroit::ai::draft_lint(
+            provider.as_ref(),
+            &detail.summary.title,
+            &detail.body,
+            &corpus,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        findings.push(adroit::lint::LintFinding {
+            source: adroit::lint::LintSource::Ai,
+            message: review.trim().to_string(),
+        });
+    }
+
+    if output == OutputFormat::Json {
+        print_json(&findings)?;
+    } else if findings.is_empty() {
+        println!("OK: no lint findings for {}", detail.summary.reference);
+    } else {
+        for f in &findings {
+            println!("[{}] {}", f.source, f.message);
+        }
+    }
+
+    // Exit non-zero on mechanical findings (the AI review is advisory).
+    if mechanical > 0 {
+        anyhow::bail!("{mechanical} authoring finding(s)");
     }
     Ok(())
 }

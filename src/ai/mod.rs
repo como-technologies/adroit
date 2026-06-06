@@ -176,6 +176,42 @@ pub fn draft_plan(
     provider.complete(&build_plan_request(title, adr_body, corpus))
 }
 
+/// Build the completion request for `lint --ai`: a best-practices review of an
+/// ADR draft against the house style.
+pub fn build_lint_request(title: &str, adr_body: &str, corpus: &[String]) -> CompletionRequest {
+    let corpus_block = if corpus.is_empty() {
+        "(no other ADRs)".to_string()
+    } else {
+        corpus.join("\n")
+    };
+    let system = "You are reviewing an Architecture Decision Record draft against ADR \
+        best practices and the team's house style (inferred from the other ADRs). \
+        Report concrete, actionable issues as a short markdown bullet list: weak or \
+        missing alternatives, hand-wavy decision rationale, performative or missing \
+        negative consequences, vague drivers, undefined acronyms, inconsistent voice. \
+        If it's solid, say so in one line. Be specific and terse — no preamble."
+        .to_string();
+    let prompt = format!(
+        "ADR title: {title}\n\nADR body:\n{adr_body}\n\nOther ADRs (house voice):\n\
+         {corpus_block}\n\nReview the draft now."
+    );
+    CompletionRequest {
+        system,
+        prompt,
+        max_tokens: 1000,
+    }
+}
+
+/// Run an AI review of an ADR draft via the provider. Read-only.
+pub fn draft_lint(
+    provider: &dyn AiProvider,
+    title: &str,
+    adr_body: &str,
+    corpus: &[String],
+) -> Result<String, AiError> {
+    provider.complete(&build_lint_request(title, adr_body, corpus))
+}
+
 /// An offline provider for tests and the `ADROIT_AI_FAKE` seam: echoes a canned
 /// response so the interview flow runs end-to-end with no network.
 pub struct FakeProvider {

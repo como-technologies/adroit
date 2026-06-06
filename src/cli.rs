@@ -56,6 +56,7 @@ Browse & inspect:
 
 Repo health:
   check         Validate the repo (exits non-zero on problems)
+  lint          Check one ADR's authoring quality (--ai for a model review)
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
@@ -106,6 +107,7 @@ Browse & inspect:
 
 Repo health:
   check         Validate the repo (exits non-zero on problems)
+  lint          Check one ADR's authoring quality (--ai for a model review)
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
@@ -408,6 +410,19 @@ pub enum Command {
         #[cfg(feature = "forge")]
         #[arg(long)]
         forge: bool,
+    },
+    /// Lint an ADR draft for authoring quality (read-only).
+    ///
+    /// Mechanical checks by default — leftover template placeholders, no honest
+    /// negative consequences, only one option considered. `--ai` adds a model
+    /// review against ADR best practices + house style. Exits non-zero on
+    /// mechanical findings; distinct from `check` (structural repo validity).
+    Lint {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Also run an AI review (needs a configured AI provider).
+        #[arg(long)]
+        ai: bool,
     },
     /// Print repo statistics: per-status counts, proposed-age rows (review-due
     /// flagged), and a created-per-period histogram.

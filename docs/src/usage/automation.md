@@ -76,6 +76,11 @@ the corpus and asks the provider for an ordered implementation checklist (steps,
 components touched, testing, rollout, risks). It prints to stdout (or `--out`) and
 never modifies the ADR.
 
+`adroit lint <ID>` checks one ADR's authoring quality. Its mechanical checks
+(leftover placeholders, missing negative consequences, single option) need **no
+provider** and exit non-zero on findings, so `lint` is usable as an authoring gate
+in CI; `lint --ai` adds an advisory model review on top.
+
 ### Enabling it
 
 The AI adapters live behind the `ai` Cargo feature (it brings rig + tokio; the

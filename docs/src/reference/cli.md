@@ -298,6 +298,27 @@ The same validation runs behind the web dashboard's **repo-health panel** (via
 `GET /api/check`), so the issues `check` reports on the command line also show up
 there — see [Web Dashboard](../usage/web.md).
 
+### `adroit lint <ID>`
+
+Check one ADR's **authoring quality** (read-only) — distinct from `check`, which
+validates structural repo integrity. The mechanical checks need no AI: leftover
+template placeholders, a missing or empty `### Negative Consequences`, and fewer
+than two `## Considered Options`. `--ai` adds a model review against ADR best
+practices + house style (needs a provider; see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)). Exits
+**non-zero** on mechanical findings, so it works as an authoring gate; the AI
+review is advisory. `-o json` emits the findings.
+
+```sh
+adroit lint 21            # mechanical checks
+adroit lint 21 --ai       # + an AI review
+adroit lint 21 -o json    # structured findings for an editor/agent
+```
+
+| Flag | Description |
+|---|---|
+| `--ai` | Also run an AI review (needs a configured AI provider) |
+
 ### `adroit relink`
 
 Rewrite every cross-ADR relative link so it points at the ADR's **current**
