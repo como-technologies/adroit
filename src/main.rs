@@ -197,10 +197,9 @@ fn main() -> Result<()> {
             )?;
             println!("Created {}", path.display());
             // Opt-in AI draft (writes over the template body before the forge
-            // hook commits it / the editor opens for review).
-            if interview {
-                run_interview(&store, &cfg, &title, &r)?;
-            }
+            // hook commits it / the editor opens for review). `degraded` = the
+            // interview was asked for but no provider was available.
+            let degraded = interview && !run_interview(&store, &cfg, &title, &r)?;
             // Opt-in forge hook (issue + draft PR + ## References). The forge
             // flags only exist in `--features forge` builds; otherwise the hook
             // gets disabled flags and no-ops. Runs before the editor so the
@@ -214,7 +213,10 @@ fn main() -> Result<()> {
             #[cfg(not(feature = "forge"))]
             let forge_flags = adroit::forge_hook::ForgeFlags::default();
             adroit::forge_hook::after_new(&cfg, &path, &title, forge_flags)?;
-            if cfg.open_on_new && !no_edit {
+            // Don't bury a degraded-interview warning under the editor: when
+            // `--interview` was requested but couldn't run, skip the auto-open so
+            // the message stays on screen (the file is still there to `edit`).
+            if cfg.open_on_new && !no_edit && !degraded {
                 open_in_editor(editor, &path)?;
             }
         }
@@ -600,23 +602,31 @@ fn cmd_new(
 /// marked `<!-- adroit:ai-suggested -->` for the human to review. Degrades to a
 /// note (keeping the plain template) when no AI provider is available, so the
 /// ADR is always created.
-fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result<()> {
+/// Returns `true` when the AI interview actually ran (the body was drafted),
+/// `false` when it degraded to the plain template (no provider). The caller uses
+/// that to skip auto-opening the editor on a degrade, so the warning stays visible.
+fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result<bool> {
     use adroit::ai::{self, INTERVIEW_QUESTIONS, Interview};
     use std::io::{BufRead, Write};
 
     let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
         if cfg!(feature = "ai") {
             eprintln!(
-                "warning: --interview needs `ai.enabled` + a key (config / `.env`) — \
-                 created the plain template instead."
+                "{}",
+                "--interview could not run: enable AI (`ai.enabled` / `ADROIT_AI_ENABLED=true`) \
+                 and set `ADROIT_ANTHROPIC_KEY`. The ADR was created from the plain template."
+                    .yellow()
             );
         } else {
             eprintln!(
-                "warning: --interview needs the AI feature — rebuild with `just build-ai`, \
-                 then enable `ai` — created the plain template instead."
+                "{}",
+                "--interview could not run: this binary lacks the AI feature. Rebuild with \
+                 `just build-ai` (then enable AI). The ADR was created from the plain template."
+                    .yellow()
             );
         }
-        return Ok(());
+        // Signal a degrade so the caller doesn't bury this under the editor.
+        return Ok(false);
     };
 
     // Plain stdin prompts (robust on a non-TTY, e.g. piped test input). Prompts
@@ -676,7 +686,7 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
         "AI-drafted the body (marked `{}`). Review and edit before committing.",
         ai::AI_MARKER
     );
-    Ok(())
+    Ok(true)
 }
 
 /// Print any `view` type as pretty JSON — the `-o json` path for the read verbs.
