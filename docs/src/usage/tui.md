@@ -18,6 +18,10 @@ the CLI uses, so the two surfaces never diverge.
 
 Press `?` at any time for an in-app keybinding cheat-sheet; any key dismisses it.
 
+On a large repo the ADR list is loaded on a background thread (it derives each
+ADR's history from git), so the UI stays responsive and shows a small spinner
+next to the breadcrumb while it loads or refreshes — the first paint never blocks.
+
 ## List & preview
 
 | Key            | Action                                            |

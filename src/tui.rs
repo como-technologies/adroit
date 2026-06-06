@@ -294,8 +294,12 @@ pub enum Action {
     None,
     /// Quit the application.
     Quit,
-    /// Re-run the query and refresh the preview.
+    /// Re-run the full query (the list data changed) and refresh the preview.
+    /// The driver runs this on a worker thread with a spinner.
     Refresh,
+    /// Only the selection moved — reload the preview detail (cheap, synchronous).
+    /// Distinct from [`Action::Refresh`] so navigation doesn't re-query the list.
+    RefreshPreview,
     /// Create a new ADR with the given title via the [`Store`] write path.
     Create(String),
     /// Change the selected ADR's status via [`Store::set_status_ref`]. The
@@ -309,6 +313,42 @@ pub enum Action {
     /// Persist the edited body of an ADR via [`Store::set_body_ref`], then reload
     /// so the preview reflects it. `address` is the ADR's scheme token.
     SaveBody { address: String, body: String },
+}
+
+/// How much the driver must refresh after applying an [`Action`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReloadKind {
+    /// Nothing changed.
+    #[default]
+    None,
+    /// Only the preview detail (selection moved / body saved) — synchronous.
+    Preview,
+    /// The list data changed — re-query (the driver runs this off-thread).
+    Full,
+}
+
+/// The result of applying an [`Action`]: whether to quit, and what to reload.
+/// Keeps `apply_action` a pure write step — the driver decides how to refresh
+/// (a `Full` reload runs on a worker thread behind a spinner).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Outcome {
+    pub quit: bool,
+    pub reload: ReloadKind,
+}
+
+impl Outcome {
+    fn quit() -> Self {
+        Self {
+            quit: true,
+            reload: ReloadKind::None,
+        }
+    }
+    fn reload(kind: ReloadKind) -> Self {
+        Self {
+            quit: false,
+            reload: kind,
+        }
+    }
 }
 
 /// Status filter cycled with `f`: `All` plus each [`Status`], in lifecycle order.
@@ -476,6 +516,9 @@ pub struct TuiState {
     preview_raw: bool,
     /// When true, the keybinding help overlay is shown over everything.
     show_help: bool,
+    /// When true, a list reload is running on a worker thread (drives the
+    /// spinner). Set by the driver; pure flag so rendering stays headless.
+    loading: bool,
 }
 
 impl TuiState {
@@ -565,6 +608,16 @@ impl TuiState {
     /// Set the markdown theme (from resolved config) for the rendered preview.
     pub fn set_md_theme(&mut self, theme: MarkdownTheme) {
         self.md_theme = theme;
+    }
+
+    /// Whether a background list reload is in flight (drives the spinner).
+    pub fn loading(&self) -> bool {
+        self.loading
+    }
+
+    /// Mark a background reload as started/finished (driver-only).
+    pub fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
     }
 
     /// Whether the preview currently shows raw markdown source.
@@ -1316,7 +1369,7 @@ pub fn run(config: &Config, dir: &std::path::Path) -> Result<()> {
         return Ok(());
     }
     let store = open_store(config, dir)?;
-    driver::run(config, &store)
+    driver::run(config, dir, &store)
 }
 
 /// Load the rows for the current filter into `state`, then refresh the preview.
@@ -1393,28 +1446,47 @@ fn resolve_addr(cfg: &Config, addr: &str) -> Option<crate::naming::AdrRef> {
     cfg.naming.parse_ref(addr)
 }
 
-fn apply_action(state: &mut TuiState, store: &Store, cfg: &Config, action: Action) -> Result<bool> {
-    match action {
-        Action::None | Action::Edit(_) => {}
-        Action::Quit => return Ok(true),
-        Action::Refresh => reload(state, store)?,
+fn apply_action(
+    state: &mut TuiState,
+    store: &Store,
+    cfg: &Config,
+    action: Action,
+) -> Result<Outcome> {
+    // `apply_action` is the pure write step: it mutates the store + sets the
+    // status message, and reports back *what* needs refreshing. The driver owns
+    // the refresh (a `Full` reload runs on a worker thread behind a spinner); a
+    // failed mutation reports `None` so we don't spin for nothing.
+    let outcome = match action {
+        Action::None | Action::Edit(_) => Outcome::default(),
+        Action::Quit => Outcome::quit(),
+        Action::Refresh => Outcome::reload(ReloadKind::Full),
+        Action::RefreshPreview => Outcome::reload(ReloadKind::Preview),
         Action::Create(title) => match create_adr(store, cfg, &title) {
             Ok(adr) => {
                 let n = adr.number.map(Number::get).unwrap_or(0);
                 state.set_message(format!("Created ADR {n:04}: {}", adr.title));
-                reload(state, store)?;
+                Outcome::reload(ReloadKind::Full)
             }
-            Err(e) => state.set_message(format!("create failed: {e}")),
+            Err(e) => {
+                state.set_message(format!("create failed: {e}"));
+                Outcome::default()
+            }
         },
         Action::SetStatus(addr, status) => match resolve_addr(cfg, &addr) {
             Some(r) => match store.set_status_ref(&r, status) {
                 Ok(_) => {
                     state.set_message(format!("{} -> {status}", cfg.naming.display(&r)));
-                    reload(state, store)?;
+                    Outcome::reload(ReloadKind::Full)
                 }
-                Err(e) => state.set_message(format!("status change failed: {e}")),
+                Err(e) => {
+                    state.set_message(format!("status change failed: {e}"));
+                    Outcome::default()
+                }
             },
-            None => state.set_message(format!("invalid ADR id '{addr}'")),
+            None => {
+                state.set_message(format!("invalid ADR id '{addr}'"));
+                Outcome::default()
+            }
         },
         Action::Supersede { new, old } => {
             match (resolve_addr(cfg, &new), resolve_addr(cfg, &old)) {
@@ -1425,26 +1497,38 @@ fn apply_action(state: &mut TuiState, store: &Store, cfg: &Config, action: Actio
                             cfg.naming.display(&old_r),
                             cfg.naming.display(&new_r)
                         ));
-                        reload(state, store)?;
+                        Outcome::reload(ReloadKind::Full)
                     }
-                    Err(e) => state.set_message(format!("supersede failed: {e}")),
+                    Err(e) => {
+                        state.set_message(format!("supersede failed: {e}"));
+                        Outcome::default()
+                    }
                 },
-                _ => state.set_message("invalid ADR id".to_string()),
+                _ => {
+                    state.set_message("invalid ADR id".to_string());
+                    Outcome::default()
+                }
             }
         }
         Action::SaveBody { address, body } => match resolve_addr(cfg, &address) {
             Some(r) => match store.set_body_ref(&r, &body) {
                 Ok(_) => {
                     state.set_message(format!("Saved {}", cfg.naming.display(&r)));
-                    // Refresh the preview so it reflects the saved body.
-                    refresh_preview(state, store)?;
+                    // Only the body changed — refresh the preview, not the list.
+                    Outcome::reload(ReloadKind::Preview)
                 }
-                Err(e) => state.set_message(format!("save failed: {e}")),
+                Err(e) => {
+                    state.set_message(format!("save failed: {e}"));
+                    Outcome::default()
+                }
             },
-            None => state.set_message(format!("invalid ADR id '{address}'")),
+            None => {
+                state.set_message(format!("invalid ADR id '{address}'"));
+                Outcome::default()
+            }
         },
-    }
-    Ok(false)
+    };
+    Ok(outcome)
 }
 
 mod driver {
@@ -1465,25 +1549,65 @@ mod driver {
         },
     };
     use std::io::{Stdout, stdout};
+    use std::path::Path;
     use std::sync::OnceLock;
+    use std::sync::mpsc::{self, Receiver, TryRecvError};
     use std::time::Duration;
     use syntect::easy::HighlightLines;
     use syntect::highlighting::{FontStyle, Style as SynStyle, ThemeSet};
     use syntect::parsing::SyntaxSet;
+    use throbber_widgets_tui::{Throbber, ThrobberState};
 
     type Term = Terminal<CrosstermBackend<Stdout>>;
 
-    pub fn run(config: &Config, store: &Store) -> Result<()> {
+    /// The result of an off-thread list reload.
+    type ReloadResult = Result<Vec<AdrSummary>, String>;
+
+    pub fn run(config: &Config, dir: &Path, store: &Store) -> Result<()> {
         let mut state = TuiState::new();
         // Apply the configured theme (`--theme` / `ADROIT_THEME` / config) — this
         // drives both the chrome palette and the markdown preview.
         state.set_md_theme(config.tui_theme);
-        reload(&mut state, store)?;
+        // The initial list load happens off-thread in `event_loop` (so the first
+        // paint shows a spinner rather than blocking on git history).
 
         let mut terminal = setup()?;
-        let res = event_loop(&mut terminal, &mut state, store, config);
+        let res = event_loop(&mut terminal, &mut state, store, config, dir);
         teardown(&mut terminal)?;
         res
+    }
+
+    /// Spawn the list query on a worker thread, returning a receiver for the
+    /// result. adroit is stateless, so the worker re-opens the store from
+    /// `(config, dir)` — no shared mutable state crosses the thread boundary.
+    fn spawn_reload(
+        config: &Config,
+        dir: &Path,
+        filter: Filter,
+        search: Option<String>,
+    ) -> Receiver<ReloadResult> {
+        let (tx, rx) = mpsc::channel();
+        let config = config.clone();
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            let result = (|| -> ReloadResult {
+                let store = open_store(&config, &dir).map_err(|e| e.to_string())?;
+                let rows = match &search {
+                    Some(needle) => {
+                        let mut rows = query::search(&store, needle).map_err(|e| e.to_string())?;
+                        if let Some(status) = filter.status {
+                            rows.retain(|r| r.status == status);
+                        }
+                        sort_in_place(&mut rows, filter.sort);
+                        rows
+                    }
+                    None => query::summaries(&store, &filter).map_err(|e| e.to_string())?,
+                };
+                Ok(rows)
+            })();
+            let _ = tx.send(result);
+        });
+        rx
     }
 
     fn setup() -> Result<Term> {
@@ -1509,33 +1633,89 @@ mod driver {
         state: &mut TuiState,
         store: &Store,
         config: &Config,
+        dir: &Path,
     ) -> Result<()> {
+        let mut throbber = ThrobberState::default();
+        // Kick off the initial list load on a worker thread.
+        state.set_loading(true);
+        let mut pending = Some(spawn_reload(
+            config,
+            dir,
+            state.filter(),
+            state.search().map(String::from),
+        ));
+
         loop {
-            terminal.draw(|f| ui(f, state))?;
-            // (state is reborrowed mutably by `ui` for viewport bookkeeping)
-            if !event::poll(Duration::from_millis(200))? {
-                continue;
+            terminal.draw(|f| ui(f, state, &mut throbber))?;
+
+            // Pick up a finished background reload, if any.
+            if let Some(rx) = &pending {
+                match rx.try_recv() {
+                    Ok(Ok(rows)) => {
+                        state.set_rows(rows);
+                        let _ = refresh_preview(state, store); // one detail, cheap
+                        state.set_loading(false);
+                        pending = None;
+                    }
+                    Ok(Err(e)) => {
+                        state.set_message(format!("load failed: {e}"));
+                        state.set_loading(false);
+                        pending = None;
+                    }
+                    Err(TryRecvError::Empty) => {} // still running
+                    Err(TryRecvError::Disconnected) => {
+                        state.set_loading(false);
+                        pending = None;
+                    }
+                }
             }
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    let action = handle_key(state, key);
-                    // The editor needs the terminal suspended; everything else
-                    // goes through the shared, headless `apply_action`.
-                    if let Action::Edit(addr) = action {
-                        run_editor(terminal, state, store, config, &addr)?;
-                        continue;
+
+            // Poll briefly while loading so the spinner animates smoothly.
+            let timeout = if state.loading() {
+                Duration::from_millis(80)
+            } else {
+                Duration::from_millis(200)
+            };
+            if event::poll(timeout)? {
+                let outcome = match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        let action = handle_key(state, key);
+                        // The editor needs the terminal suspended; everything
+                        // else goes through the shared, headless `apply_action`.
+                        if let Action::Edit(addr) = action {
+                            run_editor(terminal, state, store, config, &addr)?;
+                            continue;
+                        }
+                        apply_action(state, store, config, action)?
                     }
-                    if apply_action(state, store, config, action)? {
-                        break;
+                    Event::Mouse(m) => {
+                        let action = handle_mouse(state, m);
+                        apply_action(state, store, config, action)?
                     }
+                    _ => Outcome::default(),
+                };
+                if outcome.quit {
+                    break;
                 }
-                Event::Mouse(m) => {
-                    let action = handle_mouse(state, m);
-                    if apply_action(state, store, config, action)? {
-                        break;
+                match outcome.reload {
+                    ReloadKind::Full => {
+                        state.set_loading(true);
+                        pending = Some(spawn_reload(
+                            config,
+                            dir,
+                            state.filter(),
+                            state.search().map(String::from),
+                        ));
                     }
+                    ReloadKind::Preview => {
+                        let _ = refresh_preview(state, store);
+                    }
+                    ReloadKind::None => {}
                 }
-                _ => {}
+            }
+
+            if state.loading() {
+                throbber.calc_next();
             }
         }
         Ok(())
@@ -1555,7 +1735,7 @@ mod driver {
                     Action::None
                 } else {
                     state.select_next();
-                    Action::Refresh
+                    Action::RefreshPreview
                 }
             }
             MouseEventKind::ScrollUp => {
@@ -1564,7 +1744,7 @@ mod driver {
                     Action::None
                 } else {
                     state.select_prev();
-                    Action::Refresh
+                    Action::RefreshPreview
                 }
             }
             _ => Action::None,
@@ -1652,19 +1832,19 @@ mod driver {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             KeyCode::Char('j') | KeyCode::Down => {
                 state.select_next();
-                Action::Refresh
+                Action::RefreshPreview
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 state.select_prev();
-                Action::Refresh
+                Action::RefreshPreview
             }
             KeyCode::Char('g') => {
                 state.select_first();
-                Action::Refresh
+                Action::RefreshPreview
             }
             KeyCode::Char('G') => {
                 state.select_last();
-                Action::Refresh
+                Action::RefreshPreview
             }
             KeyCode::Enter => {
                 state.focus_preview();
@@ -1969,7 +2149,7 @@ mod driver {
     /// Render a frame. Takes `&mut TuiState` because the editor pane reports its
     /// visible height back into the state (so cursor-follow scrolling knows the
     /// viewport); only that bookkeeping field is mutated.
-    fn ui(f: &mut Frame, state: &mut TuiState) {
+    fn ui(f: &mut Frame, state: &mut TuiState, throbber: &mut ThrobberState) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1980,6 +2160,10 @@ mod driver {
             .split(f.area());
 
         render_breadcrumb(f, state, chunks[0]);
+        // A spinner at the right of the breadcrumb while a reload is in flight.
+        if state.loading() {
+            render_spinner(f, state, chunks[0], throbber);
+        }
 
         let panes = Layout::default()
             .direction(Direction::Horizontal)
@@ -2107,6 +2291,29 @@ mod driver {
             ));
         }
         f.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    /// An animated spinner + "loading" at the right end of the breadcrumb, shown
+    /// while a background list reload is running (large repos shell `git log` per
+    /// ADR, so the first paint / a refresh can take a moment).
+    fn render_spinner(f: &mut Frame, state: &TuiState, area: Rect, throbber: &mut ThrobberState) {
+        let c = chrome(state.md_theme());
+        let w = 11u16.min(area.width); // spinner + " loading"
+        let spot = Rect {
+            x: area.x + area.width.saturating_sub(w),
+            y: area.y,
+            width: w,
+            height: 1,
+        };
+        // Clear underneath so the breadcrumb text doesn't bleed through.
+        f.render_widget(Clear, spot);
+        let throb = Throbber::default()
+            .label(" loading")
+            .style(Style::default().fg(c.muted))
+            .throbber_style(Style::default().fg(c.accent).add_modifier(Modifier::BOLD))
+            .throbber_set(throbber_widgets_tui::BRAILLE_SIX)
+            .use_type(throbber_widgets_tui::WhichUse::Spin);
+        f.render_stateful_widget(throb, spot, throbber);
     }
 
     /// Render the in-TUI body editor in the right pane and place the terminal
@@ -3369,8 +3576,11 @@ mod tests {
         reload(&mut s, &store).unwrap();
         assert_eq!(s.visible_rows().len(), 0);
 
-        let quit = apply_action(&mut s, &store, &cfg, Action::Create("First".to_string())).unwrap();
-        assert!(!quit);
+        let out = apply_action(&mut s, &store, &cfg, Action::Create("First".to_string())).unwrap();
+        assert!(!out.quit);
+        // apply_action is the write step; the driver does the reload — emulate it.
+        assert_eq!(out.reload, ReloadKind::Full);
+        reload(&mut s, &store).unwrap();
         assert_eq!(s.visible_rows().len(), 1);
         assert_eq!(s.selected().unwrap().title, "First");
         assert_eq!(s.selected().unwrap().status, Status::Proposed);
@@ -3384,14 +3594,15 @@ mod tests {
         let mut s = TuiState::new();
         reload(&mut s, &store).unwrap();
 
-        let quit = apply_action(
+        let out = apply_action(
             &mut s,
             &store,
             &cfg,
             Action::SetStatus(num.to_string(), Status::Accepted),
         )
         .unwrap();
-        assert!(!quit);
+        assert!(!out.quit);
+        reload(&mut s, &store).unwrap(); // driver does the reload
         assert_eq!(s.selected().unwrap().status, Status::Accepted);
         // Confirm it persisted through the store, not just in memory.
         assert_eq!(
@@ -3436,7 +3647,48 @@ mod tests {
     fn quit_action_signals_exit() {
         let (_d, store, cfg) = setup_store();
         let mut s = TuiState::new();
-        assert!(apply_action(&mut s, &store, &cfg, Action::Quit).unwrap());
+        assert!(
+            apply_action(&mut s, &store, &cfg, Action::Quit)
+                .unwrap()
+                .quit
+        );
+    }
+
+    #[test]
+    fn action_reload_kinds_distinguish_full_from_preview() {
+        let (_d, store, cfg) = setup_store();
+        let mut s = TuiState::new();
+        // A list-changing refresh is a Full (off-thread) reload.
+        assert_eq!(
+            apply_action(&mut s, &store, &cfg, Action::Refresh)
+                .unwrap()
+                .reload,
+            ReloadKind::Full
+        );
+        // A selection move only refreshes the preview (cheap, synchronous).
+        assert_eq!(
+            apply_action(&mut s, &store, &cfg, Action::RefreshPreview)
+                .unwrap()
+                .reload,
+            ReloadKind::Preview
+        );
+        // Navigation/no-op actions don't reload at all.
+        assert_eq!(
+            apply_action(&mut s, &store, &cfg, Action::None)
+                .unwrap()
+                .reload,
+            ReloadKind::None
+        );
+    }
+
+    #[test]
+    fn loading_flag_toggles() {
+        let mut s = TuiState::new();
+        assert!(!s.loading());
+        s.set_loading(true);
+        assert!(s.loading());
+        s.set_loading(false);
+        assert!(!s.loading());
     }
 
     // --- EditorBuffer: pure, terminal-free editing --------------------------
@@ -3642,8 +3894,10 @@ mod tests {
         s.edit_insert_char('!');
         let action = s.save_edit();
 
-        let quit = apply_action(&mut s, &store, &cfg, action).unwrap();
-        assert!(!quit);
+        let out = apply_action(&mut s, &store, &cfg, action).unwrap();
+        assert!(!out.quit);
+        // A body save only refreshes the preview, not the whole list.
+        assert_eq!(out.reload, ReloadKind::Preview);
 
         let after = query::detail(&store, num).unwrap().body;
         assert_ne!(before, after);

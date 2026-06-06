@@ -19,6 +19,7 @@ tui = [
     "dep:the-other-tui-markdown",
     "dep:nucleo-matcher",
     "dep:syntect",
+    "dep:throbber-widgets-tui",
 ]
 # `web` is off by default because it needs the Vue build (`just web-build`).
 # It pulls in the async/web stack only when enabled; the core lib + CLI
@@ -106,6 +107,9 @@ syntect = { version = "5", default-features = false, features = [
     "default-themes",
     "regex-fancy",
 ], optional = true }
+# tui feature only: animated spinner shown while a reload runs on a worker
+# thread (large repos shell `git log` per ADR). Targets ratatui 0.30.
+throbber-widgets-tui = { version = "0.11", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"

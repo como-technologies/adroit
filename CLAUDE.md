@@ -238,6 +238,21 @@ box: `empty_list_message(search, status)` (pure) distinguishes an empty repo
 ("No ADRs yet — press n") from a search/filter hiding everything, and the preview
 shows a centered "No ADR selected" hint.
 
+**Threaded reload + spinner.** The list query resolves git history per ADR, so on
+a large repo it can take a moment. `apply_action` is now a **pure write step** that
+returns an `Outcome { quit, reload: ReloadKind }` (`None`/`Preview`/`Full`) instead
+of reloading inline; the **driver** decides how to refresh. A `Full` reload runs on
+a worker thread (`spawn_reload` re-opens the store from `(config, dir)` — adroit is
+stateless, so nothing mutable crosses the thread) and posts rows back over an
+`mpsc` channel; the event loop polls the channel each frame, applies the rows +
+one synchronous preview detail on arrival, and shows a `throbber-widgets-tui`
+spinner (`render_spinner`, right of the breadcrumb) while `state.loading()`. A
+`Preview` reload (selection moved via `Action::RefreshPreview`, or a body save)
+just reloads the one detail synchronously — navigation never re-queries the list or
+spawns a thread. `TuiState.loading` is a pure flag; the channel/thread/throbber
+state live in the driver. The headless `apply_action` tests assert the write +
+`ReloadKind` and call `reload` themselves to emulate the driver.
+
 **Command palette (`:`).** A fuzzy command palette (`Mode::Palette { input,
 index }`, opened with `:`) is the discoverable index of every TUI verb. The
 commands are a single `PaletteCmd` enum + `PALETTE` const (title + key hint per
