@@ -12,6 +12,22 @@ fn adroit(dir: &TempDir) -> Command {
     cmd.arg("--dir").arg(dir.path());
     // Never block on an editor in tests.
     cmd.env("EDITOR", "true").env("VISUAL", "true");
+    // Hermetic AI config. Run in the temp dir so the binary's `dotenvy` load
+    // can't discover a developer's repo-root `.env` (e.g. a dogfooding
+    // `ADROIT_AI_*`), and drop any inherited AI env. Otherwise the
+    // "no provider configured" tests reach a real provider whenever one happens
+    // to be set up locally. Tests that want a provider set `ADROIT_AI_FAKE`
+    // explicitly, which takes precedence regardless.
+    cmd.current_dir(dir.path());
+    for var in [
+        "ADROIT_AI_ENABLED",
+        "ADROIT_AI_PROVIDER",
+        "ADROIT_AI_MODEL",
+        "ADROIT_AI_HOST",
+        "ADROIT_ANTHROPIC_KEY",
+    ] {
+        cmd.env_remove(var);
+    }
     cmd
 }
 
@@ -2510,12 +2526,17 @@ fn new_interview_drafts_body_but_keeps_mechanical_heading_and_status() {
 #[test]
 fn new_interview_without_a_provider_keeps_the_plain_template() {
     let dir = TempDir::new().unwrap();
-    // No ADROIT_AI_FAKE and no `ai` feature → no provider → degrade gracefully.
+    // No ADROIT_AI_FAKE and no provider configured → degrade gracefully. The
+    // wording differs by build (lacking the `ai` feature vs. AI not enabled),
+    // but both keep the plain template — assert that shared, on-point phrase.
     adroit(&dir)
         .args(["new", "Some decision", "--interview", "--no-edit"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+        .stderr(
+            predicate::str::contains("could not run")
+                .and(predicate::str::contains("plain template")),
+        );
     // The ADR still exists and is valid (the plain template).
     adroit(&dir).arg("check").assert().success();
 }
