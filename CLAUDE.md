@@ -388,8 +388,9 @@ link naming no existing ADR is **broken** (`Severity::Error`). `cmd_check` exits
 non-zero only when an `Error`-severity problem is present (duplicate number,
 broken link, status/dir mismatch, unparseable, broken supersession); a
 warning-only report (e.g. a deferred-relink PR's transiently stale inbound links)
-prints `OK: N ADRs, M warning(s)` and exits 0. `query.rs` reuses
-`links::number_in_target` for its (numeric) graph link parsing.
+prints `OK: N ADRs, M warning(s)` and exits 0. `query.rs` resolves graph link
+targets through the naming seam (`scheme.ref_in_link`), so the graph is
+scheme-agnostic; `links::number_in_target` remains as a fuzz/parser-test target.
 
 `Store::renumber` (`adroit renumber <old> <new> [--file]`) resolves a duplicate
 number: rename the file, rewrite its heading + self-refs, then
@@ -644,9 +645,97 @@ key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY` / the
 credential store). `serde_json` is a core dep; `rig`+`tokio` are `ai`-only.
 `just lint-ai`/`test-ai` (folded into `just ci`) cover the feature build.
 
-## Conventions
+## Design principles & conventions (SOLID / DRY / Rust)
 
-- Lib/bin separation: all logic in the library crate, `main.rs` is glue only
-- Use `thiserror` for library error types, `anyhow` for the binary
-- Use `strum` for enum Display derives
-- Use newtypes for domain identifiers (e.g. `AdrId`, `Number`, `Created`)
+Rules a change must preserve. These aren't aspirational — the codebase already
+follows them (an audit against the conventions we share with `~/repos/talaria`
+found them applied consistently). Keep it that way.
+
+### Search before adding (DRY)
+Before adding a function, error variant, or helper, **grep for an existing one** —
+recurring concerns have a single owner; reuse it rather than re-deriving:
+- ADR identity / filenames / link refs → the **naming seam** (`naming.rs`); never
+  hand-parse a ref — call `scheme.parse`/`ref_in_link`/`ref_matches`.
+- relative links → `links::rel_link` (one common-prefix walk; don't write a second).
+- config → store options → `StoreOptions::from_config` (the one place every surface
+  maps config to a store; a new option is wired *once*).
+- reading/deriving ADR data → the `query`/`view` layer (computed once; CLI, TUI,
+  and web consume identical results).
+
+A duplicated algorithm is a future-divergence bug — extract instead of copying.
+
+### Simplicity first
+Prefer the simpler solution; remove old paths rather than keep parallel versions;
+don't add backwards-compat shims unless asked. (See the statelessness/idempotency
+invariant above — *converge, don't accumulate*.)
+
+### Lib/bin & error layering
+- All logic lives in the **library crate**; `main.rs` is argument-marshalling +
+  human-rendering glue. New reusable logic goes in a lib module, not `main.rs`.
+- **Typed errors (`thiserror`) in the data/parse layer; `anyhow` in the binary and
+  the thin orchestration/surface layers.** `adr`/`format`/`frontmatter`/`store`/
+  `query`/`naming`/`links`/`config`/`template`/`git` expose `thiserror` enums that
+  compose with `#[from]` / `#[error(transparent)]`. **Never stringify a typed
+  cause** (`map_err(|e| E::X(e.to_string()))`) — add a `#[from]` variant. `main.rs`
+  and the feature-gated surfaces (`serve`, `tui`) + forge orchestration may use
+  `anyhow` (they warn-and-continue across git+HTTP+fs); the pure parsers stay
+  `anyhow`-free.
+
+### Seams are enums/traits with one owner (Open/Closed)
+adroit is extended by **adding a variant to a seam**, not editing call sites. The
+gold standard is the **naming seam**: every scheme behavior is a method on
+`NamingScheme`/`AdrRef`, so adding a scheme edits one module.
+- Behavior that varies by an enum (`Format`, `Layout`, `NamingScheme`) belongs as a
+  **named method/predicate on that enum** (e.g. `NamingScheme::is_numeric`/`scope`),
+  not an ad-hoc `match`/`== Variant` scattered across files. Adding a third
+  `== Format::X` site is the signal to lift it onto `Format`.
+- A new pluggable backend (forge/AI provider, publish target, tracker) is a **trait
+  impl + one factory arm** (`forge::open`, `ai_hook::open_provider`).
+
+### Trait design (capability, focused, colocated)
+- A trait names a **capability** (verb/adjective) — `AiProvider`, `Tracker`,
+  `HttpTransport` — not a data structure (`Manager`/`Database`).
+- Keep traits **focused** (interface segregation), and never give a type a trait
+  impl it can't honor: Jira is a `Tracker`, not a `Forge`, so it carries **no**
+  panicking `Forge` impl (that breaks Liskov). The `(Option<dyn Forge>, Option<dyn
+  Tracker>)` pair keeps the roles independent.
+- **Colocate** a trait with its primary impl (no catch-all `src/traits/`).
+- **Prefer generics over `dyn`** unless dispatch is genuinely runtime-selected.
+  `dyn` is load-bearing at the forge factory (adapter chosen from config; roles can
+  differ) and the `HttpTransport` seam (injected fake vs real) — elsewhere prefer
+  `impl Trait`/generics.
+
+### Dependency inversion & feature confinement
+Depend on the trait/facade, not the concrete. The **hook facades** (`forge_hook`,
+`ai_hook`) are always compiled, so verb handlers call them unconditionally and
+carry **no `#[cfg]`**. A feature's `#[cfg(feature = …)]` is confined to three
+places: the `mod` line in `lib.rs`, the facade's twin (real / no-op) defs, and the
+CLI surface. Don't sprinkle `#[cfg(feature)]` through verb logic.
+
+### Pure core, effectful shell
+Transform logic is **pure, terminal/network/git-free functions**, unit-tested
+headlessly: `format::*`, `links::*`, `naming::*`, `lint::lint`, `similar::rank`,
+`template::*`, `history::parse_log`, the TUI `apply_action` layer, the forge
+orchestration cores. Effects (fs/git/http) live in the shell (`Store`, `main`,
+forge orchestration). Push the decidable part into a pure function; keep the I/O
+thin around it.
+
+### Test / production separation (hard rule)
+**Never** put test-only state in a production type — no `Test` enum variant, no
+`is_test`/`test_mode` field, no `if cfg!(test)` branch in production logic. adroit's
+seams are the right way: documented **runtime env overrides** usable in production
+(`ADROIT_AI_FAKE`, `ADROIT_TODAY`), `#[cfg(test)]` helpers (`Store::next_number`),
+and injected fakes (`FakeProvider`, `FakeTransport`). Fixtures and fakes, never
+production conditionals.
+
+### Rust idioms
+- **Newtypes** for domain ids (`AdrId`/`Number`/`Created`/`ReviewBy`/`AdrRef`) — no
+  primitive obsession. `strum` for enum `Display`/`FromStr` (`ascii_case_insensitive`
+  kept in sync with serde `rename_all`).
+- `Cow<str>` where a transform is usually a no-op (`format::normalize_lone_cr`);
+  borrow over `.clone()`, `&str` over `String` in signatures.
+- **Document genuinely-infallible `expect`s**; never a silent `unwrap` on a fallible
+  runtime path — degrade gracefully (`Option`/`Result`), as `git`/`history` do.
+- Internal API is `pub(crate)`; **test-only** items are `#[cfg(test)]` so the binary
+  doesn't carry them. Slice strings on **char** boundaries (`.chars()`), not bytes
+  (a real fuzz-found bug in `naming::display`).
