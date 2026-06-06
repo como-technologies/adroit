@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use colored::Colorize;
 
 use adroit::adr::{Number, ReviewBy, Status};
 use adroit::cli::{Cli, Command, ConfigAction, OutputFormat};
@@ -38,6 +39,11 @@ fn main() -> Result<()> {
     // friends can be sourced from a file instead of passed on every command.
     // Real environment variables already set take precedence over the file.
     let _ = dotenvy::dotenv();
+    // Disable ANSI color when stdout isn't a terminal (pipes, `-o json`, CI);
+    // when it is, `colored` still honors NO_COLOR / CLICOLOR.
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        colored::control::set_override(false);
+    }
     let cli = Cli::parse();
     let mut cfg = config::Config::load()?;
     config::bootstrap(&mut cfg);
@@ -636,8 +642,8 @@ fn cmd_show(store: &Store, r: &AdrRef, output: OutputFormat) -> Result<()> {
         return print_json(&detail);
     }
     let s = &detail.summary;
-    println!("{}: {}", s.reference, s.title);
-    println!("Status:  {}", s.status);
+    println!("{}: {}", s.reference.bold(), s.title);
+    println!("Status:  {}", status_color(s.status));
     if let Some(c) = &s.created {
         println!("Created: {}", ymd(c));
     }
@@ -903,13 +909,67 @@ fn id_col_width(rows: &[AdrSummary]) -> usize {
 
 /// Render one `list` / `search` row. Shared so the two read commands stay
 /// byte-identical. `id_w` is the (dynamic) identifier column width.
+/// Color an ADR status for human output (a no-op when color is disabled).
+fn status_color(s: Status) -> colored::ColoredString {
+    let label = s.to_string();
+    match s {
+        Status::Proposed => label.yellow(),
+        Status::Accepted => label.green(),
+        Status::Rejected => label.red(),
+        Status::Superseded => label.magenta(),
+        Status::Deprecated => label.dimmed(),
+    }
+}
+
+/// The bar color matching a status (for the `stats` bar chart).
+fn status_bar_color(s: Status) -> colored::Color {
+    match s {
+        Status::Proposed => colored::Color::Yellow,
+        Status::Accepted => colored::Color::Green,
+        Status::Rejected => colored::Color::Red,
+        Status::Superseded => colored::Color::Magenta,
+        Status::Deprecated => colored::Color::BrightBlack,
+    }
+}
+
+/// Render `(label, value, bar_color)` rows as horizontal bars (rnought/talaria
+/// style: `label ██████░░ value`), scaled to the largest value.
+fn print_bars(rows: &[(String, usize, colored::Color)], width: usize) {
+    let max = rows.iter().map(|(_, v, _)| *v).max().unwrap_or(0).max(1);
+    let label_w = rows.iter().map(|(l, _, _)| l.len()).max().unwrap_or(0);
+    for (label, value, color) in rows {
+        let filled = if *value == 0 {
+            0
+        } else {
+            (((*value as f64 / max as f64) * width as f64).round() as usize).clamp(1, width)
+        };
+        let bar = "█".repeat(filled).color(*color);
+        let empty = "░".repeat(width - filled).dimmed();
+        println!("  {label:<label_w$}  {bar}{empty} {value}");
+    }
+}
+
+/// A short, colored label for a graph edge kind.
+fn edge_label(k: EdgeKind) -> colored::ColoredString {
+    match k {
+        EdgeKind::Supersedes => "supersedes".red(),
+        EdgeKind::DependsOn => "depends on".magenta(),
+        EdgeKind::Refines => "refines".blue(),
+        EdgeKind::RelatesTo => "relates to".cyan(),
+        EdgeKind::Related => "links".dimmed(),
+    }
+}
+
 fn print_summary_row(row: &AdrSummary, id_w: usize) {
+    // Pad the *plain* status to width before coloring, so ANSI codes don't break
+    // column alignment.
+    let pad = " ".repeat(12usize.saturating_sub(row.status.to_string().len()));
     println!(
-        "{:<id_w$}{:<12}{}{}",
+        "{:<id_w$}{}{pad}{}{}",
         row_id(row),
-        row.status,
+        status_color(row.status),
         row.title,
-        forge_suffix(row)
+        forge_suffix(row),
     );
 }
 
@@ -1301,48 +1361,129 @@ fn cmd_stats(store: &Store, output: OutputFormat) -> Result<()> {
     if output == OutputFormat::Json {
         return print_json(&stats);
     }
-    println!("Total ADRs: {}", stats.total);
-    println!("By status:");
-    for sc in &stats.by_status {
-        println!("  {:<11} {}", sc.status, sc.count);
-    }
+    println!("Total ADRs: {}", stats.total.to_string().bold());
+    println!("{}", "By status:".bold());
+    let status_rows: Vec<(String, usize, colored::Color)> = stats
+        .by_status
+        .iter()
+        .map(|sc| (sc.status.to_string(), sc.count, status_bar_color(sc.status)))
+        .collect();
+    print_bars(&status_rows, 24);
     if !stats.review_due.is_empty() {
-        println!("Review due: {}", stats.review_due.len());
+        println!(
+            "Review due: {}",
+            stats.review_due.len().to_string().yellow()
+        );
     }
     if !stats.proposed_age.is_empty() {
-        println!("Oldest proposed:");
+        println!("{}", "Oldest proposed:".bold());
         for p in stats.proposed_age.iter().take(5) {
             let age = p
                 .age_days
                 .map(|d| format!("{d}d"))
                 .unwrap_or_else(|| "?".into());
-            let flag = if p.review_due { " (review due)" } else { "" };
+            let flag = if p.review_due {
+                " (review due)".yellow()
+            } else {
+                "".normal()
+            };
             println!("  {:<8} {:<5} {}{}", p.reference, age, p.title, flag);
         }
     }
     if !stats.created_over_time.is_empty() {
-        println!("Created over time:");
-        for b in &stats.created_over_time {
-            println!("  {} {}", b.month, b.count);
-        }
+        println!("{}", "Created over time:".bold());
+        let month_rows: Vec<(String, usize, colored::Color)> = stats
+            .created_over_time
+            .iter()
+            .map(|b| (b.month.clone(), b.count, colored::Color::Cyan))
+            .collect();
+        print_bars(&month_rows, 24);
     }
     Ok(())
 }
 
 /// `adroit graph`: the ADR relationship graph (supersession + typed links).
-/// `-o json` emits `view::Graph` (nodes + edges); the human view is a summary.
+/// `-o json` emits `view::Graph` (nodes + edges); the human view is a **tree** —
+/// each ADR with outgoing edges, its relations indented under it.
 fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
     let graph = query::graph(store)?;
     if output == OutputFormat::Json {
         return print_json(&graph);
     }
     println!(
-        "{} ADRs, {} relationship(s)",
-        graph.nodes.len(),
-        graph.edges.len()
+        "{}",
+        format!(
+            "ADR relationship graph · {} ADRs · {} edges",
+            graph.nodes.len(),
+            graph.edges.len()
+        )
+        .bold()
     );
+
+    // Look up a node's status/title by its reference.
+    let node: HashMap<&str, &adroit::view::GraphNode> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.reference.as_str(), n))
+        .collect();
+    // Group outgoing edges by source — BTreeMap keeps the output sorted/stable.
+    let mut outgoing: BTreeMap<&str, Vec<&adroit::view::GraphEdge>> = BTreeMap::new();
     for e in &graph.edges {
-        println!("  {} --{:?}--> {}", e.from, e.kind, e.to);
+        outgoing.entry(e.from.as_str()).or_default().push(e);
+    }
+    // Every ref that participates in at least one edge.
+    let connected: HashSet<&str> = outgoing
+        .keys()
+        .copied()
+        .chain(graph.edges.iter().map(|e| e.to.as_str()))
+        .collect();
+
+    for (from, edges) in &outgoing {
+        match node.get(from) {
+            Some(n) => println!(
+                "\n{} {} [{}]",
+                from.bold(),
+                n.title.dimmed(),
+                status_color(n.status)
+            ),
+            None => println!("\n{}", from.bold()),
+        }
+        for (i, e) in edges.iter().enumerate() {
+            let connector = if i + 1 == edges.len() {
+                "└─"
+            } else {
+                "├─"
+            };
+            let to_title = node
+                .get(e.to.as_str())
+                .map(|n| n.title.as_str())
+                .unwrap_or("");
+            println!(
+                "  {} {} {} {} {}",
+                connector.dimmed(),
+                edge_label(e.kind),
+                "→".dimmed(),
+                e.to.bold(),
+                to_title.dimmed()
+            );
+        }
+    }
+
+    // Isolated ADRs (no relationships) — a dim footnote.
+    let isolated: Vec<&str> = graph
+        .nodes
+        .iter()
+        .map(|n| n.reference.as_str())
+        .filter(|r| !connected.contains(r))
+        .collect();
+    if !isolated.is_empty() {
+        println!(
+            "\n{} {}",
+            "unconnected:".dimmed(),
+            isolated.join(", ").dimmed()
+        );
     }
     Ok(())
 }
@@ -1461,9 +1602,18 @@ fn cmd_related(
     } else {
         "Related — consider linking"
     };
-    println!("{header} for {}:", target.summary.reference);
+    println!("{} for {}:", header.bold(), target.summary.reference.bold());
     for m in &shown {
-        println!("  {:.2}  {} — {}", m.score, m.reference, m.title);
+        // Color the similarity score by strength.
+        let score = format!("{:.2}", m.score);
+        let score = if m.score >= 0.5 {
+            score.green()
+        } else if m.score >= 0.25 {
+            score.yellow()
+        } else {
+            score.dimmed()
+        };
+        println!("  {score}  {} {}", m.reference.bold(), m.title.dimmed());
     }
     Ok(())
 }

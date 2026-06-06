@@ -43,6 +43,9 @@ ai = ["dep:rig", "dep:tokio"]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+# Terminal color for human output (status, graph edges). Auto-disabled on a
+# non-tty / `-o json` / `NO_COLOR`.
+colored = "2"
 crossterm = { version = "0.29", optional = true }
 dialoguer = "0.12"
 directories = "6"

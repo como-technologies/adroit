@@ -252,9 +252,9 @@ adroit search postgres -o json   # structured matches for scripts/agents
 
 ### `adroit stats`
 
-Repo statistics: total ADRs, a per-status breakdown, the oldest still-`Proposed`
-ADRs (with review-due flags), and a created-per-month histogram. The human view
-is a compact summary; `-o json` emits the full `view::Stats`.
+Repo statistics: total ADRs, a per-status breakdown (a colored bar chart), the
+oldest still-`Proposed` ADRs (with review-due flags), and a created-per-month
+histogram. `-o json` emits the full `view::Stats`.
 
 ```sh
 adroit stats
@@ -264,14 +264,18 @@ adroit stats -o json
 ### `adroit graph`
 
 The ADR relationship graph — supersession plus typed (`relates_to` /
-`depends_on` / `refines`) links — as nodes and edges. The human view summarizes
-counts and lists each edge; `-o json` emits `view::Graph` (the same shape the web
-dashboard's relationship graph consumes).
+`depends_on` / `refines`) links. The human view is a **tree**: each ADR with
+outgoing relationships, its edges indented beneath it (with an `unconnected:`
+footnote for isolated ADRs); `-o json` emits `view::Graph` (the same nodes/edges
+the web dashboard's relationship graph consumes).
 
 ```sh
 adroit graph
 adroit graph -o json
 ```
+
+> Human output is colored (status, edge kinds, scores) when stdout is a terminal;
+> it's plain under a pipe, `-o json`, or `NO_COLOR`.
 
 ### `adroit related <ID>` / `adroit dedupe <ID>`
 

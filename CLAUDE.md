@@ -132,6 +132,15 @@ the help flags are `global = true` to re-provide `-h`/`--help`/`--help-all`
 everywhere. The repo-shape + command-default options carry `hide_short_help = true`
 so they surface only under `--help-all`. (Do not re-add a built-in help flag.)
 
+**Human output.** Colored via the `colored` crate (`status_color` /
+`status_bar_color` / `edge_label` in `main.rs`); `main` calls
+`colored::control::set_override(false)` when stdout isn't a terminal, so pipes /
+`-o json` / `NO_COLOR` get plain text (the assert_cmd tests therefore see plain
+output). `graph`'s human view is a **tree** (edges grouped under each source node,
+`├─`/`└─` connectors, isolated ADRs as an `unconnected:` footnote); `stats` renders
+the by-status breakdown + created-per-month as `print_bars` horizontal bar charts
+(rnought/talaria `█`/`░` style). `-o json` output is never colored or charted.
+
 **Repo validation is shared here too.** `query::check` runs the five `adroit
 check` rules (status/dir mismatch, duplicate identifiers, unparseable files,
 broken supersession, broken/stale links) and returns a structured
