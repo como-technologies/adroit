@@ -235,6 +235,104 @@ impl EditorBuffer {
     pub fn end(&mut self) {
         self.cursor_col = self.cur_len();
     }
+
+    // --- vi-style operations (used by the editor's Normal mode) -------------
+
+    /// Delete the character under the cursor (vi `x`). No-op on an empty line;
+    /// clamps the column onto the last remaining character.
+    pub fn delete_char(&mut self) {
+        if self.cursor_col < self.cur_len() {
+            let line = &mut self.lines[self.cursor_row];
+            let at = Self::byte_idx(line, self.cursor_col);
+            line.remove(at);
+            let len = self.cur_len();
+            if len == 0 {
+                self.cursor_col = 0;
+            } else if self.cursor_col >= len {
+                self.cursor_col = len - 1;
+            }
+        }
+    }
+
+    /// Delete the current line (vi `dd`). The buffer never becomes empty (the
+    /// last line is cleared instead); the cursor lands at column 0 of the line
+    /// that takes this row's place (clamped to the last line).
+    pub fn delete_line(&mut self) {
+        if self.lines.len() == 1 {
+            self.lines[0].clear();
+        } else {
+            self.lines.remove(self.cursor_row);
+            if self.cursor_row >= self.lines.len() {
+                self.cursor_row = self.lines.len() - 1;
+            }
+        }
+        self.cursor_col = 0;
+    }
+
+    /// Open a new empty line below the cursor and move onto it (vi `o`).
+    pub fn open_below(&mut self) {
+        self.lines.insert(self.cursor_row + 1, String::new());
+        self.cursor_row += 1;
+        self.cursor_col = 0;
+    }
+
+    /// Open a new empty line above the cursor and move onto it (vi `O`).
+    pub fn open_above(&mut self) {
+        self.lines.insert(self.cursor_row, String::new());
+        self.cursor_col = 0;
+    }
+
+    /// Move to the first line (vi `gg`), clamping the column.
+    pub fn goto_first_line(&mut self) {
+        self.cursor_row = 0;
+        self.cursor_col = self.cursor_col.min(self.cur_len());
+    }
+
+    /// Move to the last line (vi `G`), clamping the column.
+    pub fn goto_last_line(&mut self) {
+        self.cursor_row = self.lines.len() - 1;
+        self.cursor_col = self.cursor_col.min(self.cur_len());
+    }
+
+    /// Move to the next word start (vi `w`): a word is a run of non-whitespace.
+    /// Steps to the next line's start when the rest of the line is exhausted.
+    pub fn move_word_forward(&mut self) {
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        let len = chars.len();
+        let mut col = self.cursor_col;
+        while col < len && !chars[col].is_whitespace() {
+            col += 1;
+        }
+        while col < len && chars[col].is_whitespace() {
+            col += 1;
+        }
+        if col >= len && self.cursor_row + 1 < self.lines.len() {
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_col = col;
+        }
+    }
+
+    /// Move to the previous word start (vi `b`).
+    pub fn move_word_back(&mut self) {
+        if self.cursor_col == 0 {
+            if self.cursor_row > 0 {
+                self.cursor_row -= 1;
+                self.cursor_col = self.cur_len();
+            }
+            return;
+        }
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        let mut col = self.cursor_col - 1;
+        while col > 0 && chars[col].is_whitespace() {
+            col -= 1;
+        }
+        while col > 0 && !chars[col - 1].is_whitespace() {
+            col -= 1;
+        }
+        self.cursor_col = col;
+    }
 }
 
 /// Why the ADR fuzzy picker ([`Mode::PickAdr`]) is open.
@@ -506,6 +604,12 @@ pub struct TuiState {
     message: Option<String>,
     /// The in-TUI body editor buffer, present only while in [`Mode::Edit`].
     editor: Option<EditorBuffer>,
+    /// Editor vi sub-mode: `true` = Insert (type to edit), `false` = Normal
+    /// (motions + operators). Only meaningful while in [`Mode::Edit`].
+    edit_insert: bool,
+    /// Pending first key of a two-stroke Normal-mode command (`g` for `gg`, `d`
+    /// for `dd`). Cleared after the second stroke or any other key.
+    edit_pending: Option<char>,
     /// Vertical scroll offset (top visible line) of the editor pane.
     edit_scroll: usize,
     /// Visible line height of the editor pane (driver-supplied each frame).
@@ -1137,6 +1241,10 @@ impl TuiState {
         };
         self.editor = Some(EditorBuffer::from_str(&detail.body));
         self.edit_scroll = 0;
+        // Start in Insert (matches vi's `i` and the prior type-to-edit UX); Esc
+        // drops to Normal mode.
+        self.edit_insert = true;
+        self.edit_pending = None;
         self.mode = Mode::Edit {
             address,
             dirty: false,
@@ -1148,6 +1256,7 @@ impl TuiState {
     fn exit_edit(&mut self) {
         self.editor = None;
         self.edit_scroll = 0;
+        self.edit_pending = None;
         self.mode = Mode::List;
     }
 
@@ -1240,6 +1349,95 @@ impl TuiState {
             }
             b.end();
         });
+    }
+
+    // --- vi modal editing ---------------------------------------------------
+
+    /// Whether the editor is in Insert mode (vs. Normal). Only meaningful in
+    /// [`Mode::Edit`].
+    pub fn edit_is_insert(&self) -> bool {
+        self.edit_insert
+    }
+
+    /// Switch the editor to Insert mode (vi `i`).
+    pub fn edit_enter_insert(&mut self) {
+        self.edit_insert = true;
+    }
+
+    /// Switch the editor to Normal mode (vi `Esc`), clearing any pending stroke.
+    pub fn edit_enter_normal(&mut self) {
+        self.edit_insert = false;
+        self.edit_pending = None;
+    }
+
+    /// The pending first key of a two-stroke Normal command, if any.
+    pub fn edit_pending(&self) -> Option<char> {
+        self.edit_pending
+    }
+
+    /// Record the pending first key of a two-stroke Normal command.
+    pub fn set_edit_pending(&mut self, key: Option<char>) {
+        self.edit_pending = key;
+    }
+
+    /// vi `a`: move right one char, then Insert.
+    pub fn edit_append(&mut self) {
+        self.edit_move(|b| b.move_right());
+        self.edit_insert = true;
+    }
+
+    /// vi `A`: jump to end of line, then Insert.
+    pub fn edit_append_end(&mut self) {
+        self.edit_move(|b| b.end());
+        self.edit_insert = true;
+    }
+
+    /// vi `I`: jump to start of line, then Insert.
+    pub fn edit_insert_home(&mut self) {
+        self.edit_move(|b| b.home());
+        self.edit_insert = true;
+    }
+
+    /// vi `o`: open a line below and enter Insert.
+    pub fn edit_open_below(&mut self) {
+        self.edit_mutate(|b| b.open_below());
+        self.edit_insert = true;
+    }
+
+    /// vi `O`: open a line above and enter Insert.
+    pub fn edit_open_above(&mut self) {
+        self.edit_mutate(|b| b.open_above());
+        self.edit_insert = true;
+    }
+
+    /// vi `x`: delete the character under the cursor.
+    pub fn edit_delete_char(&mut self) {
+        self.edit_mutate(|b| b.delete_char());
+    }
+
+    /// vi `dd`: delete the current line.
+    pub fn edit_delete_line(&mut self) {
+        self.edit_mutate(|b| b.delete_line());
+    }
+
+    /// vi `w`: move to the next word.
+    pub fn edit_word_forward(&mut self) {
+        self.edit_move(|b| b.move_word_forward());
+    }
+
+    /// vi `b`: move to the previous word.
+    pub fn edit_word_back(&mut self) {
+        self.edit_move(|b| b.move_word_back());
+    }
+
+    /// vi `gg`: jump to the first line.
+    pub fn edit_goto_first(&mut self) {
+        self.edit_move(|b| b.goto_first_line());
+    }
+
+    /// vi `G`: jump to the last line.
+    pub fn edit_goto_last(&mut self) {
+        self.edit_move(|b| b.goto_last_line());
     }
 
     /// The visible height (in lines) of the editor pane, set by the driver each
@@ -1952,8 +2150,8 @@ mod driver {
         }
     }
 
-    /// Edit-mode keys. While awaiting a discard confirmation only y/n/Esc are
-    /// meaningful; otherwise this is a full plain-text editor with Ctrl-S save.
+    /// Edit-mode keys. Discard-confirm takes priority; otherwise dispatch to the
+    /// vi Insert or Normal sub-mode. Ctrl-S saves in both.
     fn handle_edit_key(state: &mut TuiState, key: KeyEvent) -> Action {
         // Discard confirmation prompt takes priority.
         if state.awaiting_discard_confirm() {
@@ -1971,17 +2169,24 @@ mod driver {
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Ctrl-S saves from either sub-mode.
+        if ctrl && matches!(key.code, KeyCode::Char('s')) {
+            return state.save_edit();
+        }
+        if state.edit_is_insert() {
+            handle_edit_insert_key(state, key, ctrl)
+        } else {
+            handle_edit_normal_key(state, key)
+        }
+    }
+
+    /// Insert-mode keys: a plain multi-line editor. Esc drops to Normal mode.
+    fn handle_edit_insert_key(state: &mut TuiState, key: KeyEvent, ctrl: bool) -> Action {
         match key.code {
-            // Ctrl-S saves through the Store write path.
-            KeyCode::Char('s') if ctrl => state.save_edit(),
             KeyCode::Esc => {
-                // Clean -> exit immediately (refresh restores list view);
-                // dirty -> arms the discard confirmation.
-                if state.request_cancel_edit() {
-                    Action::Refresh
-                } else {
-                    Action::None
-                }
+                // vi: Esc leaves Insert for Normal (does NOT cancel the editor).
+                state.edit_enter_normal();
+                Action::None
             }
             KeyCode::Enter => {
                 state.edit_newline();
@@ -2025,6 +2230,116 @@ mod driver {
             // Plain typed characters (ignore other control chords).
             KeyCode::Char(c) if !ctrl => {
                 state.edit_insert_char(c);
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
+    /// Normal-mode keys: vi motions + operators. Esc/q cancels the editor (with
+    /// the usual dirty-confirm). Two-stroke commands (`gg`, `dd`) use the pending
+    /// key on the state.
+    fn handle_edit_normal_key(state: &mut TuiState, key: KeyEvent) -> Action {
+        // Resolve a pending two-stroke command first (gg / dd).
+        if let Some(p) = state.edit_pending() {
+            state.set_edit_pending(None);
+            match (p, key.code) {
+                ('g', KeyCode::Char('g')) => {
+                    state.edit_goto_first();
+                    return Action::None;
+                }
+                ('d', KeyCode::Char('d')) => {
+                    state.edit_delete_line();
+                    return Action::None;
+                }
+                // Any other second key: fall through and handle it fresh below.
+                _ => {}
+            }
+        }
+
+        match key.code {
+            // Leave the editor (dirty -> arms the discard confirmation).
+            KeyCode::Esc | KeyCode::Char('q') => {
+                if state.request_cancel_edit() {
+                    Action::Refresh
+                } else {
+                    Action::None
+                }
+            }
+            // Enter Insert in various positions.
+            KeyCode::Char('i') => {
+                state.edit_enter_insert();
+                Action::None
+            }
+            KeyCode::Char('a') => {
+                state.edit_append();
+                Action::None
+            }
+            KeyCode::Char('A') => {
+                state.edit_append_end();
+                Action::None
+            }
+            KeyCode::Char('I') => {
+                state.edit_insert_home();
+                Action::None
+            }
+            KeyCode::Char('o') => {
+                state.edit_open_below();
+                Action::None
+            }
+            KeyCode::Char('O') => {
+                state.edit_open_above();
+                Action::None
+            }
+            // Motions.
+            KeyCode::Char('h') | KeyCode::Left => {
+                state.edit_left();
+                Action::None
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                state.edit_right();
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                state.edit_up();
+                Action::None
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                state.edit_down();
+                Action::None
+            }
+            KeyCode::Char('0') | KeyCode::Home => {
+                state.edit_home();
+                Action::None
+            }
+            KeyCode::Char('$') | KeyCode::End => {
+                state.edit_end();
+                Action::None
+            }
+            KeyCode::Char('w') => {
+                state.edit_word_forward();
+                Action::None
+            }
+            KeyCode::Char('b') => {
+                state.edit_word_back();
+                Action::None
+            }
+            KeyCode::Char('G') => {
+                state.edit_goto_last();
+                Action::None
+            }
+            // Operators.
+            KeyCode::Char('x') => {
+                state.edit_delete_char();
+                Action::None
+            }
+            // First key of a two-stroke command.
+            KeyCode::Char('g') => {
+                state.set_edit_pending(Some('g'));
+                Action::None
+            }
+            KeyCode::Char('d') => {
+                state.set_edit_pending(Some('d'));
                 Action::None
             }
             _ => Action::None,
@@ -2236,6 +2551,12 @@ mod driver {
             row("m", "toggle rendered / raw"),
             row("Esc", "back to list"),
             Line::from(""),
+            sect("Editor (vi)"),
+            row("Esc", "insert → normal"),
+            row("i a o", "normal → insert (here/after/below)"),
+            row("x  dd", "delete char / line"),
+            row("Ctrl-S", "save"),
+            Line::from(""),
             sect("General"),
             row(":", "command palette"),
             row("?", "toggle this help"),
@@ -2319,10 +2640,15 @@ mod driver {
     /// Render the in-TUI body editor in the right pane and place the terminal
     /// cursor. Reports the inner height back to `state` for scroll-follow.
     fn render_editor(f: &mut Frame, state: &mut TuiState, area: Rect) {
+        let vi = if state.edit_is_insert() {
+            "INSERT"
+        } else {
+            "NORMAL"
+        };
         let title = match state.mode() {
             Mode::Edit { address, dirty, .. } => {
                 let flag = if *dirty { " [modified]" } else { "" };
-                format!(" Edit {address}{flag} ")
+                format!(" Edit {address}{flag} — {vi} ")
             }
             _ => " Edit ".to_string(),
         };
@@ -2766,9 +3092,12 @@ mod driver {
                 confirm_discard: true,
                 ..
             } => "discard unsaved edits?  y/Esc discard  n keep editing",
+            Mode::Edit { .. } if state.edit_is_insert() => {
+                "INSERT — type to edit  Enter newline  Ctrl-S save  Esc normal"
+            }
             Mode::Edit { .. } => {
-                "type to edit  Enter newline  arrows/Home/End move  \
-                 Ctrl-S save  Esc cancel"
+                "NORMAL — hjkl move  i/a/o insert  x del  dd del-line  \
+                 w/b word  gg/G  Ctrl-S save  q cancel"
             }
         };
         // Line 1: the active input prompt (accent) or a transient message colored
@@ -3702,6 +4031,45 @@ mod tests {
     }
 
     #[test]
+    fn editor_vi_delete_char_and_line() {
+        let mut buf = EditorBuffer::from_str("hello\nworld");
+        buf.delete_char(); // x on 'h'
+        assert_eq!(buf.lines()[0], "ello");
+        buf.delete_line(); // dd removes line 0
+        assert_eq!(buf.to_string(), "world");
+        buf.delete_line(); // dd on the last line clears it (never empty buffer)
+        assert_eq!(buf.lines(), &["".to_string()]);
+        buf.delete_char(); // x on empty line is a no-op
+        assert_eq!(buf.lines(), &["".to_string()]);
+    }
+
+    #[test]
+    fn editor_vi_open_lines_and_word_motion() {
+        let mut buf = EditorBuffer::from_str("alpha beta gamma");
+        buf.move_word_forward();
+        assert_eq!(buf.cursor_col(), 6); // start of "beta"
+        buf.move_word_forward();
+        assert_eq!(buf.cursor_col(), 11); // start of "gamma"
+        buf.move_word_back();
+        assert_eq!(buf.cursor_col(), 6); // back to "beta"
+        buf.open_below();
+        assert_eq!(buf.cursor_row(), 1);
+        assert_eq!(buf.lines().len(), 2);
+        buf.open_above();
+        assert_eq!(buf.cursor_row(), 1);
+        assert_eq!(buf.lines().len(), 3);
+    }
+
+    #[test]
+    fn editor_vi_goto_first_and_last_line() {
+        let mut buf = EditorBuffer::from_str("a\nb\nc");
+        buf.goto_last_line();
+        assert_eq!(buf.cursor_row(), 2);
+        buf.goto_first_line();
+        assert_eq!(buf.cursor_row(), 0);
+    }
+
+    #[test]
     fn editor_from_str_drops_single_trailing_newline() {
         // A trailing newline must not create a spurious empty final line, so
         // round-tripping a typical file body is stable.
@@ -3881,6 +4249,23 @@ mod tests {
             other => panic!("expected SaveBody, got {other:?}"),
         }
         assert!(!s.is_dirty());
+    }
+
+    #[test]
+    fn editor_starts_in_insert_and_toggles_vi_modes() {
+        let (_d, store, cfg) = setup_store();
+        let (mut s, _num) = state_with_one_adr(&store, &cfg, "Modal");
+        s.begin_edit();
+        // Matches vi's `i` / the prior type-to-edit UX.
+        assert!(s.edit_is_insert());
+        s.edit_enter_normal();
+        assert!(!s.edit_is_insert());
+        // Normal-mode ops mutate + mark dirty; o/i return to insert.
+        s.edit_delete_char();
+        assert!(s.is_dirty());
+        s.edit_enter_normal();
+        s.edit_open_below();
+        assert!(s.edit_is_insert());
     }
 
     #[test]

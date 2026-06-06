@@ -288,14 +288,22 @@ to top, `G`/`End` to bottom. The terminal enables mouse capture
 loop matches `Event::Mouse`, and `handle_mouse` wheel-scrolls the focused preview
 or otherwise moves the list selection.
 
-**In-TUI body editor.** Pressing `i` on the selected ADR enters `Mode::Edit`,
-loading the body into an `EditorBuffer` — a pure multi-line plain-text editor
-(`lines: Vec<String>` + char-based `cursor_row`/`cursor_col`) with
-`insert_char`, `insert_newline`, `backspace`, `move_left/right/up/down`,
-`home`/`end`, and `from_str`/`to_string`. No undo/selection/highlighting — a
-correct plain-text editor is the bar. Edit-mode keys: type to insert, Enter for
-newline, arrows + Home/End to move, **Ctrl-S** to save, **Esc** to cancel (a
-dirty buffer requires a `y`/Esc confirm; the title shows `[modified]`). Save
+**In-TUI body editor (modal / vi).** Pressing `i` on the selected ADR enters
+`Mode::Edit`, loading the body into an `EditorBuffer` — a pure multi-line
+plain-text editor (`lines: Vec<String>` + char-based `cursor_row`/`cursor_col`).
+Beyond the basics (`insert_char`/`insert_newline`/`backspace`/`move_*`/`home`/
+`end`/`from_str`/`to_string`) it has vi operations: `delete_char` (x),
+`delete_line` (dd), `open_below`/`open_above` (o/O), `move_word_forward`/`_back`
+(w/b), `goto_first_line`/`goto_last_line` (gg/G). Still **no undo/selection/
+clipboard** — that's the EditorBuffer's deliberate bar (the user chose to keep it
+over swapping in a widget). The editor is **modal**: a pure `edit_insert: bool` on
+`TuiState` is the Insert/Normal sub-mode (plus `edit_pending: Option<char>` for the
+two-stroke `gg`/`dd`). It opens in **Insert** (matches vi's `i` + the prior
+type-to-edit UX); `handle_edit_key` dispatches to `handle_edit_insert_key`
+(type/Enter/Backspace/arrows/Tab; **Esc → Normal**) or `handle_edit_normal_key`
+(`hjkl`/`w`/`b`/`0`/`$`/`gg`/`G` motions; `i`/`a`/`I`/`A`/`o`/`O` → Insert; `x`/`dd`;
+**q/Esc → cancel**). **Ctrl-S** saves from either sub-mode; a dirty cancel needs a
+`y`/Esc confirm; the title + footer show `INSERT`/`NORMAL` and `[modified]`. Save
 goes through `Store::set_body`, which reads the ADR, replaces only `.body`, and
 re-serializes via the existing `format::serialize` path — so frontmatter /
 `## Status` / banner / status dir are untouched and an unedited round-trip is

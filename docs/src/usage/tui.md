@@ -117,7 +117,12 @@ adroit --theme warm               # this session
 
 Press `i` on the selected ADR to load its markdown body into an editable buffer
 shown in the right pane, with a visible cursor. This never leaves the terminal —
-`e` remains the escape hatch to your full external `$EDITOR`.
+`e` remains the escape hatch to your full external `$EDITOR`. The editor is
+**modal** (vi-style): it opens in **Insert** mode (so `i` then typing works as
+you'd expect), and `Esc` drops to **Normal** mode for motions and operators. The
+pane title and footer show the current mode (`INSERT` / `NORMAL`).
+
+**Insert mode** — type to edit:
 
 | Key                 | Action                                               |
 | ------------------- | ---------------------------------------------------- |
@@ -128,12 +133,27 @@ shown in the right pane, with a visible cursor. This never leaves the terminal �
 | `Home` / `End`      | Jump to the start / end of the line                  |
 | `Tab`               | Insert four spaces                                   |
 | `Ctrl-S`            | **Save** the body and refresh the preview            |
-| `Esc`               | Cancel (see below)                                   |
+| `Esc`               | Leave Insert for **Normal** mode                     |
+
+**Normal mode** — vi motions and operators:
+
+| Key                 | Action                                               |
+| ------------------- | ---------------------------------------------------- |
+| `h` `j` `k` `l`     | Move left / down / up / right (arrows work too)      |
+| `w` / `b`           | Next / previous word                                 |
+| `0` / `$`           | Start / end of line                                  |
+| `gg` / `G`          | First / last line                                    |
+| `i` `a` `I` `A`     | Insert here / after cursor / line start / line end   |
+| `o` / `O`           | Open a new line below / above and insert             |
+| `x`                 | Delete the character under the cursor                |
+| `dd`                | Delete the current line                              |
+| `Ctrl-S`            | **Save** the body                                    |
+| `q` / `Esc`         | Cancel (see below)                                   |
 
 While editing, the pane title shows the ADR number and a `[modified]` indicator
-once the buffer has unsaved changes. The editor is a plain-text editor — there
-is no undo/redo, selection, clipboard, or syntax highlighting; it is a focused,
-correct multi-line editing surface for the common "tweak the prose" case.
+once the buffer has unsaved changes. The editor is a focused plain-text editor —
+there is **no undo/redo, selection, or clipboard** (yet); it is a correct,
+modal multi-line editing surface for the common "tweak the prose" case.
 
 ### Saving and format preservation
 
@@ -146,7 +166,8 @@ original. After a save the preview refreshes to reflect the new body.
 
 ### Cancelling
 
-`Esc` cancels edit mode. If the buffer has **no** unsaved changes it returns to
+From **Normal** mode, `q` or `Esc` cancels the editor (from Insert mode, `Esc`
+first drops to Normal). If the buffer has **no** unsaved changes it returns to
 the list immediately. If there **are** unsaved changes, adroit asks you to
 confirm: press `y` (or `Esc` again) to discard your edits, or `n` to keep
 editing. This guards against losing work to an accidental keystroke.
