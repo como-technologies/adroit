@@ -2994,6 +2994,40 @@ fn draft_fills_an_existing_template_adr_via_fake_provider() {
 }
 
 #[test]
+fn draft_shows_cost_estimate_and_journals_the_raw_draft() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt CQRS", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "## Context and Problem Statement\n\nFake.\n\n## Decision Outcome\n\nChosen: CQRS.",
+        )
+        .write_stdin("c\nd\no\nr\n")
+        .assert()
+        .success()
+        // the one-line pre-call cost notice …
+        .stderr(predicate::str::contains("input tokens"))
+        // … and the raw draft is journaled to a `.draft` sidecar.
+        .stderr(predicate::str::contains("journaled"));
+    // Exactly one `.md.draft` sidecar exists next to the ADR …
+    let sidecars = fs::read_dir(dir.path().join("proposed"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "draft"))
+        .count();
+    assert_eq!(
+        sidecars, 1,
+        "the raw draft is journaled to one .draft sidecar"
+    );
+    // … and the store ignores it (not an ADR): the repo still validates.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
 fn draft_without_a_provider_errors() {
     let dir = TempDir::new().unwrap();
     adroit(&dir)

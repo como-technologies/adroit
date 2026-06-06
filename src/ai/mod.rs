@@ -34,6 +34,14 @@ pub struct CompletionRequest {
     pub max_tokens: u32,
 }
 
+impl CompletionRequest {
+    /// A rough input-token estimate (~4 chars/token) for the one-line cost notice
+    /// shown before a call. Deliberately approximate — it's a heads-up, not billing.
+    pub fn estimate_input_tokens(&self) -> usize {
+        (self.system.len() + self.prompt.len()).div_ceil(4)
+    }
+}
+
 /// What can go wrong talking to a provider. Mirrors `forge::ForgeError`'s
 /// offline / auth / api split so callers can warn-and-continue vs. surface.
 #[derive(Debug)]

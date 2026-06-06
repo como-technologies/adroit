@@ -22,3 +22,6 @@
 
 # adroit no longer keeps its own ADR corpus in-repo (see issue #5).
 /adr/
+
+# Raw AI-draft journals (adroit `new --interview` / `draft`) — recover or discard.
+*.draft

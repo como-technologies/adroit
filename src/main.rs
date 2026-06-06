@@ -669,7 +669,8 @@ fn interview_and_draft(
         .map(|s| format!("{} — {}", s.reference, s.title))
         .collect();
 
-    eprintln!("\nDrafting with {} …", provider.id());
+    let req = ai::build_request(&iv, &corpus);
+    announce_estimate(provider, &req, "\nDrafting the ADR body");
     let draft = match ai::draft_body(provider, &iv, &corpus) {
         Ok(d) => d,
         // A provider failure (credits, network, …) shouldn't error: keep the
@@ -686,11 +687,19 @@ fn interview_and_draft(
             return Ok(false);
         }
     };
+    // Journal the raw draft before splicing, so it survives a failed write/edit.
+    let journal = journal_draft(store, r, &draft);
     splice_ai_draft(store, r, &draft)?;
     eprintln!(
         "AI-drafted the body (marked `{}`). Review and edit before committing.",
         ai::AI_MARKER
     );
+    if let Some(p) = journal {
+        eprintln!(
+            "(Raw draft journaled to {} — delete when you're done.)",
+            p.display()
+        );
+    }
     Ok(true)
 }
 
@@ -719,6 +728,32 @@ fn splice_ai_draft(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
         .set_body_ref(r, &new_body)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
+}
+
+/// One-line pre-call cost notice (RFC issue #5): the action, the provider, and a
+/// rough token estimate, to stderr — so a large call never happens silently.
+fn announce_estimate(
+    provider: &dyn adroit::ai::AiProvider,
+    req: &adroit::ai::CompletionRequest,
+    action: &str,
+) {
+    eprintln!(
+        "{action} via {} (~{} input tokens, up to {} generated — estimate) …",
+        provider.id(),
+        req.estimate_input_tokens(),
+        req.max_tokens,
+    );
+}
+
+/// Journal the raw AI `draft` to a git-ignored `<adr>.md.draft` sidecar before it
+/// is spliced in, so the model's output survives a failed write or a botched edit
+/// (resume or discard). Best-effort — a journaling failure is non-fatal. The
+/// sidecar's extension isn't `.md`, so the store never treats it as an ADR.
+fn journal_draft(store: &Store, r: &AdrRef, draft: &str) -> Option<std::path::PathBuf> {
+    let path = store.find_path_by_ref(r).ok()?;
+    let sidecar = std::path::PathBuf::from(format!("{}.draft", path.display()));
+    std::fs::write(&sidecar, draft).ok()?;
+    Some(sidecar)
 }
 
 /// `adroit draft <ID>`: run the **same interview** as `new --interview`, but on an
@@ -1696,7 +1731,12 @@ fn cmd_ask(store: &Store, cfg: &Config, question: &str, output: OutputFormat) ->
         context.push_str("(no closely matching ADRs)");
     }
 
-    eprintln!("Asking {} over {} ADR(s) …", provider.id(), top.len());
+    let req = adroit::ai::build_ask_request(question, &context);
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Asking over {} ADR(s)", top.len()),
+    );
     let answer = adroit::ai::draft_ask(provider.as_ref(), question, &context)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let answer = answer.trim();
@@ -1797,10 +1837,11 @@ fn cmd_summarize(
     let provider = require_provider(cfg, "summarize")?;
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
-    eprintln!(
-        "Summarizing {} with {} …",
-        detail.summary.reference,
-        provider.id()
+    let req = adroit::ai::build_summary_request(&detail.summary.title, &detail.body);
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Summarizing {}", detail.summary.reference),
     );
     let summary = adroit::ai::draft_summary(provider.as_ref(), &detail.summary.title, &detail.body)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1828,10 +1869,11 @@ fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Pat
         .filter(|s| s.address != detail.summary.address)
         .map(|s| format!("{} — {}", s.reference, s.title))
         .collect();
-    eprintln!(
-        "Planning {} with {} …",
-        detail.summary.reference,
-        provider.id()
+    let req = adroit::ai::build_plan_request(&detail.summary.title, &detail.body, &corpus);
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Planning {}", detail.summary.reference),
     );
     let plan = adroit::ai::draft_plan(
         provider.as_ref(),
@@ -1873,10 +1915,11 @@ fn cmd_lint(
             .filter(|s| s.address != detail.summary.address)
             .map(|s| format!("{} — {}", s.reference, s.title))
             .collect();
-        eprintln!(
-            "Reviewing {} with {} …",
-            detail.summary.reference,
-            provider.id()
+        let req = adroit::ai::build_lint_request(&detail.summary.title, &detail.body, &corpus);
+        announce_estimate(
+            provider.as_ref(),
+            &req,
+            &format!("Reviewing {}", detail.summary.reference),
         );
         let review = adroit::ai::draft_lint(
             provider.as_ref(),

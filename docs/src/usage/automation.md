@@ -71,6 +71,14 @@ review and edit before committing.
 mechanical in the write path. If no provider is available, `--interview` degrades
 to the plain template (the ADR is still created).
 
+**Cost notice + draft journal:** before each provider call adroit prints a
+one-line token estimate (`~N input tokens, up to M generated`) to stderr, so a
+large call never happens silently. When the model returns a draft, the raw output
+is journaled to a git-ignored `<adr>.md.draft` sidecar **before** it's spliced in
+— so it survives a failed write or a botched edit (resume or discard it). The
+sidecar's extension isn't `.md`, so adroit never treats it as an ADR. Add
+`*.draft` to your repo's `.gitignore`.
+
 `adroit draft <ID>` is the after-the-fact version of `--interview`: it runs the
 *same* interview on an ADR you already created with a plain `new` (a bare
 template), drafts the body, splices it in (heading/status stay mechanical), marks
