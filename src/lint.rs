@@ -199,7 +199,8 @@ mod tests {
         assert!(!f.is_empty());
         assert!(f.iter().all(|x| x.source == LintSource::Mechanical));
         assert!(
-            f.iter().any(|x| x.message.contains("still holds only its prompt")),
+            f.iter()
+                .any(|x| x.message.contains("still holds only its prompt")),
             "should flag sections left as their prompt, got: {f:?}"
         );
         // Every prose section the template ships a prompt for should be caught.
