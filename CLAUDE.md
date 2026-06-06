@@ -605,8 +605,11 @@ Anthropic has no embeddings API, so it needs a separate embedding-capable provid
 
 **Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
 `model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by
-default); the key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY`
-/ the credential store). `serde_json` is a core dep; `rig`+`tokio` are `ai`-only.
+default). `config::resolve_ai(cfg.ai)` overlays `ADROIT_AI_*` env overrides
+(`ENABLED`/`PROVIDER`/`MODEL`/`HOST`) on the config section, so AI is enablable via
+env / `.env` with no `config.yaml` edit (what `ai_hook::open_provider` calls). The
+key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY` / the
+credential store). `serde_json` is a core dep; `rig`+`tokio` are `ai`-only.
 `just lint-ai`/`test-ai` (folded into `just ci`) cover the feature build.
 
 ## Conventions

@@ -99,6 +99,8 @@ cargo build --features ai          # or: just build (after adding the feature)
 adroit auth anthropic              # store the key (or export ADROIT_ANTHROPIC_KEY)
 ```
 
+Enable it either in `config.yaml`:
+
 ```yaml
 # config.yaml
 ai:
@@ -106,6 +108,18 @@ ai:
   provider: anthropic      # or: ollama (local, no key; air-gapped)
   model: claude-sonnet-4-6 # or an Ollama model like llama3.2
   # host: http://localhost:11434   # ollama base URL override (optional)
+```
+
+…or entirely via environment / `.env` (these `ADROIT_AI_*` vars override the
+config section, so you can enable AI without editing `config.yaml`):
+
+```sh
+# .env  (git-ignored)
+ADROIT_AI_ENABLED=true
+ADROIT_AI_PROVIDER=anthropic        # or ollama
+ADROIT_AI_MODEL=claude-sonnet-4-6
+ADROIT_ANTHROPIC_KEY=sk-ant-...     # anthropic only
+# ADROIT_AI_HOST=http://localhost:11434   # ollama only
 ```
 
 | Provider | Auth | Notes |

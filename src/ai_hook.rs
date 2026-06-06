@@ -20,10 +20,10 @@ pub fn open_provider(cfg: &Config) -> Option<Box<dyn AiProvider>> {
         return Some(Box::new(FakeProvider { canned }));
     }
     #[cfg(feature = "ai")]
-    if let Some(ai) = &cfg.ai
+    if let Some(ai) = crate::config::resolve_ai(cfg.ai.as_ref())
         && ai.enabled
     {
-        match crate::ai::rig_provider::RigProvider::from_config(ai) {
+        match crate::ai::rig_provider::RigProvider::from_config(&ai) {
             Ok(p) => return Some(Box::new(p)),
             Err(e) => {
                 eprintln!("warning: AI provider unavailable: {e}");

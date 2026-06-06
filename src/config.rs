@@ -305,6 +305,44 @@ pub fn anthropic_key() -> Option<String> {
         .or_else(|| load_credential("anthropic"))
 }
 
+/// The effective AI config: the `ai:` config section overlaid with `ADROIT_AI_*`
+/// env overrides, so AI can be enabled purely via env / `.env` (e.g. for a
+/// dogfood) without editing `config.yaml`. Returns `None` only when AI is neither
+/// configured nor touched by any env var. Recognized: `ADROIT_AI_ENABLED`
+/// (`1`/`true`/`yes`/`on`), `ADROIT_AI_PROVIDER` (`anthropic`/`ollama`),
+/// `ADROIT_AI_MODEL`, `ADROIT_AI_HOST`.
+pub fn resolve_ai(base: Option<&AiConfig>) -> Option<AiConfig> {
+    let enabled = std::env::var("ADROIT_AI_ENABLED").ok();
+    let provider = std::env::var("ADROIT_AI_PROVIDER").ok();
+    let model = std::env::var("ADROIT_AI_MODEL").ok();
+    let host = std::env::var("ADROIT_AI_HOST").ok();
+    if base.is_none() && enabled.is_none() && provider.is_none() && model.is_none() {
+        return None;
+    }
+    let mut ai = base.cloned().unwrap_or_default();
+    if let Some(e) = enabled {
+        ai.enabled = matches!(
+            e.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        );
+    }
+    if let Some(p) = provider
+        && let Ok(p) = p.trim().parse()
+    {
+        ai.provider = p;
+    }
+    if let Some(m) = model
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+    {
+        ai.model = m;
+    }
+    if let Some(h) = host.filter(|h| !h.is_empty()) {
+        ai.host = Some(h);
+    }
+    Some(ai)
+}
+
 /// Application configuration, persisted as YAML.
 ///
 /// New keys all carry serde defaults so older config files keep loading.
@@ -1142,6 +1180,25 @@ mod tests {
         if std::env::var("HOME").is_ok() {
             assert!(config_path().is_some());
         }
+    }
+
+    #[test]
+    fn resolve_ai_none_without_config_or_env() {
+        // No `ai:` config and (in the test process) no `ADROIT_AI_*` set.
+        assert!(super::resolve_ai(None).is_none());
+    }
+
+    #[test]
+    fn resolve_ai_passes_config_through() {
+        let base = AiConfig {
+            enabled: true,
+            model: "claude-x".into(),
+            ..Default::default()
+        };
+        let r = super::resolve_ai(Some(&base)).expect("config present");
+        assert!(r.enabled);
+        assert_eq!(r.model, "claude-x");
+        assert_eq!(r.provider, AiProviderKind::Anthropic);
     }
 
     #[test]
