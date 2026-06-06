@@ -133,8 +133,9 @@ ADROIT_ANTHROPIC_KEY=sk-ant-...     # anthropic only
 | `anthropic` | `ADROIT_ANTHROPIC_KEY` / `adroit auth anthropic` | Hosted Claude |
 | `ollama` | none | Local models; set `ai.host` for a remote instance |
 
-The decision to build the AI layer on rig is recorded in
-[ADR-0001](https://github.com/como-technologies/adroit/blob/main/adr/accepted/0001-adopt-rig-for-adroit-s-ai-integration.md).
+The AI layer is built on the **rig** framework (provider-agnostic LLM adapters),
+chosen so the provider stays swappable — see the
+[AI-authoring RFC](https://github.com/como-technologies/adroit/issues/5).
 
 ### Testing without a provider
 
@@ -145,7 +146,6 @@ flow without spending tokens.
 ## Why this exists
 
 This structured surface is the foundation for AI-assisted authoring — see the
-[rig adoption decision](https://github.com/como-technologies/adroit/blob/main/adr/accepted/0001-adopt-rig-for-adroit-s-ai-integration.md)
-and the AI-authoring RFC. The goal is that an agent can list, read, search, and
-validate ADRs through the same verbs a person uses, then propose changes a human
-reviews before commit.
+[AI-authoring RFC](https://github.com/como-technologies/adroit/issues/5). The goal
+is that an agent can list, read, search, and validate ADRs through the same verbs
+a person uses, then propose changes a human reviews before commit.

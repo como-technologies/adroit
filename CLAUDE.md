@@ -564,8 +564,8 @@ env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
 
 ## AI authoring (`ai` feature)
 
-Opt-in AI-assisted authoring (RFC: issue 5; the rig-adoption decision is dogfooded
-in `adr/accepted/0001-…`). Same shape as `forge`: a **synchronous** `AiProvider`
+Opt-in AI-assisted authoring (RFC: issue 5; built on the `rig` framework). Same
+shape as `forge`: a **synchronous** `AiProvider`
 trait so verb handlers stay sync, with the async work bridged by a single
 `block_on` at the CLI boundary — so `--no-default-features`/`tui`/`forge` never
 pull in tokio.
