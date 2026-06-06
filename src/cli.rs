@@ -54,7 +54,7 @@ Authoring:
   set-review    Set or clear an ADR's review deadline
   review        Generate a review-kickoff doc for an ADR
   plan          Draft an AI implementation plan for an ADR
-  draft         AI-complete an existing ADR's template body
+  draft         Run the AI interview on an existing ADR
   link          Add or remove a typed link between two ADRs
 
 Browse & inspect:
@@ -110,7 +110,7 @@ Authoring:
   set-review    Set or clear an ADR's review deadline
   review        Generate a review-kickoff doc for an ADR
   plan          Draft an AI implementation plan for an ADR
-  draft         AI-complete an existing ADR's template body
+  draft         Run the AI interview on an existing ADR
   link          Add or remove a typed link between two ADRs
 
 Browse & inspect:
@@ -673,12 +673,13 @@ pub enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// AI-complete an existing ADR's body — for an ADR you created as a plain
-    /// template (without `new --interview`) and want filled in before review.
+    /// Run the AI interview on an existing ADR — the after-the-fact `new
+    /// --interview`, for an ADR you created with a plain `new` (template) and want
+    /// filled in before review.
     ///
-    /// Works from the current (template / partial) body + the corpus — no
-    /// interview — splices the marked draft over the prose (identity / status /
-    /// heading stay mechanical), then opens your editor. Needs an AI provider.
+    /// Asks the same Socratic questions, drafts the body, and splices it over the
+    /// prose (identity / status / heading stay mechanical, marked
+    /// `<!-- adroit:ai-suggested -->`), then opens your editor. Needs an AI provider.
     Draft {
         /// ADR identifier (number, slug, or uuid prefix — see `show`).
         id: String,

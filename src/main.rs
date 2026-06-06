@@ -600,41 +600,52 @@ fn cmd_new(
     Ok((path, r))
 }
 
-/// `new --interview`: a short Socratic interview whose answers + the existing
-/// corpus drive an AI draft of the ADR body, written over the template via
-/// `Store::set_body_ref` (identity / status / heading stay mechanical) and
-/// marked `<!-- adroit:ai-suggested -->` for the human to review. Degrades to a
-/// note (keeping the plain template) when no AI provider is available, so the
-/// ADR is always created.
-/// Returns `true` when the AI interview actually ran (the body was drafted),
-/// `false` when it degraded to the plain template (no provider). The caller uses
-/// that to skip auto-opening the editor on a degrade, so the warning stays visible.
+/// `new --interview`: resolve a provider then run the shared interview. Degrades
+/// to a note (keeping the plain template) when no provider is available, so the
+/// ADR is always created. Returns `true` when the draft actually ran (so the
+/// caller can skip auto-opening the editor on a degrade).
 fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result<bool> {
-    use adroit::ai::{self, INTERVIEW_QUESTIONS, Interview};
-    use std::io::{BufRead, Write};
-
     let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
         if cfg!(feature = "ai") {
             eprintln!(
                 "{}",
                 "--interview could not run: enable AI (`ai.enabled` / `ADROIT_AI_ENABLED=true`) \
-                 and set `ADROIT_ANTHROPIC_KEY`. The ADR was created from the plain template."
+                 and set `ADROIT_ANTHROPIC_KEY`. The ADR was created from the plain template — \
+                 fill it in later with `adroit draft <id>`."
                     .yellow()
             );
         } else {
             eprintln!(
                 "{}",
                 "--interview could not run: this binary lacks the AI feature. Rebuild with \
-                 `just build-ai` (then enable AI). The ADR was created from the plain template."
+                 `just build-ai` (then enable AI). The ADR was created from the plain template — \
+                 fill it in later with `adroit draft <id>`."
                     .yellow()
             );
         }
-        // Signal a degrade so the caller doesn't bury this under the editor.
         return Ok(false);
     };
+    interview_and_draft(store, title, r, provider.as_ref())
+}
+
+/// The shared Socratic interview → AI draft → splice, used by both `new
+/// --interview` (at creation) and `draft <ID>` (on an existing ADR). Asks the
+/// fixed [`INTERVIEW_QUESTIONS`] over stdin (prompts to stderr), drafts the body
+/// from the answers + corpus, and splices it over the prose — identity / status /
+/// heading stay mechanical, marked `<!-- adroit:ai-suggested -->`. Returns `true`
+/// on success; `false` if the AI call fails — the existing body is kept and a
+/// warning printed (never an error), so the ADR is never lost.
+fn interview_and_draft(
+    store: &Store,
+    title: &str,
+    r: &AdrRef,
+    provider: &dyn adroit::ai::AiProvider,
+) -> Result<bool> {
+    use adroit::ai::{self, INTERVIEW_QUESTIONS, Interview};
+    use std::io::{BufRead, Write};
 
     // Plain stdin prompts (robust on a non-TTY, e.g. piped test input). Prompts
-    // go to stderr so stdout stays clean for the `Created …` line.
+    // go to stderr so stdout stays clean.
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
     let mut answers: Vec<String> = Vec::with_capacity(INTERVIEW_QUESTIONS.len());
@@ -653,23 +664,21 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
         options: answers[2].clone(),
         risks: answers[3].clone(),
     };
-    // Corpus context: existing `reference — title` lines, for house voice.
     let corpus: Vec<String> = query::summaries(store, &Filter::default())?
         .iter()
         .map(|s| format!("{} — {}", s.reference, s.title))
         .collect();
 
     eprintln!("\nDrafting with {} …", provider.id());
-    let draft = match ai::draft_body(provider.as_ref(), &iv, &corpus) {
+    let draft = match ai::draft_body(provider, &iv, &corpus) {
         Ok(d) => d,
-        // The ADR was already created from the template — a provider failure
-        // (credits, network, …) shouldn't error it out. Keep the template, warn,
-        // and degrade (so the editor isn't auto-opened over the message).
+        // A provider failure (credits, network, …) shouldn't error: keep the
+        // existing body, warn, and let the caller skip the editor.
         Err(e) => {
             eprintln!(
                 "{}",
                 format!(
-                    "warning: AI draft failed ({e}). Kept the plain template (your answers \
+                    "warning: AI draft failed ({e}). Kept the existing body (your answers \
                      weren't saved) — fix the provider and re-run, or edit by hand."
                 )
                 .yellow()
@@ -677,7 +686,6 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
             return Ok(false);
         }
     };
-
     splice_ai_draft(store, r, &draft)?;
     eprintln!(
         "AI-drafted the body (marked `{}`). Review and edit before committing.",
@@ -713,10 +721,11 @@ fn splice_ai_draft(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
     Ok(())
 }
 
-/// `adroit draft <ID>`: AI-complete an existing (template / partial) ADR body —
-/// for when `new --interview` wasn't used. Works from the current body + corpus
-/// (no interview), splices the marked draft over the prose, and opens the editor
-/// for review. Read-only on identity/status; needs a provider.
+/// `adroit draft <ID>`: run the **same interview** as `new --interview`, but on an
+/// ADR that already exists — for when you created it with a plain `new` (template)
+/// and want to fill it in later, before review. Drafts the body, then opens the
+/// editor. Unlike `new --interview` it requires a provider (the ADR already
+/// exists, so there's no template-fallback to degrade to).
 fn cmd_draft(
     store: &Store,
     cfg: &Config,
@@ -727,21 +736,8 @@ fn cmd_draft(
     let provider = require_provider(cfg, "draft")?;
     let path = store.find_path_by_ref(r)?;
     let adr = store.read(&path)?;
-    let reference = cfg.naming.display(&adr.reference());
-    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
-        .iter()
-        .filter(|s| !s.title.eq_ignore_ascii_case(&adr.title))
-        .map(|s| format!("{} — {}", s.reference, s.title))
-        .collect();
-    eprintln!("Drafting {reference} with {} …", provider.id());
-    let draft = adroit::ai::draft_fill(provider.as_ref(), &adr.title, &adr.body, &corpus)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    splice_ai_draft(store, r, &draft)?;
-    eprintln!(
-        "AI-drafted the body of {reference} (marked `{}`). Review before committing.",
-        adroit::ai::AI_MARKER
-    );
-    if !no_edit {
+    let drafted = interview_and_draft(store, &adr.title, r, provider.as_ref())?;
+    if drafted && !no_edit {
         open_in_editor(editor, &path)?;
     }
     Ok(())

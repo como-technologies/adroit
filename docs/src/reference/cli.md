@@ -518,17 +518,20 @@ adroit plan 21 --out plan-0021.md    # write it to a file
 
 ### `adroit draft <ID>`
 
-**AI-complete an existing ADR's body** — for an ADR you created as a plain
-template (without [`new --interview`](#adroit-new-title)) and now want filled in
-before review. Unlike `new --interview`, it doesn't ask questions: it works from
-the ADR's *current* (template or partial) body plus the corpus, then **splices**
-the draft over the prose — the `# ADR-NNNN` heading and `## Status` stay
-mechanical — marks it `<!-- adroit:ai-suggested -->`, and opens your editor.
-Needs an AI provider.
+The **after-the-fact `new --interview`**: run the same AI interview on an ADR you
+already created. Use it when you made an ADR with a plain `adroit new "Title"`
+(a bare template) and want to fill it in later — at any point before review.
+
+It asks the same Socratic questions, drafts the body from your answers + the
+corpus, and **splices** it over the prose — the `# ADR-NNNN` heading and
+`## Status` stay mechanical — marks it `<!-- adroit:ai-suggested -->`, then opens
+your editor. So the iterative flow is: `new` → (`draft` whenever you want AI help)
+→ `edit` / hand-tune → PR. Needs an AI provider (no template fallback, since the
+ADR already exists).
 
 ```sh
-adroit draft 2            # fill in ADR-0002's template body, then open the editor
-adroit draft 2 --no-edit  # fill it in without opening the editor
+adroit draft 2            # interview + draft ADR-0002, then open the editor to review
+adroit draft 2 --no-edit  # draft it without opening the editor
 ```
 
 | Flag | Description |

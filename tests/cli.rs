@@ -2954,6 +2954,8 @@ fn draft_fills_an_existing_template_adr_via_fake_provider() {
             "## Context and Problem Statement\n\nDrafted by the fake.\n\n\
              ## Decision Outcome\n\nChosen: relink on main.",
         )
+        // `draft` runs the same interview as `new --interview` (4 questions).
+        .write_stdin("ctx\ndrivers\noptions\nrisks\n")
         .assert()
         .success()
         .stderr(predicate::str::contains("AI-drafted"));

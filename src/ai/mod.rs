@@ -139,46 +139,6 @@ pub fn draft_body(
     Ok(format!("{AI_MARKER}\n\n{}\n", body.trim()))
 }
 
-/// Build the request for `draft <ID>`: complete an **existing** ADR body (a
-/// template or partial draft) — no interview, just build on what's there.
-pub fn build_fill_request(title: &str, current_body: &str, corpus: &[String]) -> CompletionRequest {
-    let corpus_block = if corpus.is_empty() {
-        "(no other ADRs)".to_string()
-    } else {
-        corpus.join("\n")
-    };
-    let system = "You are completing an Architecture Decision Record draft. The user has \
-        a template or partially-filled ADR; produce the finished prose, KEEPING any real \
-        content they already wrote and replacing the template placeholders. Match the \
-        house voice of the existing ADRs and write honest negative consequences. Output \
-        GitHub-flavored markdown for the body only: the sections `## Context and Problem \
-        Statement`, `## Decision Drivers`, `## Considered Options`, and `## Decision \
-        Outcome` (with `### Positive Consequences` and `### Negative Consequences`). Do \
-        NOT write the title H1 or a `## Status` section — those are mechanical."
-        .to_string();
-    let prompt = format!(
-        "ADR title: {title}\n\nCurrent ADR body (template or partial draft):\n{current_body}\n\n\
-         Existing ADRs (for voice + prior decisions):\n{corpus_block}\n\n\
-         Write the completed ADR body now."
-    );
-    CompletionRequest {
-        system,
-        prompt,
-        max_tokens: 1500,
-    }
-}
-
-/// Complete an existing ADR body via the provider, tagged with [`AI_MARKER`].
-pub fn draft_fill(
-    provider: &dyn AiProvider,
-    title: &str,
-    current_body: &str,
-    corpus: &[String],
-) -> Result<String, AiError> {
-    let body = provider.complete(&build_fill_request(title, current_body, corpus))?;
-    Ok(format!("{AI_MARKER}\n\n{}\n", body.trim()))
-}
-
 /// Build the completion request for `plan`: a concrete implementation plan for
 /// an (accepted) ADR, grounded in its body + the corpus.
 pub fn build_plan_request(title: &str, adr_body: &str, corpus: &[String]) -> CompletionRequest {
@@ -389,13 +349,6 @@ mod tests {
         assert!(req.prompt.contains("Adopt rig"));
         assert!(req.prompt.contains("Use rig."));
         assert!(req.system.to_lowercase().contains("one"));
-    }
-
-    #[test]
-    fn fill_request_uses_the_current_body() {
-        let req = build_fill_request("T", "## Context\n\nDescribe the challenge.", &[]);
-        assert!(req.prompt.contains("Describe the challenge."));
-        assert!(req.system.to_lowercase().contains("completing"));
     }
 
     #[test]
