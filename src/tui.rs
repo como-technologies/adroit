@@ -237,6 +237,15 @@ impl EditorBuffer {
     }
 }
 
+/// Why the ADR fuzzy picker ([`Mode::PickAdr`]) is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickPurpose {
+    /// Jump the list selection to the chosen ADR.
+    Jump,
+    /// Supersede the chosen (older) ADR with the currently-selected one.
+    Supersede,
+}
+
 /// What the user is currently doing — drives key handling and rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -249,8 +258,13 @@ pub enum Mode {
     NewTitle { input: String },
     /// Picking a target status for the selected ADR.
     PickStatus { index: usize },
-    /// Typing the identifier of the OLD ADR the selected one supersedes.
-    Supersede { input: String },
+    /// Fuzzy-picking an ADR from the list (jump to it, or choose the OLD ADR for
+    /// a supersession). `input` filters, `index` selects among the matches.
+    PickAdr {
+        input: String,
+        index: usize,
+        purpose: PickPurpose,
+    },
     /// The fuzzy command palette (`:`). `input` is the filter text; `index`
     /// selects among the currently matching commands.
     Palette { input: String, index: usize },
@@ -323,6 +337,7 @@ pub const STATUSES: [Status; 5] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteCmd {
     Search,
+    GoToAdr,
     NewAdr,
     SetStatus,
     Supersede,
@@ -344,6 +359,7 @@ impl PaletteCmd {
     fn title(self) -> &'static str {
         match self {
             PaletteCmd::Search => "Search ADRs",
+            PaletteCmd::GoToAdr => "Go to ADR…",
             PaletteCmd::NewAdr => "New ADR",
             PaletteCmd::SetStatus => "Set status",
             PaletteCmd::Supersede => "Supersede an ADR",
@@ -367,6 +383,7 @@ impl PaletteCmd {
     fn hint(self) -> &'static str {
         match self {
             PaletteCmd::Search => "/",
+            PaletteCmd::GoToAdr => "Ctrl-P",
             PaletteCmd::NewAdr => "n",
             PaletteCmd::SetStatus => "s",
             PaletteCmd::Supersede => "S",
@@ -386,8 +403,9 @@ impl PaletteCmd {
 }
 
 /// Every command the palette offers, in display order (then fuzzy-filtered).
-pub const PALETTE: [PaletteCmd; 17] = [
+pub const PALETTE: [PaletteCmd; 18] = [
     PaletteCmd::Search,
+    PaletteCmd::GoToAdr,
     PaletteCmd::NewAdr,
     PaletteCmd::SetStatus,
     PaletteCmd::Supersede,
@@ -712,13 +730,118 @@ impl TuiState {
         }
     }
 
-    /// Enter supersede-input mode for the selected ADR (no-op if no selection).
+    /// Open the supersede picker for the selected (new) ADR (no-op if no
+    /// selection): fuzzy-pick the OLD ADR it supersedes.
     pub fn begin_supersede(&mut self) {
-        if self.selected_address().is_some() {
-            self.mode = Mode::Supersede {
+        self.begin_pick_adr(PickPurpose::Supersede);
+    }
+
+    /// Open the "go to ADR" fuzzy finder (jump the selection to a picked ADR).
+    pub fn begin_goto(&mut self) {
+        self.begin_pick_adr(PickPurpose::Jump);
+    }
+
+    /// Open the ADR fuzzy picker for `purpose`. A supersede pick requires a
+    /// selected "new" ADR; a jump only needs rows to pick from.
+    pub fn begin_pick_adr(&mut self, purpose: PickPurpose) {
+        let ready = match purpose {
+            PickPurpose::Supersede => self.selected_address().is_some() && self.rows.len() > 1,
+            PickPurpose::Jump => !self.rows.is_empty(),
+        };
+        if ready {
+            self.mode = Mode::PickAdr {
                 input: String::new(),
+                index: 0,
+                purpose,
             };
         }
+    }
+
+    /// Candidate `(row_index, label)` ADRs for the active picker. A supersede
+    /// pick excludes the currently-selected (new) ADR — it can't supersede
+    /// itself.
+    fn pick_candidates(&self) -> Vec<(usize, String)> {
+        let Mode::PickAdr { purpose, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let exclude = (*purpose == PickPurpose::Supersede)
+            .then(|| self.selected_address())
+            .flatten();
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| exclude.as_deref() != Some(r.address.as_str()))
+            .map(|(i, r)| (i, format!("{} {}", r.reference, r.title)))
+            .collect()
+    }
+
+    /// The picker's candidates filtered by the current input, best-match first,
+    /// as `(row_index, label)`.
+    pub fn pick_matches(&self) -> Vec<(usize, String)> {
+        let Mode::PickAdr { input, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let cands = self.pick_candidates();
+        let labels: Vec<&str> = cands.iter().map(|(_, l)| l.as_str()).collect();
+        fuzzy_rank(input, &labels)
+            .into_iter()
+            .map(|i| cands[i].clone())
+            .collect()
+    }
+
+    /// Append to the picker filter (resets the selection to the top match).
+    pub fn pick_push(&mut self, c: char) {
+        if let Mode::PickAdr { input, index, .. } = &mut self.mode {
+            input.push(c);
+            *index = 0;
+        }
+    }
+
+    /// Delete the last char of the picker filter (resets the selection).
+    pub fn pick_pop(&mut self) {
+        if let Mode::PickAdr { input, index, .. } = &mut self.mode {
+            input.pop();
+            *index = 0;
+        }
+    }
+
+    /// Move the picker selection by `delta`, wrapping over the matching set.
+    pub fn pick_move(&mut self, delta: isize) {
+        let n = self.pick_matches().len();
+        if let Mode::PickAdr { index, .. } = &mut self.mode {
+            if n == 0 {
+                *index = 0;
+            } else {
+                *index = (*index as isize + delta).rem_euclid(n as isize) as usize;
+            }
+        }
+    }
+
+    /// Run the picker: jump the selection, or build the supersede action. Always
+    /// returns to list mode; a no-match Enter is a plain close.
+    pub fn pick_confirm(&mut self) -> Action {
+        let matches = self.pick_matches();
+        let (purpose, index) = match &self.mode {
+            Mode::PickAdr { purpose, index, .. } => (*purpose, *index),
+            _ => return Action::None,
+        };
+        let chosen_row = matches.get(index).map(|(i, _)| *i);
+        let action = match (purpose, chosen_row) {
+            (PickPurpose::Jump, Some(row)) => {
+                self.selected = row;
+                Action::Refresh
+            }
+            (PickPurpose::Supersede, Some(row)) => match self.selected_address() {
+                Some(new) => Action::Supersede {
+                    new,
+                    old: self.rows[row].address.clone(),
+                },
+                None => Action::None,
+            },
+            (_, None) => Action::None,
+        };
+        self.mode = Mode::List;
+        action
     }
 
     /// Open the fuzzy command palette (`:`).
@@ -791,6 +914,10 @@ impl TuiState {
                 self.begin_search();
                 Action::None
             }
+            PaletteCmd::GoToAdr => {
+                self.begin_goto();
+                Action::None
+            }
             PaletteCmd::NewAdr => {
                 self.begin_new();
                 Action::None
@@ -856,23 +983,15 @@ impl TuiState {
 
     /// Append a character to the active text-input mode.
     pub fn push_char(&mut self, c: char) {
-        match &mut self.mode {
-            // Supersede now takes a scheme identifier (number, slug, or uuid),
-            // so it accepts the same free text as the other input modes.
-            Mode::Search { input } | Mode::NewTitle { input } | Mode::Supersede { input } => {
-                input.push(c)
-            }
-            _ => {}
+        if let Mode::Search { input } | Mode::NewTitle { input } = &mut self.mode {
+            input.push(c)
         }
     }
 
     /// Remove the last character from the active text-input mode.
     pub fn pop_char(&mut self) {
-        match &mut self.mode {
-            Mode::Search { input } | Mode::NewTitle { input } | Mode::Supersede { input } => {
-                input.pop();
-            }
-            _ => {}
+        if let Mode::Search { input } | Mode::NewTitle { input } = &mut self.mode {
+            input.pop();
         }
     }
 
@@ -912,16 +1031,6 @@ impl TuiState {
                 Some(addr) => Action::SetStatus(addr, STATUSES[*index]),
                 None => Action::None,
             },
-            Mode::Supersede { input } => {
-                let old = input.trim();
-                match self.selected_address() {
-                    Some(new) if !old.is_empty() => Action::Supersede {
-                        new,
-                        old: old.to_string(),
-                    },
-                    _ => Action::None,
-                }
-            }
             _ => Action::None,
         };
         self.mode = Mode::List;
@@ -1508,9 +1617,8 @@ mod driver {
             Mode::Preview => handle_preview_key(state, key),
             Mode::PickStatus { .. } => handle_picker_key(state, key),
             Mode::Edit { .. } => handle_edit_key(state, key),
-            Mode::Search { .. } | Mode::NewTitle { .. } | Mode::Supersede { .. } => {
-                handle_input_key(state, key)
-            }
+            Mode::Search { .. } | Mode::NewTitle { .. } => handle_input_key(state, key),
+            Mode::PickAdr { .. } => handle_pick_adr_key(state, key),
             Mode::Palette { .. } => handle_palette_key(state, key),
         }
     }
@@ -1545,6 +1653,11 @@ mod driver {
             }
             KeyCode::Char(':') => {
                 state.begin_palette();
+                Action::None
+            }
+            // Ctrl-P: fuzzy "go to ADR" finder (file-finder muscle memory).
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.begin_goto();
                 Action::None
             }
             KeyCode::Char('f') => {
@@ -1791,6 +1904,43 @@ mod driver {
         }
     }
 
+    /// ADR fuzzy-picker keys (jump / supersede): same shape as the palette.
+    fn handle_pick_adr_key(state: &mut TuiState, key: KeyEvent) -> Action {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                state.back_to_list();
+                Action::None
+            }
+            KeyCode::Enter => state.pick_confirm(),
+            KeyCode::Up => {
+                state.pick_move(-1);
+                Action::None
+            }
+            KeyCode::Down => {
+                state.pick_move(1);
+                Action::None
+            }
+            KeyCode::Char('p') if ctrl => {
+                state.pick_move(-1);
+                Action::None
+            }
+            KeyCode::Char('n') if ctrl => {
+                state.pick_move(1);
+                Action::None
+            }
+            KeyCode::Backspace => {
+                state.pick_pop();
+                Action::None
+            }
+            KeyCode::Char(c) if !ctrl => {
+                state.pick_push(c);
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
     // --- rendering ----------------------------------------------------------
 
     /// Render a frame. Takes `&mut TuiState` because the editor pane reports its
@@ -1823,6 +1973,9 @@ mod driver {
 
         if let Mode::PickStatus { .. } = state.mode() {
             render_status_picker(f, state, chunks[1]);
+        }
+        if let Mode::PickAdr { .. } = state.mode() {
+            render_adr_picker(f, state, f.area());
         }
         if let Mode::Palette { .. } = state.mode() {
             render_palette(f, state, f.area());
@@ -1859,6 +2012,7 @@ mod driver {
             Line::from(""),
             sect("Find"),
             row("/", "search title + body"),
+            row("Ctrl-P", "go to ADR (fuzzy)"),
             row("f", "cycle status filter"),
             row("o", "cycle sort order"),
             row("r", "refresh"),
@@ -1866,7 +2020,7 @@ mod driver {
             sect("Author"),
             row("n", "new ADR"),
             row("s", "set status"),
-            row("S", "supersede (this supersedes …)"),
+            row("S", "supersede (pick the older ADR)"),
             row("i", "edit body in-terminal"),
             row("e", "open in $EDITOR"),
             Line::from(""),
@@ -2270,7 +2424,7 @@ mod driver {
             Mode::Search { .. } => "type to search  Enter apply  Esc cancel",
             Mode::NewTitle { .. } => "type title  Enter create  Esc cancel",
             Mode::PickStatus { .. } => "j/k pick  Enter apply  Esc cancel",
-            Mode::Supersede { .. } => "type OLD adr id  Enter supersede  Esc cancel",
+            Mode::PickAdr { .. } => "type to filter  ↑/↓ move  Enter pick  Esc cancel",
             Mode::Edit {
                 confirm_discard: true,
                 ..
@@ -2286,7 +2440,6 @@ mod driver {
         let (line1, color) = match state.mode() {
             Mode::Search { input } => (format!("search: {input}"), c.accent),
             Mode::NewTitle { input } => (format!("new title: {input}"), c.accent),
-            Mode::Supersede { input } => (format!("this supersedes {input}"), c.accent),
             Mode::Edit {
                 confirm_discard: true,
                 ..
@@ -2412,6 +2565,85 @@ mod driver {
             .border_style(Style::default().fg(c.accent))
             .title(Span::styled(
                 " Command palette ",
+                Style::default().fg(c.title).add_modifier(Modifier::BOLD),
+            ));
+        f.render_widget(Clear, popup);
+        f.render_widget(Paragraph::new(lines).block(block), popup);
+    }
+
+    /// The ADR fuzzy picker — a query line over matching ADRs (each with its
+    /// status tag right-aligned). Used for "go to ADR" and supersede selection.
+    fn render_adr_picker(f: &mut Frame, state: &TuiState, area: Rect) {
+        let (input, index, purpose) = match state.mode() {
+            Mode::PickAdr {
+                input,
+                index,
+                purpose,
+            } => (input, *index, *purpose),
+            _ => return,
+        };
+        let c = chrome(state.md_theme());
+        let matches = state.pick_matches();
+        let rows = state.visible_rows();
+        let width = 60u16;
+        let inner_w = width.saturating_sub(2) as usize;
+
+        let mut lines: Vec<Line> = Vec::with_capacity(matches.len() + 1);
+        lines.push(Line::from(vec![
+            Span::styled(
+                "› ",
+                Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(input.clone(), Style::default().fg(c.title)),
+            Span::styled("▏", Style::default().fg(c.accent)),
+        ]));
+        if matches.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  (no matching ADR)",
+                Style::default().fg(c.muted),
+            )));
+        }
+        for (vis, (row_idx, label)) in matches.iter().enumerate() {
+            let selected = vis == index;
+            let marker = if selected { "▶ " } else { "  " };
+            let status = rows.get(*row_idx).map(|r| r.status);
+            let tag = status.map(|s| s.to_string()).unwrap_or_default();
+            let used = marker.chars().count() + label.chars().count() + tag.chars().count();
+            let pad = inner_w.saturating_sub(used);
+            let label_style = if selected {
+                Style::default().fg(c.accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(c.title)
+            };
+            let tag_style = status
+                .map(|s| Style::default().fg(status_color(s)))
+                .unwrap_or_default();
+            let line = Line::from(vec![
+                Span::styled(marker, label_style),
+                Span::styled(label.clone(), label_style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(tag, tag_style),
+            ]);
+            lines.push(if selected {
+                line.style(Style::default().bg(c.selection_bg))
+            } else {
+                line
+            });
+        }
+
+        let title = match purpose {
+            PickPurpose::Jump => " Go to ADR ",
+            PickPurpose::Supersede => " Supersede — pick the older ADR ",
+        };
+        let body_rows = matches.len().max(1) as u16 + 1;
+        let height = (body_rows + 2).min(area.height);
+        let popup = centered(width, height, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(c.accent))
+            .title(Span::styled(
+                title,
                 Style::default().fg(c.title).add_modifier(Modifier::BOLD),
             ));
         f.render_widget(Clear, popup);
@@ -2665,19 +2897,70 @@ mod tests {
     }
 
     #[test]
-    fn supersede_confirm_maps_old_to_selected_new() {
+    fn supersede_picker_maps_chosen_old_to_selected_new() {
         let mut s = TuiState::new();
         s.set_rows(sample_rows());
         s.select_last(); // ADR 3 is the NEW one
         s.begin_supersede();
-        s.push_char('1');
+        assert!(matches!(
+            s.mode(),
+            Mode::PickAdr {
+                purpose: PickPurpose::Supersede,
+                ..
+            }
+        ));
+        // The new ADR (row 2) is excluded — it can't supersede itself.
+        assert!(s.pick_matches().iter().all(|(i, _)| *i != 2));
+        for c in "Rust".chars() {
+            s.pick_push(c);
+        }
+        assert_eq!(s.pick_matches().first().map(|(i, _)| *i), Some(0)); // ADR 1 "Use Rust"
         assert_eq!(
-            s.confirm(),
+            s.pick_confirm(),
             Action::Supersede {
                 new: "3".to_string(),
                 old: "1".to_string()
             }
         );
+        assert!(matches!(s.mode(), Mode::List));
+    }
+
+    #[test]
+    fn goto_picker_jumps_selection_to_chosen_adr() {
+        let mut s = TuiState::new();
+        s.set_rows(sample_rows());
+        assert_eq!(s.selected_index(), Some(0));
+        s.begin_goto();
+        assert!(matches!(
+            s.mode(),
+            Mode::PickAdr {
+                purpose: PickPurpose::Jump,
+                ..
+            }
+        ));
+        for c in "Java".chars() {
+            s.pick_push(c); // ADR 3 "Use Java"
+        }
+        assert_eq!(s.pick_confirm(), Action::Refresh);
+        assert_eq!(s.selected_index(), Some(2));
+        assert!(matches!(s.mode(), Mode::List));
+    }
+
+    #[test]
+    fn pickers_are_noops_without_enough_rows() {
+        let mut s = TuiState::new();
+        // No rows: neither picker opens.
+        s.begin_goto();
+        assert!(matches!(s.mode(), Mode::List));
+        s.begin_supersede();
+        assert!(matches!(s.mode(), Mode::List));
+        // A single ADR: nothing else to supersede, so the supersede picker stays
+        // closed (but jump can still open).
+        s.set_rows(vec![summary(1, Status::Accepted, "Only")]);
+        s.begin_supersede();
+        assert!(matches!(s.mode(), Mode::List));
+        s.begin_goto();
+        assert!(matches!(s.mode(), Mode::PickAdr { .. }));
     }
 
     #[test]

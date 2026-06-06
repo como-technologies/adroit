@@ -27,11 +27,12 @@ Press `?` at any time for an in-app keybinding cheat-sheet; any key dismisses it
 | `Enter`        | Focus the preview pane for scrolling              |
 | `/`            | Search (title + body, case-insensitive)           |
 | `:`            | Open the fuzzy **command palette**                |
+| `Ctrl-P`       | **Go to ADR** (fuzzy finder — jump the selection) |
 | `f`            | Cycle the status filter (All → each status → All) |
 | `o`            | Cycle the sort order                              |
 | `n`            | Create a new ADR (prompts for a title)            |
 | `s`            | Change the selected ADR's status                  |
-| `S`            | Supersede an older ADR with the selected one      |
+| `S`            | Supersede an older ADR (fuzzy-pick it) with the selected one |
 | `i`            | **Edit the selected ADR's body in the TUI**       |
 | `e`            | Open the selected ADR in `$EDITOR`                |
 | `m`            | Toggle the preview between rendered and raw markdown |
@@ -50,6 +51,20 @@ move, `Enter` to run, `Esc` to cancel. Every command shows its direct keybinding
 on the right, so the palette doubles as a way to learn the shortcuts. It includes
 the theme switchers (`Theme: gruvbox` / `warm` / `default`) which otherwise have
 no key.
+
+### Fuzzy ADR pickers
+
+Two actions open a fuzzy ADR finder instead of asking you to type an identifier:
+
+- **`Ctrl-P` — Go to ADR.** Fuzzy-match by `ADR-NNNN` + title and `Enter` to jump
+  the list selection straight to it. Handy in a large log.
+- **`S` — Supersede.** Picks the *older* ADR that the currently-selected one
+  supersedes, fuzzy-matched the same way (the selected ADR is excluded — it can't
+  supersede itself). No more remembering numbers.
+
+Both share the palette's controls: type to filter, `↑`/`↓` (or `Ctrl-P`/`Ctrl-N`)
+to move, `Enter` to choose, `Esc` to cancel. The supersede pick still writes
+through the same `Store::supersede` path the CLI uses.
 
 ### Scrolling the preview
 

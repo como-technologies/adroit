@@ -243,6 +243,15 @@ switchers, which have no direct key. `render_palette` is the centered overlay
 (query line + matches with right-aligned hints). All of this lives in the pure,
 headlessly-tested layer.
 
+**Fuzzy ADR pickers (`Mode::PickAdr`).** Two flows fuzzy-pick an ADR from the
+list instead of typing an identifier, sharing one mode + overlay (`render_adr_picker`)
+parameterized by `PickPurpose`: `Jump` (`Ctrl-P` / palette "Go to ADR…" → moves the
+selection) and `Supersede` (`S` → choose the OLDER ADR; the selected "new" ADR is
+excluded from candidates). Both reuse `fuzzy_rank` over `"<reference> <title>"`
+labels and resolve back to a row index, then `pick_confirm` either re-selects the
+row or emits `Action::Supersede { new, old }` (same `Store::supersede` write path).
+Replaces the former type-the-id `Mode::Supersede`.
+
 **Preview scrolling & mouse.** The preview is scrollable with a gutter scrollbar
 (`Scrollbar`/`ScrollbarState`, shown only when content overflows). Because
 `Paragraph::line_count` is private in ratatui 0.30, `render_preview` estimates the
