@@ -3,7 +3,9 @@
 This guide covers the day-to-day workflow of creating and maintaining ADRs.
 adroit defaults to the **markdown / by-status** profile: status is encoded by
 the directory, and number/title come from the H1 heading. See
-[ADR Format](../reference/adr-format.md) for the full format.
+[ADR Format](../reference/adr-format.md) for the full format. For the bird's-eye
+view of how these verbs sequence across a decision's life, see
+[The ADR Workflow](./workflow.md).
 
 ## Creating an ADR
 

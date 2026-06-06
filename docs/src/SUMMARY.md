@@ -10,6 +10,7 @@
 # Using adroit
 
 - [Using adroit with Your Repo](./usage/your-repo.md)
+- [The ADR Workflow](./usage/workflow.md)
 - [Managing ADRs](./usage/managing-adrs.md)
 - [CI Integration](./usage/ci-integration.md)
 - [Automation & AI](./usage/automation.md)
