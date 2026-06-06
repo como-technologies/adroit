@@ -188,7 +188,7 @@ The ADR process fits a GitHub/GitLab pipeline: propose on `main`, then the
 PR/MR *is* the decision (move proposed → accepted/rejected). `adroit check` and
 `adroit index --check` gate it, and `adroit review` posts the kickoff brief on
 the decision PR/MR. Copy-and-customize templates for both platforms live in
-[`ci-templates/`](ci-templates/); see
+[`templates/ci/`](templates/ci/); see
 [docs/src/usage/ci-integration.md](docs/src/usage/ci-integration.md).
 
 ## More

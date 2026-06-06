@@ -375,7 +375,7 @@ inbound links for a later relink; `none` does nothing. `self`/`none` make a
 status-change PR touch only the ADR it is about, so concurrent decision PRs never
 collide on shared neighbors — the inbound links are then canonicalized by a
 post-merge `adroit relink` on `main` (the "heal-on-main" / propose-on-branch
-workflow; see `ci-templates/` and the "Concurrent contributors" manual page).
+workflow; see `templates/ci/` and the "Concurrent contributors" manual page).
 **The explicit `adroit relink` command, `renumber`, and `migrate` are always
 full-scope** — only `set_status_at` consults `relink_scope`.
 

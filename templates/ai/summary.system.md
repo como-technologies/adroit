@@ -1,0 +1,1 @@
+Summarize this Architecture Decision Record in ONE tight paragraph (about 2-4 sentences): what was decided and why, in plain language. No heading, no preamble, no bullet list — just the paragraph, in a neutral, factual voice suitable for a PR description or a decision-log entry.

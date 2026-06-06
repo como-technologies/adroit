@@ -23,6 +23,32 @@ pub mod rig_provider;
 /// `lint`/`check`) can tell what the model wrote from what a human edited.
 pub const AI_MARKER: &str = "<!-- adroit:ai-suggested -->";
 
+// Prompt templates live as editable files under `templates/ai/` (compiled in via
+// `include_str!`, so the binary stays self-contained). Each verb has a `.system`
+// (the model's role/instructions) and a `.prompt` (the per-call template with
+// `{{placeholder}}` slots filled by the matching `build_*` below). Trimmed on use
+// so a file's trailing newline doesn't change the request. (RFC #5: a future step
+// is making these user-overridable, e.g. a repo-local `templates/ai/`.)
+const INTERVIEW_SYSTEM: &str = include_str!("../../templates/ai/interview.system.md");
+const INTERVIEW_PROMPT: &str = include_str!("../../templates/ai/interview.prompt.md");
+const PLAN_SYSTEM: &str = include_str!("../../templates/ai/plan.system.md");
+const PLAN_PROMPT: &str = include_str!("../../templates/ai/plan.prompt.md");
+const LINT_SYSTEM: &str = include_str!("../../templates/ai/lint.system.md");
+const LINT_PROMPT: &str = include_str!("../../templates/ai/lint.prompt.md");
+const SUMMARY_SYSTEM: &str = include_str!("../../templates/ai/summary.system.md");
+const SUMMARY_PROMPT: &str = include_str!("../../templates/ai/summary.prompt.md");
+const ASK_SYSTEM: &str = include_str!("../../templates/ai/ask.system.md");
+const ASK_PROMPT: &str = include_str!("../../templates/ai/ask.prompt.md");
+
+/// Render the empty-or-joined corpus block (the same fallback every prompt uses).
+fn corpus_block(corpus: &[String], empty_label: &str) -> String {
+    if corpus.is_empty() {
+        empty_label.to_string()
+    } else {
+        corpus.join("\n")
+    }
+}
+
 /// One completion request. Framework-free, so the trait carries no rig types.
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
@@ -99,36 +125,19 @@ pub const INTERVIEW_QUESTIONS: [&str; 4] = [
 /// Build the completion request from the interview + a corpus summary (existing
 /// `reference — title` lines, so the draft matches the team's vocabulary).
 pub fn build_request(iv: &Interview, corpus: &[String]) -> CompletionRequest {
-    let corpus_block = if corpus.is_empty() {
-        "(no existing ADRs yet)".to_string()
-    } else {
-        corpus.join("\n")
-    };
-    let system = "You are an experienced architect helping draft an Architecture \
-        Decision Record (ADR). Match the house voice of the existing ADRs. Write \
-        crisp, concrete prose with no filler, and be honest about negative \
-        consequences. Output GitHub-flavored markdown for the ADR body only: the \
-        sections `## Context and Problem Statement`, `## Decision Drivers`, \
-        `## Considered Options`, and `## Decision Outcome` (with \
-        `### Positive Consequences` and `### Negative Consequences`). Do NOT \
-        write the title H1 or a `## Status` section — those are added mechanically."
-        .to_string();
-    let prompt = format!(
-        "Title: {title}\n\nExisting ADRs (for voice + prior decisions):\n{corpus_block}\n\n\
-         Author's notes from a short interview:\n\
-         - Problem / context: {context}\n\
-         - Drivers: {drivers}\n\
-         - Options considered: {options}\n\
-         - Risks / negative consequences: {risks}\n\n\
-         Draft the ADR body now.",
-        title = iv.title,
-        context = iv.context,
-        drivers = iv.drivers,
-        options = iv.options,
-        risks = iv.risks,
-    );
+    let prompt = INTERVIEW_PROMPT
+        .trim()
+        .replace("{{title}}", &iv.title)
+        .replace(
+            "{{corpus_block}}",
+            &corpus_block(corpus, "(no existing ADRs yet)"),
+        )
+        .replace("{{context}}", &iv.context)
+        .replace("{{drivers}}", &iv.drivers)
+        .replace("{{options}}", &iv.options)
+        .replace("{{risks}}", &iv.risks);
     CompletionRequest {
-        system,
+        system: INTERVIEW_SYSTEM.trim().to_string(),
         prompt,
         max_tokens: 1500,
     }
@@ -150,24 +159,13 @@ pub fn draft_body(
 /// Build the completion request for `plan`: a concrete implementation plan for
 /// an (accepted) ADR, grounded in its body + the corpus.
 pub fn build_plan_request(title: &str, adr_body: &str, corpus: &[String]) -> CompletionRequest {
-    let corpus_block = if corpus.is_empty() {
-        "(no other ADRs)".to_string()
-    } else {
-        corpus.join("\n")
-    };
-    let system = "You are a senior engineer turning an accepted Architecture \
-        Decision Record into a concrete implementation plan. Produce an ordered, \
-        actionable markdown checklist: the steps to implement the decision, the \
-        components/files likely touched, testing, rollout/migration, and the risks \
-        to watch. Be specific and concise, reference the decision, and don't \
-        restate the whole ADR. Output markdown only."
-        .to_string();
-    let prompt = format!(
-        "ADR title: {title}\n\nADR body:\n{adr_body}\n\nOther ADRs (for context):\n\
-         {corpus_block}\n\nWrite the implementation plan now."
-    );
+    let prompt = PLAN_PROMPT
+        .trim()
+        .replace("{{title}}", title)
+        .replace("{{adr_body}}", adr_body)
+        .replace("{{corpus_block}}", &corpus_block(corpus, "(no other ADRs)"));
     CompletionRequest {
-        system,
+        system: PLAN_SYSTEM.trim().to_string(),
         prompt,
         max_tokens: 1800,
     }
@@ -187,24 +185,13 @@ pub fn draft_plan(
 /// Build the completion request for `lint --ai`: a best-practices review of an
 /// ADR draft against the house style.
 pub fn build_lint_request(title: &str, adr_body: &str, corpus: &[String]) -> CompletionRequest {
-    let corpus_block = if corpus.is_empty() {
-        "(no other ADRs)".to_string()
-    } else {
-        corpus.join("\n")
-    };
-    let system = "You are reviewing an Architecture Decision Record draft against ADR \
-        best practices and the team's house style (inferred from the other ADRs). \
-        Report concrete, actionable issues as a short markdown bullet list: weak or \
-        missing alternatives, hand-wavy decision rationale, performative or missing \
-        negative consequences, vague drivers, undefined acronyms, inconsistent voice. \
-        If it's solid, say so in one line. Be specific and terse — no preamble."
-        .to_string();
-    let prompt = format!(
-        "ADR title: {title}\n\nADR body:\n{adr_body}\n\nOther ADRs (house voice):\n\
-         {corpus_block}\n\nReview the draft now."
-    );
+    let prompt = LINT_PROMPT
+        .trim()
+        .replace("{{title}}", title)
+        .replace("{{adr_body}}", adr_body)
+        .replace("{{corpus_block}}", &corpus_block(corpus, "(no other ADRs)"));
     CompletionRequest {
-        system,
+        system: LINT_SYSTEM.trim().to_string(),
         prompt,
         max_tokens: 1000,
     }
@@ -222,16 +209,12 @@ pub fn draft_lint(
 
 /// Build the completion request for `summarize`: a one-paragraph TL;DR of an ADR.
 pub fn build_summary_request(title: &str, adr_body: &str) -> CompletionRequest {
-    let system = "Summarize this Architecture Decision Record in ONE tight paragraph \
-        (about 2-4 sentences): what was decided and why, in plain language. No \
-        heading, no preamble, no bullet list — just the paragraph, in a neutral, \
-        factual voice suitable for a PR description or a decision-log entry."
-        .to_string();
-    let prompt = format!(
-        "ADR title: {title}\n\nADR body:\n{adr_body}\n\nWrite the one-paragraph summary now."
-    );
+    let prompt = SUMMARY_PROMPT
+        .trim()
+        .replace("{{title}}", title)
+        .replace("{{adr_body}}", adr_body);
     CompletionRequest {
-        system,
+        system: SUMMARY_SYSTEM.trim().to_string(),
         prompt,
         max_tokens: 400,
     }
@@ -249,15 +232,12 @@ pub fn draft_summary(
 /// Build the completion request for `ask`: answer a question grounded ONLY in the
 /// retrieved ADR excerpts, with citations.
 pub fn build_ask_request(question: &str, context: &str) -> CompletionRequest {
-    let system = "Answer the question using ONLY the provided ADR excerpts. Cite the \
-        ADRs you used by their reference (e.g. ADR-0006). If the excerpts don't \
-        contain the answer, say so plainly rather than guessing. Be concise."
-        .to_string();
-    let prompt = format!(
-        "Question: {question}\n\nRelevant ADR excerpts:\n{context}\n\nAnswer with citations."
-    );
+    let prompt = ASK_PROMPT
+        .trim()
+        .replace("{{question}}", question)
+        .replace("{{context}}", context);
     CompletionRequest {
-        system,
+        system: ASK_SYSTEM.trim().to_string(),
         prompt,
         max_tokens: 800,
     }

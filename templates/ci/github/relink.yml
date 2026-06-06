@@ -6,7 +6,7 @@
 # concurrent decision PRs never touch the same neighbor file and never conflict.
 # This job is the single, deterministic place those inbound links are
 # recomputed: after each merge to `main` it runs a full `adroit relink` and
-# commits the result. See ci-templates/README.md. Two knobs:
+# commits the result. See templates/ci/README.md. Two knobs:
 #   1. ADROIT_DIR below — your ADR directory.
 #   2. The "Install adroit" step — how the binary is obtained.
 

@@ -1,7 +1,7 @@
 # adroit ADR pipeline (GitHub Actions) — copy to .github/workflows/adr.yml
 #
 # Gates the ADR process and generates the review-kickoff brief on decision PRs.
-# See ci-templates/README.md. Two knobs:
+# See templates/ci/README.md. Two knobs:
 #   1. ADROIT_DIR below — your ADR directory.
 #   2. The "Install adroit" step — how the binary is obtained (not on crates.io
 #      yet; pin to a tag / vendor a binary / use an image as you prefer).
