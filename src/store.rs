@@ -14,7 +14,14 @@ pub enum StoreError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// Serializing/parsing an ADR's on-disk profile failed. Carries the typed
+    /// `FormatError` (no longer stringified) so callers can inspect the cause.
     #[error("failed to parse ADR: {0}")]
+    Format(#[from] crate::format::FormatError),
+
+    /// A structural problem the store detected itself (e.g. a layout/category
+    /// mismatch) — distinct from a profile (de)serialization error.
+    #[error("{0}")]
     Parse(String),
 
     #[error("no ADR found with number {0}")]
@@ -385,8 +392,7 @@ impl Store {
             apply_ref(adr, r);
         }
         let r = adr.reference();
-        let content = format::serialize(adr, self.opts.format)
-            .map_err(|e| StoreError::Parse(e.to_string()))?;
+        let content = format::serialize(adr, self.opts.format)?;
         let dir = match (self.opts.layout, adr.category.as_deref()) {
             (Layout::ByCategory, Some(category)) => self.category_dir(category),
             _ => self.status_dir(adr.status),
@@ -403,8 +409,8 @@ impl Store {
     pub fn read(&self, path: &Path) -> Result<Adr, StoreError> {
         let content = std::fs::read_to_string(path)?;
         let dir_status = self.dir_status_inner(path);
-        let mut adr = format::deserialize(&content, self.opts.format, dir_status, self.opts.naming)
-            .map_err(|e| StoreError::Parse(e.to_string()))?;
+        let mut adr =
+            format::deserialize(&content, self.opts.format, dir_status, self.opts.naming)?;
         if let Some(r) = self.opts.naming.parse(path, &content) {
             apply_ref(&mut adr, r);
         }
@@ -723,8 +729,7 @@ impl Store {
                 std::fs::create_dir_all(parent)?;
             }
             if reserialize {
-                let content = format::serialize(&adr, self.opts.format)
-                    .map_err(|e| StoreError::Parse(e.to_string()))?;
+                let content = format::serialize(&adr, self.opts.format)?;
                 std::fs::write(&target, content)?;
                 if target != src_path {
                     std::fs::remove_file(&src_path)?;
@@ -899,8 +904,7 @@ impl Store {
                 if !target_dir.is_dir() {
                     std::fs::create_dir_all(&target_dir)?;
                 }
-                let content = format::serialize(&adr, self.opts.format)
-                    .map_err(|e| StoreError::Parse(e.to_string()))?;
+                let content = format::serialize(&adr, self.opts.format)?;
                 let new_path =
                     target_dir.join(path.file_name().map(|n| n.to_owned()).unwrap_or_else(|| {
                         self.opts
@@ -988,8 +992,7 @@ impl Store {
     fn set_body_at(&self, path: PathBuf, new_body: &str) -> Result<PathBuf, StoreError> {
         let mut adr = self.read(&path)?;
         adr.body = new_body.to_string();
-        let content = format::serialize(&adr, self.opts.format)
-            .map_err(|e| StoreError::Parse(e.to_string()))?;
+        let content = format::serialize(&adr, self.opts.format)?;
         std::fs::write(&path, content)?;
         Ok(path)
     }
@@ -1052,8 +1055,7 @@ impl Store {
         } else if !links.contains(target) {
             links.push(target.clone());
         }
-        let content = format::serialize(&adr, self.opts.format)
-            .map_err(|e| StoreError::Parse(e.to_string()))?;
+        let content = format::serialize(&adr, self.opts.format)?;
         std::fs::write(&path, content)?;
         Ok(path)
     }
@@ -1067,8 +1069,7 @@ impl Store {
             Format::Frontmatter => {
                 let mut adr = self.read(&path)?;
                 adr.review_by = review_by;
-                let content = format::serialize(&adr, self.opts.format)
-                    .map_err(|e| StoreError::Parse(e.to_string()))?;
+                let content = format::serialize(&adr, self.opts.format)?;
                 std::fs::write(&path, content)?;
             }
             Format::Markdown => {

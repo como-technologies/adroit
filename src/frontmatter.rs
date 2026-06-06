@@ -33,12 +33,23 @@ struct Frontmatter {
 }
 
 /// Render an ADR as a frontmatter + body string for writing to disk.
+/// What can go wrong serializing or parsing the frontmatter profile.
+#[derive(Debug, thiserror::Error)]
+pub enum FrontmatterError {
+    #[error("ADR number must be assigned before serializing")]
+    MissingNumber,
+    #[error("missing opening frontmatter delimiter `---`")]
+    MissingOpenDelimiter,
+    #[error("missing closing frontmatter delimiter `---`")]
+    MissingCloseDelimiter,
+    #[error("invalid frontmatter YAML: {0}")]
+    Yaml(#[from] serde_yaml_ng::Error),
+}
+
 ///
 /// Returns an error if the ADR's `number` has not been assigned.
-pub fn serialize(adr: &crate::adr::Adr) -> anyhow::Result<String> {
-    let number = adr
-        .number
-        .ok_or_else(|| anyhow::anyhow!("ADR number must be assigned before serializing"))?;
+pub fn serialize(adr: &crate::adr::Adr) -> Result<String, FrontmatterError> {
+    let number = adr.number.ok_or(FrontmatterError::MissingNumber)?;
 
     let fm = Frontmatter {
         id: adr.id,
@@ -69,7 +80,7 @@ pub fn serialize(adr: &crate::adr::Adr) -> anyhow::Result<String> {
 /// Parse a frontmatter + body string back into an Adr.
 ///
 /// The `git_sha` field is left as `None` — the caller can populate it.
-pub fn deserialize(input: &str) -> anyhow::Result<crate::adr::Adr> {
+pub fn deserialize(input: &str) -> Result<crate::adr::Adr, FrontmatterError> {
     let (yaml, body) = split_frontmatter(input)?;
     let fm: Frontmatter = serde_yaml_ng::from_str(yaml)?;
     Ok(crate::adr::Adr {
@@ -137,15 +148,15 @@ pub fn remap_numeric_refs(text: &str, old: Number, new: Number) -> Option<String
 }
 
 /// Split a document into (frontmatter_yaml, body) at the `---` delimiters.
-fn split_frontmatter(input: &str) -> anyhow::Result<(&str, &str)> {
+fn split_frontmatter(input: &str) -> Result<(&str, &str), FrontmatterError> {
     let trimmed = input.trim_start();
     if !trimmed.starts_with("---") {
-        anyhow::bail!("missing opening frontmatter delimiter `---`");
+        return Err(FrontmatterError::MissingOpenDelimiter);
     }
     let after_open = trimmed[3..].trim_start_matches(['\r', '\n']);
     let close_pos = after_open
         .find("\n---")
-        .ok_or_else(|| anyhow::anyhow!("missing closing frontmatter delimiter `---`"))?;
+        .ok_or(FrontmatterError::MissingCloseDelimiter)?;
     let yaml = &after_open[..close_pos];
     let rest = &after_open[close_pos + 4..]; // skip "\n---"
     let body = rest.trim_start_matches(['\r', '\n']);

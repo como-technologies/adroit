@@ -45,13 +45,17 @@ pub enum Format {
     Frontmatter,
 }
 
-/// Errors raised while parsing the markdown profile.
+/// Errors raised serializing or parsing either on-disk profile.
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
     #[error("missing H1 heading `# ADR-NNNN: Title`")]
     MissingHeading,
     #[error("could not parse ADR number from heading: {0}")]
     BadNumber(String),
+    #[error("markdown ADR body must not be empty")]
+    EmptyBody,
+    #[error(transparent)]
+    Frontmatter(#[from] crate::frontmatter::FrontmatterError),
 }
 
 /// Serialize an ADR for a fresh write in the given format.
@@ -60,9 +64,9 @@ pub enum FormatError {
 /// (the body is expected to already be the markdown after the H1/banner/status,
 /// e.g. produced by a template). For round-trip-stable status edits on an
 /// existing file, prefer [`rewrite_status`].
-pub fn serialize(adr: &Adr, format: Format) -> anyhow::Result<String> {
+pub fn serialize(adr: &Adr, format: Format) -> Result<String, FormatError> {
     match format {
-        Format::Frontmatter => crate::frontmatter::serialize(adr),
+        Format::Frontmatter => Ok(crate::frontmatter::serialize(adr)?),
         Format::Markdown => serialize_markdown(adr),
     }
 }
@@ -76,9 +80,9 @@ pub fn deserialize(
     format: Format,
     dir_status: Option<Status>,
     naming: crate::naming::NamingScheme,
-) -> anyhow::Result<Adr> {
+) -> Result<Adr, FormatError> {
     match format {
-        Format::Frontmatter => crate::frontmatter::deserialize(input),
+        Format::Frontmatter => Ok(crate::frontmatter::deserialize(input)?),
         Format::Markdown => parse_markdown(input, dir_status, naming),
     }
 }
@@ -90,10 +94,10 @@ pub fn deserialize(
 /// Render a brand-new markdown ADR. The body already contains the H1, banner,
 /// and section scaffolding (from a template), so this is mostly a passthrough
 /// that guarantees a single trailing newline.
-fn serialize_markdown(adr: &Adr) -> anyhow::Result<String> {
+fn serialize_markdown(adr: &Adr) -> Result<String, FormatError> {
     let mut out = adr.body.clone();
     if out.is_empty() {
-        anyhow::bail!("markdown ADR body must not be empty");
+        return Err(FormatError::EmptyBody);
     }
     if !out.ends_with('\n') {
         out.push('\n');
@@ -255,7 +259,7 @@ pub fn parse_markdown(
     input: &str,
     dir_status: Option<Status>,
     naming: crate::naming::NamingScheme,
-) -> anyhow::Result<Adr> {
+) -> Result<Adr, FormatError> {
     let heading = input
         .lines()
         .find(|l| l.trim_start().starts_with("# "))
