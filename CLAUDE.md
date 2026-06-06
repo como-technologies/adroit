@@ -229,6 +229,20 @@ context-aware key hints. `?` toggles a centered keybinding **help overlay**
 (`render_help`, grouped by task; any key dismisses it — intercepted at the top of
 `handle_key`).
 
+**Command palette (`:`).** A fuzzy command palette (`Mode::Palette { input,
+index }`, opened with `:`) is the discoverable index of every TUI verb. The
+commands are a single `PaletteCmd` enum + `PALETTE` const (title + key hint per
+variant); adding a verb there surfaces it both by key and by name — the one place
+to extend. Filtering is `fuzzy_rank(needle, items) -> Vec<usize>`, a pure helper
+over **nucleo-matcher** (the helix/telescope engine; a `tui`-gated, terminal-free
+dep — no extra ratatui) returning indices best-match-first (empty needle = all,
+original order). `palette_confirm` runs the selected command via `run_palette_cmd`,
+which mirrors the keybinding (mode-switch commands return `Action::None`; effectful
+ones return `Action::Refresh`/`Quit`/`Edit`). The palette also exposes the theme
+switchers, which have no direct key. `render_palette` is the centered overlay
+(query line + matches with right-aligned hints). All of this lives in the pure,
+headlessly-tested layer.
+
 **Preview scrolling & mouse.** The preview is scrollable with a gutter scrollbar
 (`Scrollbar`/`ScrollbarState`, shown only when content overflows). Because
 `Paragraph::line_count` is private in ratatui 0.30, `render_preview` estimates the

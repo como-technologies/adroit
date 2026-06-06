@@ -26,6 +26,7 @@ Press `?` at any time for an in-app keybinding cheat-sheet; any key dismisses it
 | `g` / `G`      | Jump to first / last ADR                          |
 | `Enter`        | Focus the preview pane for scrolling              |
 | `/`            | Search (title + body, case-insensitive)           |
+| `:`            | Open the fuzzy **command palette**                |
 | `f`            | Cycle the status filter (All → each status → All) |
 | `o`            | Cycle the sort order                              |
 | `n`            | Create a new ADR (prompts for a title)            |
@@ -39,6 +40,16 @@ Press `?` at any time for an in-app keybinding cheat-sheet; any key dismisses it
 | `q` / `Esc`    | Quit                                              |
 
 The mouse wheel moves the list selection while the list is focused.
+
+### Command palette
+
+Press `:` to open a fuzzy command palette — the discoverable, searchable index
+of everything the TUI can do (in the spirit of VS Code / Claude Code). Type to
+filter by name (fuzzy, case-insensitive), `↑` / `↓` (or `Ctrl-P` / `Ctrl-N`) to
+move, `Enter` to run, `Esc` to cancel. Every command shows its direct keybinding
+on the right, so the palette doubles as a way to learn the shortcuts. It includes
+the theme switchers (`Theme: gruvbox` / `warm` / `default`) which otherwise have
+no key.
 
 ### Scrolling the preview
 

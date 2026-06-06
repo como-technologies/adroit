@@ -27,7 +27,34 @@ use crate::format::Format;
 use crate::query::{self, Filter, Sort};
 use crate::store::{Store, StoreError, StoreOptions};
 use crate::view::{AdrDetail, AdrSummary};
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config as NucleoConfig, Matcher, Utf32Str};
 use the_other_tui_markdown::{RendererBuilder, Theme as MdTheme, into_text_with_renderer};
+
+/// Fuzzy-rank `items` against `needle`, returning **indices** into `items`
+/// ordered best-match-first. An empty/whitespace needle preserves the original
+/// order (every item passes). Backed by nucleo-matcher (the helix/telescope
+/// engine), so scoring matches what users expect from a modern fuzzy finder.
+/// Pure — no terminal or I/O — so it is unit-tested headlessly.
+fn fuzzy_rank<S: AsRef<str>>(needle: &str, items: &[S]) -> Vec<usize> {
+    if needle.trim().is_empty() {
+        return (0..items.len()).collect();
+    }
+    let mut matcher = Matcher::new(NucleoConfig::DEFAULT);
+    let pattern = Pattern::parse(needle, CaseMatching::Ignore, Normalization::Smart);
+    let mut buf = Vec::new();
+    let mut scored: Vec<(u32, usize)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let hay = Utf32Str::new(s.as_ref(), &mut buf);
+            pattern.score(hay, &mut matcher).map(|score| (score, i))
+        })
+        .collect();
+    // Highest score first; ties keep the original (stable) order.
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    scored.into_iter().map(|(_, i)| i).collect()
+}
 
 /// A pure, terminal-free multi-line plain-text editor buffer.
 ///
@@ -224,6 +251,9 @@ pub enum Mode {
     PickStatus { index: usize },
     /// Typing the identifier of the OLD ADR the selected one supersedes.
     Supersede { input: String },
+    /// The fuzzy command palette (`:`). `input` is the filter text; `index`
+    /// selects among the currently matching commands.
+    Palette { input: String, index: usize },
     /// Scrolling / focused on the preview pane.
     Preview,
     /// Editing the selected ADR's markdown body in the right pane.
@@ -284,6 +314,96 @@ pub const STATUSES: [Status; 5] = [
     Status::Rejected,
     Status::Deprecated,
     Status::Superseded,
+];
+
+/// A command exposed in the `:` fuzzy command palette. Each maps to the same
+/// effect as its keybinding — the palette is the discoverable, searchable index
+/// of everything the TUI can do (Claude-Code-style). Adding a verb here is the
+/// one place that surfaces it both by key and by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteCmd {
+    Search,
+    NewAdr,
+    SetStatus,
+    Supersede,
+    EditBody,
+    EditExternal,
+    CycleFilter,
+    CycleSort,
+    First,
+    Last,
+    ToggleRaw,
+    Refresh,
+    Theme(MarkdownTheme),
+    Help,
+    Quit,
+}
+
+impl PaletteCmd {
+    /// The fuzzy-searchable label shown in the palette.
+    fn title(self) -> &'static str {
+        match self {
+            PaletteCmd::Search => "Search ADRs",
+            PaletteCmd::NewAdr => "New ADR",
+            PaletteCmd::SetStatus => "Set status",
+            PaletteCmd::Supersede => "Supersede an ADR",
+            PaletteCmd::EditBody => "Edit body (in-terminal)",
+            PaletteCmd::EditExternal => "Open in $EDITOR",
+            PaletteCmd::CycleFilter => "Cycle status filter",
+            PaletteCmd::CycleSort => "Cycle sort order",
+            PaletteCmd::First => "Go to first ADR",
+            PaletteCmd::Last => "Go to last ADR",
+            PaletteCmd::ToggleRaw => "Toggle rendered / raw preview",
+            PaletteCmd::Refresh => "Refresh from disk",
+            PaletteCmd::Theme(MarkdownTheme::Gruvbox) => "Theme: gruvbox",
+            PaletteCmd::Theme(MarkdownTheme::Warm) => "Theme: warm",
+            PaletteCmd::Theme(MarkdownTheme::Default) => "Theme: default (ANSI)",
+            PaletteCmd::Help => "Show keybindings",
+            PaletteCmd::Quit => "Quit",
+        }
+    }
+
+    /// The key hint shown right-aligned next to the label (empty if none).
+    fn hint(self) -> &'static str {
+        match self {
+            PaletteCmd::Search => "/",
+            PaletteCmd::NewAdr => "n",
+            PaletteCmd::SetStatus => "s",
+            PaletteCmd::Supersede => "S",
+            PaletteCmd::EditBody => "i",
+            PaletteCmd::EditExternal => "e",
+            PaletteCmd::CycleFilter => "f",
+            PaletteCmd::CycleSort => "o",
+            PaletteCmd::First => "g",
+            PaletteCmd::Last => "G",
+            PaletteCmd::ToggleRaw => "m",
+            PaletteCmd::Refresh => "r",
+            PaletteCmd::Help => "?",
+            PaletteCmd::Quit => "q",
+            PaletteCmd::Theme(_) => "",
+        }
+    }
+}
+
+/// Every command the palette offers, in display order (then fuzzy-filtered).
+pub const PALETTE: [PaletteCmd; 17] = [
+    PaletteCmd::Search,
+    PaletteCmd::NewAdr,
+    PaletteCmd::SetStatus,
+    PaletteCmd::Supersede,
+    PaletteCmd::EditBody,
+    PaletteCmd::EditExternal,
+    PaletteCmd::CycleFilter,
+    PaletteCmd::CycleSort,
+    PaletteCmd::First,
+    PaletteCmd::Last,
+    PaletteCmd::ToggleRaw,
+    PaletteCmd::Refresh,
+    PaletteCmd::Theme(MarkdownTheme::Gruvbox),
+    PaletteCmd::Theme(MarkdownTheme::Warm),
+    PaletteCmd::Theme(MarkdownTheme::Default),
+    PaletteCmd::Help,
+    PaletteCmd::Quit,
 ];
 
 /// Pure TUI state: the visible rows, selection, filters and current mode.
@@ -598,6 +718,129 @@ impl TuiState {
             self.mode = Mode::Supersede {
                 input: String::new(),
             };
+        }
+    }
+
+    /// Open the fuzzy command palette (`:`).
+    pub fn begin_palette(&mut self) {
+        self.mode = Mode::Palette {
+            input: String::new(),
+            index: 0,
+        };
+    }
+
+    /// Indices into [`PALETTE`] matching the current palette filter, best-match
+    /// first. Empty (non-palette mode or no matches) yields no rows.
+    pub fn palette_matches(&self) -> Vec<usize> {
+        if let Mode::Palette { input, .. } = &self.mode {
+            let titles: Vec<&str> = PALETTE.iter().map(|c| c.title()).collect();
+            fuzzy_rank(input, &titles)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Append to the palette filter (resets the selection to the top match).
+    pub fn palette_push(&mut self, c: char) {
+        if let Mode::Palette { input, index } = &mut self.mode {
+            input.push(c);
+            *index = 0;
+        }
+    }
+
+    /// Delete the last char of the palette filter (resets the selection).
+    pub fn palette_pop(&mut self) {
+        if let Mode::Palette { input, index } = &mut self.mode {
+            input.pop();
+            *index = 0;
+        }
+    }
+
+    /// Move the palette selection by `delta`, wrapping over the matching set.
+    pub fn palette_move(&mut self, delta: isize) {
+        let n = self.palette_matches().len();
+        if let Mode::Palette { index, .. } = &mut self.mode {
+            if n == 0 {
+                *index = 0;
+            } else {
+                *index = (*index as isize + delta).rem_euclid(n as isize) as usize;
+            }
+        }
+    }
+
+    /// Run the selected palette command, leaving palette mode. Returns the
+    /// [`Action`] the driver must execute (commands that just switch mode return
+    /// [`Action::None`]). A no-match Enter simply closes the palette.
+    pub fn palette_confirm(&mut self) -> Action {
+        let matches = self.palette_matches();
+        let cmd = match &self.mode {
+            Mode::Palette { index, .. } => matches.get(*index).map(|&i| PALETTE[i]),
+            _ => None,
+        };
+        self.mode = Mode::List;
+        match cmd {
+            Some(cmd) => self.run_palette_cmd(cmd),
+            None => Action::None,
+        }
+    }
+
+    /// Apply one palette command (mirrors the equivalent keybinding).
+    fn run_palette_cmd(&mut self, cmd: PaletteCmd) -> Action {
+        match cmd {
+            PaletteCmd::Search => {
+                self.begin_search();
+                Action::None
+            }
+            PaletteCmd::NewAdr => {
+                self.begin_new();
+                Action::None
+            }
+            PaletteCmd::SetStatus => {
+                self.begin_pick_status();
+                Action::None
+            }
+            PaletteCmd::Supersede => {
+                self.begin_supersede();
+                Action::None
+            }
+            PaletteCmd::EditBody => {
+                self.begin_edit();
+                Action::None
+            }
+            PaletteCmd::EditExternal => match self.selected_address() {
+                Some(addr) => Action::Edit(addr),
+                None => Action::None,
+            },
+            PaletteCmd::CycleFilter => {
+                self.cycle_status_filter();
+                Action::Refresh
+            }
+            PaletteCmd::CycleSort => {
+                self.cycle_sort();
+                Action::Refresh
+            }
+            PaletteCmd::First => {
+                self.select_first();
+                Action::Refresh
+            }
+            PaletteCmd::Last => {
+                self.select_last();
+                Action::Refresh
+            }
+            PaletteCmd::ToggleRaw => {
+                self.toggle_preview_raw();
+                Action::None
+            }
+            PaletteCmd::Refresh => Action::Refresh,
+            PaletteCmd::Theme(t) => {
+                self.set_md_theme(t);
+                Action::None
+            }
+            PaletteCmd::Help => {
+                self.show_help = true;
+                Action::None
+            }
+            PaletteCmd::Quit => Action::Quit,
         }
     }
 
@@ -1268,6 +1511,7 @@ mod driver {
             Mode::Search { .. } | Mode::NewTitle { .. } | Mode::Supersede { .. } => {
                 handle_input_key(state, key)
             }
+            Mode::Palette { .. } => handle_palette_key(state, key),
         }
     }
 
@@ -1297,6 +1541,10 @@ mod driver {
             }
             KeyCode::Char('/') => {
                 state.begin_search();
+                Action::None
+            }
+            KeyCode::Char(':') => {
+                state.begin_palette();
                 Action::None
             }
             KeyCode::Char('f') => {
@@ -1505,6 +1753,44 @@ mod driver {
         }
     }
 
+    /// Command-palette keys: type to fuzzy-filter, ↑/↓ (or Ctrl-P/Ctrl-N) to
+    /// move, Enter to run, Esc to cancel.
+    fn handle_palette_key(state: &mut TuiState, key: KeyEvent) -> Action {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                state.back_to_list();
+                Action::None
+            }
+            KeyCode::Enter => state.palette_confirm(),
+            KeyCode::Up => {
+                state.palette_move(-1);
+                Action::None
+            }
+            KeyCode::Down => {
+                state.palette_move(1);
+                Action::None
+            }
+            KeyCode::Char('p') if ctrl => {
+                state.palette_move(-1);
+                Action::None
+            }
+            KeyCode::Char('n') if ctrl => {
+                state.palette_move(1);
+                Action::None
+            }
+            KeyCode::Backspace => {
+                state.palette_pop();
+                Action::None
+            }
+            KeyCode::Char(c) if !ctrl => {
+                state.palette_push(c);
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
     // --- rendering ----------------------------------------------------------
 
     /// Render a frame. Takes `&mut TuiState` because the editor pane reports its
@@ -1537,6 +1823,9 @@ mod driver {
 
         if let Mode::PickStatus { .. } = state.mode() {
             render_status_picker(f, state, chunks[1]);
+        }
+        if let Mode::Palette { .. } = state.mode() {
+            render_palette(f, state, f.area());
         }
         if state.show_help() {
             render_help(f, state, f.area());
@@ -1587,6 +1876,7 @@ mod driver {
             row("Esc", "back to list"),
             Line::from(""),
             sect("General"),
+            row(":", "command palette"),
             row("?", "toggle this help"),
             row("q", "quit"),
         ];
@@ -1972,10 +2262,11 @@ mod driver {
     fn render_footer(f: &mut Frame, state: &TuiState, area: Rect) {
         let help = match state.mode() {
             Mode::List => {
-                "j/k move  g/G top/bottom  Enter preview  / search  f filter  o sort  \
-                 n new  s status  S supersede  i edit-body  e $EDITOR  r refresh  ? help  q quit"
+                "j/k move  Enter preview  / search  : cmds  f filter  o sort  \
+                 n new  s status  S supersede  i edit-body  e $EDITOR  ? help  q quit"
             }
             Mode::Preview => "j/k scroll  g/G top/bottom  Enter/Esc back  ? help  q quit",
+            Mode::Palette { .. } => "type to filter  ↑/↓ move  Enter run  Esc cancel",
             Mode::Search { .. } => "type to search  Enter apply  Esc cancel",
             Mode::NewTitle { .. } => "type title  Enter create  Esc cancel",
             Mode::PickStatus { .. } => "j/k pick  Enter apply  Esc cancel",
@@ -2055,6 +2346,76 @@ mod driver {
             .highlight_symbol("▶ ");
         f.render_widget(Clear, popup);
         f.render_stateful_widget(list, popup, &mut list_state);
+    }
+
+    /// The `:` fuzzy command palette — a centered query line over the matching
+    /// commands, each with its key hint right-aligned. Modeled on Claude Code /
+    /// VS Code / telescope.
+    fn render_palette(f: &mut Frame, state: &TuiState, area: Rect) {
+        let Mode::Palette { input, index } = state.mode() else {
+            return;
+        };
+        let c = chrome(state.md_theme());
+        let matches = state.palette_matches();
+        let width = 54u16;
+        let inner_w = width.saturating_sub(2) as usize;
+
+        // Query line with a faux cursor.
+        let mut lines: Vec<Line> = Vec::with_capacity(matches.len() + 1);
+        lines.push(Line::from(vec![
+            Span::styled(
+                "› ",
+                Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(input.clone(), Style::default().fg(c.title)),
+            Span::styled("▏", Style::default().fg(c.accent)),
+        ]));
+
+        if matches.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  (no matching command)",
+                Style::default().fg(c.muted),
+            )));
+        }
+        for (row, &cmd_idx) in matches.iter().enumerate() {
+            let cmd = PALETTE[cmd_idx];
+            let selected = row == *index;
+            let marker = if selected { "▶ " } else { "  " };
+            let (title, hint) = (cmd.title(), cmd.hint());
+            // Right-align the key hint by padding to the inner width.
+            let used = marker.chars().count() + title.chars().count() + hint.chars().count();
+            let pad = inner_w.saturating_sub(used);
+            let title_style = if selected {
+                Style::default().fg(c.accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(c.title)
+            };
+            let line = Line::from(vec![
+                Span::styled(marker, title_style),
+                Span::styled(title, title_style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(hint, Style::default().fg(c.muted)),
+            ]);
+            lines.push(if selected {
+                line.style(Style::default().bg(c.selection_bg))
+            } else {
+                line
+            });
+        }
+
+        let body_rows = matches.len().max(1) as u16 + 1; // rows + query line
+        let height = (body_rows + 2).min(area.height); // + borders
+        let popup = centered(width, height, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(c.accent))
+            .title(Span::styled(
+                " Command palette ",
+                Style::default().fg(c.title).add_modifier(Modifier::BOLD),
+            ));
+        f.render_widget(Clear, popup);
+        f.render_widget(Paragraph::new(lines).block(block), popup);
     }
 
     fn centered(width: u16, height: u16, area: Rect) -> Rect {
@@ -2436,6 +2797,74 @@ mod tests {
         assert!(s.show_help());
         s.close_help();
         assert!(!s.show_help());
+    }
+
+    #[test]
+    fn fuzzy_rank_orders_matches_and_drops_misses() {
+        let items = ["new adr", "set status", "supersede", "search adrs"];
+        // Empty needle keeps every item in original order.
+        assert_eq!(fuzzy_rank("", &items), vec![0, 1, 2, 3]);
+        // A clear subsequence match ranks first; non-matches are dropped.
+        let ranked = fuzzy_rank("status", &items);
+        assert_eq!(ranked.first(), Some(&1));
+        assert!(!ranked.contains(&0)); // "new adr" has no "status" subsequence
+        // Case-insensitive.
+        assert_eq!(fuzzy_rank("SUPER", &items), vec![2]);
+    }
+
+    #[test]
+    fn palette_filters_moves_and_runs_commands() {
+        let mut s = TuiState::new();
+        s.begin_palette();
+        assert!(matches!(s.mode(), Mode::Palette { .. }));
+        // Unfiltered, every command is offered.
+        assert_eq!(s.palette_matches().len(), PALETTE.len());
+        // Typing narrows to the matching commands.
+        for c in "quit".chars() {
+            s.palette_push(c);
+        }
+        let m = s.palette_matches();
+        assert_eq!(m.first().map(|&i| PALETTE[i]), Some(PaletteCmd::Quit));
+        // Enter runs the selected command — Quit yields Action::Quit.
+        assert_eq!(s.palette_confirm(), Action::Quit);
+        assert!(matches!(s.mode(), Mode::List)); // palette always closes
+    }
+
+    #[test]
+    fn palette_command_can_switch_into_another_mode() {
+        let mut s = TuiState::new();
+        s.begin_palette();
+        for c in "search".chars() {
+            s.palette_push(c);
+        }
+        // The Search command transitions into Search input mode (no Action).
+        assert_eq!(s.palette_confirm(), Action::None);
+        assert!(matches!(s.mode(), Mode::Search { .. }));
+    }
+
+    #[test]
+    fn palette_move_wraps_over_matches() {
+        let mut s = TuiState::new();
+        s.begin_palette();
+        let n = s.palette_matches().len();
+        s.palette_move(-1); // wrap to the last match from the top
+        if let Mode::Palette { index, .. } = s.mode() {
+            assert_eq!(*index, n - 1);
+        } else {
+            panic!("expected palette mode");
+        }
+    }
+
+    #[test]
+    fn palette_empty_match_confirm_is_a_noop_close() {
+        let mut s = TuiState::new();
+        s.begin_palette();
+        for c in "zzzznotacommand".chars() {
+            s.palette_push(c);
+        }
+        assert!(s.palette_matches().is_empty());
+        assert_eq!(s.palette_confirm(), Action::None);
+        assert!(matches!(s.mode(), Mode::List));
     }
 
     #[test]

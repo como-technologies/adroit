@@ -13,7 +13,7 @@ description = "A snappy tool for managing Architecture Decision Records"
 # forge; `just lint-core` guards that layering in CI. `web` stays opt-in (it needs
 # the Vue SPA bundle — `just serve`).
 default = ["tui", "ai", "forge"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:the-other-tui-markdown"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:the-other-tui-markdown", "dep:nucleo-matcher"]
 # `web` is off by default because it needs the Vue build (`just web-build`).
 # It pulls in the async/web stack only when enabled; the core lib + CLI
 # (`--no-default-features`) and the TUI never depend on axum/tokio.
@@ -87,6 +87,9 @@ rig = { package = "rig-core", version = "0.38", optional = true }
 # tui feature only: renders GitHub-Flavored Markdown into a ratatui Text for the
 # preview pane. Targets ratatui-core 0.1 (the 0.30-era core) — no duplicate ratatui.
 the-other-tui-markdown = { version = "0.1.0", optional = true }
+# tui feature only: the fuzzy matcher behind the command palette + ADR picker
+# (same engine as helix/telescope). Pure scoring, no terminal/ratatui deps.
+nucleo-matcher = { version = "0.3", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"
