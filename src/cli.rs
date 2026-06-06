@@ -48,6 +48,7 @@ Authoring:
 Browse & inspect:
   list          List ADRs
   show          Show one ADR by its identifier
+  summarize     One-paragraph AI TL;DR of an ADR
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
   stats         Show repo statistics (status counts, ages, growth)
@@ -99,6 +100,7 @@ Authoring:
 Browse & inspect:
   list          List ADRs
   show          Show one ADR by its identifier
+  summarize     One-paragraph AI TL;DR of an ADR
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
   stats         Show repo statistics (status counts, ages, growth)
@@ -299,6 +301,18 @@ pub enum Command {
         /// ADR identifier: a number (`9`/`ADR-0009`) under the sequential scheme,
         /// or the slug / uuid prefix under the date / uuid schemes.
         id: String,
+    },
+    /// Summarize an ADR in one paragraph via AI (read-only).
+    ///
+    /// A plain-language TL;DR for a PR description, a chat notification, or a
+    /// decision-log entry. Prints to stdout unless `--out <PATH>`. Needs an AI
+    /// provider (`ai.enabled` with `--features ai`, or the `ADROIT_AI_FAKE` seam).
+    Summarize {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Write the summary to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Print an ADR's current status — lowercase and scriptable, so it feeds
     /// straight into `set-status` or a shell test. Use `show` for the full record.

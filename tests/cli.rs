@@ -2630,3 +2630,41 @@ fn lint_ai_without_a_provider_errors() {
         .failure()
         .stderr(predicate::str::contains("needs an AI provider"));
 }
+
+// ---------------------------------------------------------------------------
+// `adroit summarize` (one-paragraph AI TL;DR; read-only)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summarize_prints_the_tldr_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["summarize", "1"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "A crisp one-paragraph TL;DR of the decision.",
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("A crisp one-paragraph TL;DR"));
+    // Read-only.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn summarize_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["summarize", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs an AI provider"));
+}

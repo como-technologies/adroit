@@ -212,6 +212,32 @@ pub fn draft_lint(
     provider.complete(&build_lint_request(title, adr_body, corpus))
 }
 
+/// Build the completion request for `summarize`: a one-paragraph TL;DR of an ADR.
+pub fn build_summary_request(title: &str, adr_body: &str) -> CompletionRequest {
+    let system = "Summarize this Architecture Decision Record in ONE tight paragraph \
+        (about 2-4 sentences): what was decided and why, in plain language. No \
+        heading, no preamble, no bullet list — just the paragraph, in a neutral, \
+        factual voice suitable for a PR description or a decision-log entry."
+        .to_string();
+    let prompt = format!(
+        "ADR title: {title}\n\nADR body:\n{adr_body}\n\nWrite the one-paragraph summary now."
+    );
+    CompletionRequest {
+        system,
+        prompt,
+        max_tokens: 400,
+    }
+}
+
+/// Summarize an ADR via the provider. Read-only.
+pub fn draft_summary(
+    provider: &dyn AiProvider,
+    title: &str,
+    adr_body: &str,
+) -> Result<String, AiError> {
+    provider.complete(&build_summary_request(title, adr_body))
+}
+
 /// An offline provider for tests and the `ADROIT_AI_FAKE` seam: echoes a canned
 /// response so the interview flow runs end-to-end with no network.
 pub struct FakeProvider {
@@ -283,6 +309,14 @@ mod tests {
         };
         let plan = draft_plan(&fake, "T", "body", &[]).unwrap();
         assert_eq!(plan, "- [ ] Step one");
+    }
+
+    #[test]
+    fn summary_request_is_a_one_paragraph_instruction() {
+        let req = build_summary_request("Adopt rig", "## Decision Outcome\n\nUse rig.");
+        assert!(req.prompt.contains("Adopt rig"));
+        assert!(req.prompt.contains("Use rig."));
+        assert!(req.system.to_lowercase().contains("one"));
     }
 
     #[test]

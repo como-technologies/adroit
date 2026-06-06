@@ -576,6 +576,10 @@ provider for an ordered implementation checklist, prints it (or `--out`). Never
 modifies the ADR; bails (not degrades) when no provider is available, since a
 plan is inherently AI.
 
+**`summarize <ID>`** (`cmd_summarize`, `ai::build_summary_request`/`draft_summary`):
+a one-paragraph read-only TL;DR of an ADR (PR body / notify / decision log); prints
+to stdout or `--out`; bails with no provider.
+
 **`lint <ID>`** (`cmd_lint`, `src/lint.rs`): authoring-quality checks on one ADR,
 **distinct from `check`** (structural repo validity). `lint::lint(body)` is the
 deterministic core — leftover MADR placeholders, missing/empty

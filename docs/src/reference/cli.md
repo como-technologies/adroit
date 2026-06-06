@@ -137,6 +137,18 @@ move git records. Outside a git repository adroit falls back to the file's
 modification time, and the timeline is omitted. See
 [ADR Format](./adr-format.md#dates-come-from-git).
 
+### `adroit summarize <ID>`
+
+A one-paragraph, plain-language **AI TL;DR** of an ADR — for a PR description, a
+chat notification, or a decision-log entry. Read-only; prints to stdout unless
+`--out <PATH>`. Needs an AI provider (see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)).
+
+```sh
+adroit summarize 21
+adroit summarize 21 --out tldr.md
+```
+
 ### `adroit status <ID>`
 
 Print an ADR's current status — just the word, **lowercase** (`<ID>` resolved as

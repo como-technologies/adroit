@@ -218,6 +218,9 @@ fn main() -> Result<()> {
             cmd_list(&store, &cfg, status.as_deref(), forge_on, output)?;
         }
         Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?, output)?,
+        Some(Command::Summarize { id, out }) => {
+            cmd_summarize(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
+        }
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
         Some(Command::SetStatus {
             id,
@@ -1326,6 +1329,40 @@ fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
     );
     for e in &graph.edges {
         println!("  {} --{:?}--> {}", e.from, e.kind, e.to);
+    }
+    Ok(())
+}
+
+/// `adroit summarize <ID>`: a one-paragraph AI TL;DR of an ADR (read-only).
+/// Prints to stdout unless `--out`. Needs a provider.
+fn cmd_summarize(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    out: Option<&std::path::Path>,
+) -> Result<()> {
+    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
+        anyhow::bail!(
+            "`summarize` needs an AI provider — set `ai.enabled` in a `--features ai` build \
+             (or `ADROIT_AI_FAKE` for testing)"
+        );
+    };
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    eprintln!(
+        "Summarizing {} with {} …",
+        detail.summary.reference,
+        provider.id()
+    );
+    let summary = adroit::ai::draft_summary(provider.as_ref(), &detail.summary.title, &detail.body)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let summary = summary.trim();
+    match out {
+        Some(p) => {
+            std::fs::write(p, format!("{summary}\n"))?;
+            println!("Wrote summary to {}", p.display());
+        }
+        None => println!("{summary}"),
     }
     Ok(())
 }

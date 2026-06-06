@@ -81,6 +81,9 @@ never modifies the ADR.
 provider** and exit non-zero on findings, so `lint` is usable as an authoring gate
 in CI; `lint --ai` adds an advisory model review on top.
 
+`adroit summarize <ID>` prints a one-paragraph plain-language TL;DR of an ADR —
+handy for a PR description, a notification, or a decision-log entry (read-only).
+
 ### Enabling it
 
 The AI adapters live behind the `ai` Cargo feature (it brings rig + tokio; the
