@@ -514,10 +514,17 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
     use std::io::{BufRead, Write};
 
     let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
-        eprintln!(
-            "note: --interview needs an AI provider (set `ai.enabled` in a build with \
-             `--features ai`, or `ADROIT_AI_FAKE` for testing) — kept the plain template."
-        );
+        if cfg!(feature = "ai") {
+            eprintln!(
+                "warning: --interview needs `ai.enabled` + a key (config / `.env`) — \
+                 created the plain template instead."
+            );
+        } else {
+            eprintln!(
+                "warning: --interview needs the AI feature — rebuild with `just build-ai`, \
+                 then enable `ai` — created the plain template instead."
+            );
+        }
         return Ok(());
     };
 
@@ -1371,12 +1378,7 @@ fn corpus_docs(store: &Store, cfg: &Config) -> Result<Vec<adroit::similar::Doc>>
 /// synthesizes the answer with citations. Read-only; `-o json` emits
 /// `{answer, sources}`.
 fn cmd_ask(store: &Store, cfg: &Config, question: &str, output: OutputFormat) -> Result<()> {
-    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
-        anyhow::bail!(
-            "`ask` needs an AI provider — set `ai.enabled` in a `--features ai` build \
-             (or `ADROIT_AI_FAKE` for testing)"
-        );
-    };
+    let provider = require_provider(cfg, "ask")?;
     let mut docs = corpus_docs(store, cfg)?;
     if docs.is_empty() {
         anyhow::bail!("no ADRs to answer from");
@@ -1466,6 +1468,25 @@ fn cmd_related(
     Ok(())
 }
 
+/// Resolve an AI provider for `verb`, or a clear error that distinguishes "this
+/// binary wasn't built with the `ai` feature" from "AI isn't enabled / no key".
+fn require_provider(cfg: &Config, verb: &str) -> Result<Box<dyn adroit::ai::AiProvider>> {
+    if let Some(p) = adroit::ai_hook::open_provider(cfg) {
+        return Ok(p);
+    }
+    if cfg!(feature = "ai") {
+        anyhow::bail!(
+            "`{verb}` needs an AI provider: set `ai.enabled` (or `ADROIT_AI_ENABLED=true`) and \
+             `ADROIT_ANTHROPIC_KEY` in config / `.env`"
+        )
+    }
+    anyhow::bail!(
+        "`{verb}` needs the AI feature, which this binary was not built with — rebuild with \
+         `just build-ai` (`cargo build --features ai`), then enable it via `ai.enabled` / \
+         `ADROIT_AI_ENABLED`"
+    )
+}
+
 /// `adroit summarize <ID>`: a one-paragraph AI TL;DR of an ADR (read-only).
 /// Prints to stdout unless `--out`. Needs a provider.
 fn cmd_summarize(
@@ -1474,12 +1495,7 @@ fn cmd_summarize(
     r: &AdrRef,
     out: Option<&std::path::Path>,
 ) -> Result<()> {
-    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
-        anyhow::bail!(
-            "`summarize` needs an AI provider — set `ai.enabled` in a `--features ai` build \
-             (or `ADROIT_AI_FAKE` for testing)"
-        );
-    };
+    let provider = require_provider(cfg, "summarize")?;
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
     eprintln!(
@@ -1504,12 +1520,7 @@ fn cmd_summarize(
 /// ADR + corpus, asks the provider for an ordered checklist, and prints it (or
 /// writes `--out`). Read-only — the ADR is never modified.
 fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Path>) -> Result<()> {
-    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
-        anyhow::bail!(
-            "`plan` needs an AI provider — set `ai.enabled` in a `--features ai` build \
-             (or `ADROIT_AI_FAKE` for testing)"
-        );
-    };
+    let provider = require_provider(cfg, "plan")?;
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
     // Corpus context: the other ADRs' `reference — title` lines (exclude self).
@@ -1557,12 +1568,7 @@ fn cmd_lint(
     let mechanical = findings.len();
 
     if ai_review {
-        let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
-            anyhow::bail!(
-                "`lint --ai` needs an AI provider — set `ai.enabled` in a `--features ai` \
-                 build (or `ADROIT_AI_FAKE` for testing)"
-            );
-        };
+        let provider = require_provider(cfg, "lint --ai")?;
         let corpus: Vec<String> = query::summaries(store, &Filter::default())?
             .iter()
             .filter(|s| s.address != detail.summary.address)

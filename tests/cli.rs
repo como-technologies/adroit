@@ -2515,7 +2515,7 @@ fn new_interview_without_a_provider_keeps_the_plain_template() {
         .args(["new", "Some decision", "--interview", "--no-edit"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("needs an AI provider"));
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
     // The ADR still exists and is valid (the plain template).
     adroit(&dir).arg("check").assert().success();
 }
@@ -2553,7 +2553,7 @@ fn plan_without_a_provider_errors() {
         .args(["plan", "1"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("needs an AI provider"));
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
 }
 
 // ---------------------------------------------------------------------------
@@ -2628,7 +2628,7 @@ fn lint_ai_without_a_provider_errors() {
         .args(["lint", "1", "--ai"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("needs an AI provider"));
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
 }
 
 // ---------------------------------------------------------------------------
@@ -2666,7 +2666,7 @@ fn summarize_without_a_provider_errors() {
         .args(["summarize", "1"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("needs an AI provider"));
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
 }
 
 // ---------------------------------------------------------------------------
@@ -2791,7 +2791,7 @@ fn ask_without_a_provider_errors() {
         .args(["ask", "anything?"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("needs an AI provider"));
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
 }
 
 // ---------------------------------------------------------------------------

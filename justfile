@@ -34,6 +34,16 @@ lint-web:
 lint-ai:
     cargo clippy --features ai -- -D warnings
 
+# Build the binary WITH the AI feature (rig adapters). Needed for the live AI
+# verbs (`new --interview`, `plan`, `lint --ai`, `summarize`, `ask`); the default
+# `just build` omits it. Enable at runtime via `ai.enabled` / `ADROIT_AI_ENABLED`.
+build-ai:
+    cargo build --features ai
+
+# Run the AI-featured binary (e.g. `just run-ai summarize 1 --dir adr`).
+run-ai *ARGS:
+    cargo run --features ai -- {{ARGS}}
+
 # Run all tests
 test *ARGS:
     cargo test {{ARGS}}
