@@ -2740,3 +2740,56 @@ fn related_on_a_single_adr_is_empty() {
         .success()
         .stdout(predicate::str::contains("No unlinked related ADRs"));
 }
+
+// ---------------------------------------------------------------------------
+// `adroit ask` (mechanical retrieval + AI answer with citations)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ask_answers_with_retrieved_sources_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt PostgreSQL datastore", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Use Vue frontend", "--no-edit"])
+        .assert()
+        .success();
+    for f in adr_files(dir.path()) {
+        let name = f.file_name().unwrap().to_str().unwrap().to_string();
+        let extra = if name.contains("postgresql") {
+            "relational postgresql database storage acid durability"
+        } else {
+            "vue frontend browser dashboard interface"
+        };
+        let mut b = fs::read_to_string(&f).unwrap();
+        b.push_str(&format!("\n{extra}\n"));
+        fs::write(&f, b).unwrap();
+    }
+    let out = adroit(&dir)
+        .args(["ask", "Which database did we choose?", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "PostgreSQL, per the datastore ADR.")
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["answer"], "PostgreSQL, per the datastore ADR.");
+    // The database ADR is among the retrieved sources.
+    let sources = v["sources"].as_array().unwrap();
+    assert!(sources.iter().any(|s| s == "ADR-0001"));
+}
+
+#[test]
+fn ask_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["ask", "anything?"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs an AI provider"));
+}

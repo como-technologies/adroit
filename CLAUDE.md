@@ -589,12 +589,19 @@ it's CI-usable; `--ai` appends one advisory finding from `ai::draft_lint`. Exits
 non-zero on **mechanical** findings only (AI is advisory); `-o json` emits the
 findings.
 
-**`related <ID>` / `dedupe <ID>`** (`cmd_related`, `src/similar.rs`) are the
+**`related <ID>` / `dedupe <ID>`** (`cmd_related`, `src/similar.rs`) are
 retrieval verbs but **mechanical — NO AI/provider**: TF-IDF cosine over the corpus
 (title + body). `related` excludes ADRs already linked to the target (link
 candidates); `dedupe` includes them (duplicate-catching). Read-only; `-o json`.
-The semantic/embeddings upgrade (and `ask`) is future work — Anthropic has no
-embeddings API, so it needs a separate embedding-capable provider + a cache.
+
+**`ask "<q>"`** (`cmd_ask`, `ai::build_ask_request`/`draft_ask`) combines the two
+halves: **mechanical retrieval** (reuse `similar::rank` with the question as a
+transient target doc, via the shared `corpus_docs` helper) feeds the top ADR
+excerpts to the **provider**, which answers with citations. Human output = answer
+on stdout + `(sources: …)` on stderr; `-o json` = `{answer, sources}`. Bails with
+no provider. The **embeddings** upgrade to similarity/retrieval is future work —
+Anthropic has no embeddings API, so it needs a separate embedding-capable provider
++ a cache.
 
 **Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
 `model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by

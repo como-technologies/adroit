@@ -284,6 +284,20 @@ adroit dedupe 21 -o json     # overlaps as JSON, highest score first
 > Similarity is lexical for now (shared significant terms); a semantic
 > (embeddings) upgrade is future work.
 
+### `adroit ask "<question>"`
+
+Ask a natural-language question of the ADR corpus. Retrieval is **mechanical**
+(TF-IDF over your question picks the most relevant ADRs); the configured **AI
+provider** then synthesizes an answer, citing the ADRs it used. Read-only. The
+human view prints the answer to stdout and the sources to stderr; `-o json` emits
+`{ "answer": …, "sources": [refs] }`. Needs an AI provider (see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)).
+
+```sh
+adroit ask "Why did we pick Postgres over MySQL?"
+adroit ask "What did we decide about caching?" -o json
+```
+
 ### `adroit check`
 
 Validate the ADR repo and **exit non-zero if any error-severity problem is

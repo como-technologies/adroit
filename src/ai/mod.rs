@@ -238,6 +238,33 @@ pub fn draft_summary(
     provider.complete(&build_summary_request(title, adr_body))
 }
 
+/// Build the completion request for `ask`: answer a question grounded ONLY in the
+/// retrieved ADR excerpts, with citations.
+pub fn build_ask_request(question: &str, context: &str) -> CompletionRequest {
+    let system = "Answer the question using ONLY the provided ADR excerpts. Cite the \
+        ADRs you used by their reference (e.g. ADR-0006). If the excerpts don't \
+        contain the answer, say so plainly rather than guessing. Be concise."
+        .to_string();
+    let prompt = format!(
+        "Question: {question}\n\nRelevant ADR excerpts:\n{context}\n\nAnswer with citations."
+    );
+    CompletionRequest {
+        system,
+        prompt,
+        max_tokens: 800,
+    }
+}
+
+/// Answer a corpus question via the provider (the retrieval is done by the
+/// caller). Read-only.
+pub fn draft_ask(
+    provider: &dyn AiProvider,
+    question: &str,
+    context: &str,
+) -> Result<String, AiError> {
+    provider.complete(&build_ask_request(question, context))
+}
+
 /// An offline provider for tests and the `ADROIT_AI_FAKE` seam: echoes a canned
 /// response so the interview flow runs end-to-end with no network.
 pub struct FakeProvider {
@@ -317,6 +344,14 @@ mod tests {
         assert!(req.prompt.contains("Adopt rig"));
         assert!(req.prompt.contains("Use rig."));
         assert!(req.system.to_lowercase().contains("one"));
+    }
+
+    #[test]
+    fn ask_request_grounds_on_context_and_demands_citations() {
+        let req = build_ask_request("Why Postgres?", "### ADR-0001 — Use Postgres\nrelational.");
+        assert!(req.prompt.contains("Why Postgres?"));
+        assert!(req.prompt.contains("ADR-0001"));
+        assert!(req.system.to_lowercase().contains("cite"));
     }
 
     #[test]

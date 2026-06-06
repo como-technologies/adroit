@@ -327,6 +327,7 @@ fn main() -> Result<()> {
         Some(Command::Dedupe { id }) => {
             cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, true, output)?
         }
+        Some(Command::Ask { question }) => cmd_ask(&store, &cfg, &question, output)?,
         Some(Command::Plan { id, out }) => {
             cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
         }
@@ -1343,20 +1344,9 @@ fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
 /// corpus (no AI). `related` excludes ADRs already linked to the target; `dedupe`
 /// shows all overlaps (framed for catching duplicates). Read-only; `-o json`
 /// emits the ranked matches.
-fn cmd_related(
-    store: &Store,
-    cfg: &Config,
-    r: &AdrRef,
-    dedupe: bool,
-    output: OutputFormat,
-) -> Result<()> {
-    use std::collections::HashSet;
-
-    let target_path = store.find_path_by_ref(r)?;
-    let target = query::detail_at(store, &target_path)?;
-    let linked: HashSet<&str> = target.related.iter().map(|l| l.address.as_str()).collect();
-
-    // Corpus: address (id) + reference + title + (title+body) text.
+/// Assemble the corpus as similarity docs: each ADR's address (id) + reference +
+/// title + (title+body) text. Shared by `related` / `dedupe` / `ask`.
+fn corpus_docs(store: &Store, cfg: &Config) -> Result<Vec<adroit::similar::Doc>> {
     let summaries = query::summaries(store, &Filter::default())?;
     let mut docs = Vec::with_capacity(summaries.len());
     for s in &summaries {
@@ -1373,6 +1363,78 @@ fn cmd_related(
             text: format!("{} {}", s.title, body),
         });
     }
+    Ok(docs)
+}
+
+/// `adroit ask "<question>"`: answer a question grounded in the ADR corpus.
+/// Retrieval is mechanical (TF-IDF over the question); the configured AI provider
+/// synthesizes the answer with citations. Read-only; `-o json` emits
+/// `{answer, sources}`.
+fn cmd_ask(store: &Store, cfg: &Config, question: &str, output: OutputFormat) -> Result<()> {
+    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
+        anyhow::bail!(
+            "`ask` needs an AI provider — set `ai.enabled` in a `--features ai` build \
+             (or `ADROIT_AI_FAKE` for testing)"
+        );
+    };
+    let mut docs = corpus_docs(store, cfg)?;
+    if docs.is_empty() {
+        anyhow::bail!("no ADRs to answer from");
+    }
+    // Rank the corpus against the question (added as a transient target doc).
+    docs.push(adroit::similar::Doc {
+        id: "__query__".to_string(),
+        reference: String::new(),
+        title: String::new(),
+        text: question.to_string(),
+    });
+    let top: Vec<adroit::similar::Match> = adroit::similar::rank(&docs, "__query__")
+        .into_iter()
+        .take(5)
+        .collect();
+
+    let mut context = String::new();
+    for m in &top {
+        if let Some(d) = docs.iter().find(|d| d.id == m.id) {
+            let excerpt: String = d.text.chars().take(800).collect();
+            context.push_str(&format!("### {} — {}\n{excerpt}\n\n", d.reference, d.title));
+        }
+    }
+    if context.is_empty() {
+        context.push_str("(no closely matching ADRs)");
+    }
+
+    eprintln!("Asking {} over {} ADR(s) …", provider.id(), top.len());
+    let answer = adroit::ai::draft_ask(provider.as_ref(), question, &context)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let answer = answer.trim();
+
+    if output == OutputFormat::Json {
+        let sources: Vec<&str> = top.iter().map(|m| m.reference.as_str()).collect();
+        return print_json(&serde_json::json!({ "answer": answer, "sources": sources }));
+    }
+    println!("{answer}");
+    if !top.is_empty() {
+        let refs: Vec<&str> = top.iter().map(|m| m.reference.as_str()).collect();
+        eprintln!("\n(sources: {})", refs.join(", "));
+    }
+    Ok(())
+}
+
+fn cmd_related(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    dedupe: bool,
+    output: OutputFormat,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let target_path = store.find_path_by_ref(r)?;
+    let target = query::detail_at(store, &target_path)?;
+    let linked: HashSet<&str> = target.related.iter().map(|l| l.address.as_str()).collect();
+
+    let docs = corpus_docs(store, cfg)?;
 
     let shown: Vec<adroit::similar::Match> = adroit::similar::rank(&docs, &target.summary.address)
         .into_iter()

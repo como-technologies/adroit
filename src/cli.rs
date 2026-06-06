@@ -55,6 +55,7 @@ Browse & inspect:
   graph         Print the ADR relationship graph
   related       Find similar ADRs to link (mechanical)
   dedupe        Find existing ADRs that overlap a new one
+  ask           Ask the corpus a question (AI answer + citations)
   serve         Serve the read-only web dashboard
 
 Repo health:
@@ -109,6 +110,7 @@ Browse & inspect:
   graph         Print the ADR relationship graph
   related       Find similar ADRs to link (mechanical)
   dedupe        Find existing ADRs that overlap a new one
+  ask           Ask the corpus a question (AI answer + citations)
   serve         Serve the read-only web dashboard
 
 Repo health:
@@ -467,6 +469,15 @@ pub enum Command {
     Dedupe {
         /// ADR identifier (number, slug, or uuid prefix — see `show`).
         id: String,
+    },
+    /// Ask a question of the ADR corpus and get an AI answer with citations.
+    ///
+    /// Retrieval is mechanical (TF-IDF over your question); the configured AI
+    /// provider synthesizes the answer, citing the ADRs it used. Read-only;
+    /// `-o json` emits `{answer, sources}`. Needs an AI provider.
+    Ask {
+        /// The natural-language question (quote it).
+        question: String,
     },
     /// Rewrite cross-ADR relative links to each ADR's current location.
     ///

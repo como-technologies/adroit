@@ -84,6 +84,11 @@ in CI; `lint --ai` adds an advisory model review on top.
 `adroit summarize <ID>` prints a one-paragraph plain-language TL;DR of an ADR —
 handy for a PR description, a notification, or a decision-log entry (read-only).
 
+`adroit ask "<question>"` answers a question about the corpus: it retrieves the
+most relevant ADRs **mechanically** (no embeddings) and the provider synthesizes
+an answer with citations. `adroit related` / `adroit dedupe` are the fully
+mechanical similarity verbs and need **no provider** at all.
+
 ### Enabling it
 
 The AI adapters live behind the `ai` Cargo feature (it brings rig + tokio; the
