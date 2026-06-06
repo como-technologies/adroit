@@ -2809,8 +2809,8 @@ fn h_and_help_are_identical_and_concise_help_all_is_full() {
 
     let concise = String::from_utf8(h.stdout).unwrap();
     assert!(
-        concise.contains("Authoring:"),
-        "concise help lists commands"
+        concise.contains("Author a decision:"),
+        "concise help lists commands grouped by workflow stage"
     );
     assert!(
         !concise.contains("--relink-scope"),

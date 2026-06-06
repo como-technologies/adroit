@@ -48,38 +48,38 @@ pub enum OutputFormat {
 {about-with-newline}
 {usage-heading} {usage}
 
-Authoring:
-  new           Create a new ADR
-  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
-  set-status    Change an ADR's status (moves the file in by_status)
-  supersede     Mark an older ADR superseded by a newer one
-  set-review    Set or clear an ADR's review deadline
-  review        Generate a review-kickoff doc for an ADR
+Author a decision:
+  new           Create a new ADR (--interview for an AI Q&A draft)
+  draft         Fill in an existing ADR via the AI interview
   plan          Draft an AI implementation plan for an ADR
-  draft         Run the AI interview on an existing ADR
+  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
+  lint          Check one ADR's authoring quality (--ai for a model review)
+  dedupe        Find existing ADRs that overlap a new one
+  related       Find similar ADRs to link (mechanical)
   link          Add or remove a typed link between two ADRs
 
-Browse & inspect:
+Review & decide:
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  summarize     One-paragraph AI TL;DR of an ADR
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+
+Explore the corpus:
   list          List ADRs
   show          Show one ADR by its identifier
-  summarize     One-paragraph AI TL;DR of an ADR
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
   stats         Show repo statistics (status counts, ages, growth)
   graph         Print the ADR relationship graph
-  related       Find similar ADRs to link (mechanical)
-  dedupe        Find existing ADRs that overlap a new one
   ask           Ask the corpus a question (AI answer + citations)
   serve         Serve the read-only web dashboard
 
-Repo health:
+Maintain the repo:
   check         Validate the repo (exits non-zero on problems)
-  lint          Check one ADR's authoring quality (--ai for a model review)
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
-
-Publishing:
   index         Regenerate the ADR section of SUMMARY.md
   publish       Export the accepted ADR set to a directory
 
@@ -104,38 +104,38 @@ Options:
 {about-with-newline}
 {usage-heading} {usage}
 
-Authoring:
-  new           Create a new ADR
-  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
-  set-status    Change an ADR's status (moves the file in by_status)
-  supersede     Mark an older ADR superseded by a newer one
-  set-review    Set or clear an ADR's review deadline
-  review        Generate a review-kickoff doc for an ADR
+Author a decision:
+  new           Create a new ADR (--interview for an AI Q&A draft)
+  draft         Fill in an existing ADR via the AI interview
   plan          Draft an AI implementation plan for an ADR
-  draft         Run the AI interview on an existing ADR
+  edit          Open an ADR in your editor ($EDITOR / $VISUAL)
+  lint          Check one ADR's authoring quality (--ai for a model review)
+  dedupe        Find existing ADRs that overlap a new one
+  related       Find similar ADRs to link (mechanical)
   link          Add or remove a typed link between two ADRs
 
-Browse & inspect:
+Review & decide:
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  summarize     One-paragraph AI TL;DR of an ADR
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+
+Explore the corpus:
   list          List ADRs
   show          Show one ADR by its identifier
-  summarize     One-paragraph AI TL;DR of an ADR
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
   stats         Show repo statistics (status counts, ages, growth)
   graph         Print the ADR relationship graph
-  related       Find similar ADRs to link (mechanical)
-  dedupe        Find existing ADRs that overlap a new one
   ask           Ask the corpus a question (AI answer + citations)
   serve         Serve the read-only web dashboard
 
-Repo health:
+Maintain the repo:
   check         Validate the repo (exits non-zero on problems)
-  lint          Check one ADR's authoring quality (--ai for a model review)
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
-
-Publishing:
   index         Regenerate the ADR section of SUMMARY.md
   publish       Export the accepted ADR set to a directory
 

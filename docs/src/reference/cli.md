@@ -9,12 +9,13 @@ selection** in each `--help`, and accepted before *or* after the subcommand
 (`adroit --dir X list` and `adroit list --dir X` are equivalent).
 
 The on-disk **shape** flags below (`--format`, `--layout`, `--naming`,
-`--date-source`, `--relink-scope`) are **top-level only** — pass them *before*
-the subcommand (`adroit --format frontmatter migrate`) or, more usually, set them
-once via `config` / `.env` (the `ADROIT_*` env var binds everywhere regardless of
-position). They're listed on `adroit --help-all` (the full reference) but kept
-**off** the concise `-h` / `--help` so the default help stays a command list —
-run `adroit --help-all` to see them.
+`--date-source`, `--relink-scope`) are also **global** — accepted before *or*
+after the subcommand (`adroit --format frontmatter migrate` and `adroit migrate
+--format frontmatter` are equivalent) — but **hidden** from the concise `-h` /
+`--help` so the default help stays a clean command list. They surface on `adroit
+--help-all` (the full reference). Most teams set them once via `config` / `.env`
+(the `ADROIT_*` env var binds everywhere regardless of position) rather than
+passing them per-command.
 
 | Flag | Default | Description |
 |---|---|---|
