@@ -321,6 +321,12 @@ fn main() -> Result<()> {
         }
         Some(Command::Stats) => cmd_stats(&store, output)?,
         Some(Command::Graph) => cmd_graph(&store, output)?,
+        Some(Command::Related { id }) => {
+            cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, false, output)?
+        }
+        Some(Command::Dedupe { id }) => {
+            cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, true, output)?
+        }
         Some(Command::Plan { id, out }) => {
             cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
         }
@@ -1329,6 +1335,71 @@ fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
     );
     for e in &graph.edges {
         println!("  {} --{:?}--> {}", e.from, e.kind, e.to);
+    }
+    Ok(())
+}
+
+/// `adroit related <ID>` / `dedupe <ID>`: mechanical TF-IDF similarity over the
+/// corpus (no AI). `related` excludes ADRs already linked to the target; `dedupe`
+/// shows all overlaps (framed for catching duplicates). Read-only; `-o json`
+/// emits the ranked matches.
+fn cmd_related(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    dedupe: bool,
+    output: OutputFormat,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let target_path = store.find_path_by_ref(r)?;
+    let target = query::detail_at(store, &target_path)?;
+    let linked: HashSet<&str> = target.related.iter().map(|l| l.address.as_str()).collect();
+
+    // Corpus: address (id) + reference + title + (title+body) text.
+    let summaries = query::summaries(store, &Filter::default())?;
+    let mut docs = Vec::with_capacity(summaries.len());
+    for s in &summaries {
+        let body = resolve_ref(cfg, &s.address)
+            .ok()
+            .and_then(|rr| store.find_path_by_ref(&rr).ok())
+            .and_then(|p| store.read(&p).ok())
+            .map(|a| a.body)
+            .unwrap_or_default();
+        docs.push(adroit::similar::Doc {
+            id: s.address.clone(),
+            reference: s.reference.clone(),
+            title: s.title.clone(),
+            text: format!("{} {}", s.title, body),
+        });
+    }
+
+    let shown: Vec<adroit::similar::Match> = adroit::similar::rank(&docs, &target.summary.address)
+        .into_iter()
+        .filter(|m| dedupe || !linked.contains(m.id.as_str()))
+        .take(3)
+        .collect();
+
+    if output == OutputFormat::Json {
+        return print_json(&shown);
+    }
+    if shown.is_empty() {
+        let what = if dedupe {
+            "overlapping"
+        } else {
+            "unlinked related"
+        };
+        println!("No {what} ADRs found for {}", target.summary.reference);
+        return Ok(());
+    }
+    let header = if dedupe {
+        "Possible overlaps (already decided?)"
+    } else {
+        "Related — consider linking"
+    };
+    println!("{header} for {}:", target.summary.reference);
+    for m in &shown {
+        println!("  {:.2}  {} — {}", m.score, m.reference, m.title);
     }
     Ok(())
 }

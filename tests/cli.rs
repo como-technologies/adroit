@@ -2668,3 +2668,75 @@ fn summarize_without_a_provider_errors() {
         .failure()
         .stderr(predicate::str::contains("needs an AI provider"));
 }
+
+// ---------------------------------------------------------------------------
+// `adroit related` / `dedupe` (mechanical TF-IDF similarity; read-only)
+// ---------------------------------------------------------------------------
+
+/// Three ADRs (two about databases, one about the frontend) with topical bodies.
+fn three_topical_adrs(dir: &TempDir) {
+    for t in [
+        "Adopt PostgreSQL datastore",
+        "Use Redis cache database",
+        "Pick Vue frontend UI",
+    ] {
+        adroit(dir).args(["new", t, "--no-edit"]).assert().success();
+    }
+    for f in adr_files(dir.path()) {
+        let name = f.file_name().unwrap().to_str().unwrap().to_string();
+        let extra = if name.contains("postgresql") {
+            "relational postgresql database storage sql persistence datastore"
+        } else if name.contains("redis") {
+            "redis caching database in-memory storage lookups persistence"
+        } else {
+            "vue react frontend browser dashboard interface components"
+        };
+        let mut body = fs::read_to_string(&f).unwrap();
+        body.push_str(&format!("\n{extra}\n"));
+        fs::write(&f, body).unwrap();
+    }
+}
+
+#[test]
+fn related_ranks_the_topically_similar_adr_first() {
+    let dir = TempDir::new().unwrap();
+    three_topical_adrs(&dir);
+    let out = adroit(&dir)
+        .args(["related", "1", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let arr = v.as_array().unwrap();
+    assert!(!arr.is_empty());
+    // The other database ADR (ADR-0002) outranks the frontend one (ADR-0003).
+    assert_eq!(v[0]["reference"], "ADR-0002");
+    assert!(v[0]["score"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn dedupe_emits_ranked_json() {
+    let dir = TempDir::new().unwrap();
+    three_topical_adrs(&dir);
+    let out = adroit(&dir)
+        .args(["dedupe", "1", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(v[0]["title"].is_string() && v[0]["score"].is_number());
+}
+
+#[test]
+fn related_on_a_single_adr_is_empty() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Lonely decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["related", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No unlinked related ADRs"));
+}

@@ -21,6 +21,7 @@ pub mod lint;
 pub mod naming;
 pub mod publish;
 pub mod query;
+pub mod similar;
 pub mod store;
 pub mod template;
 #[cfg(feature = "tui")]

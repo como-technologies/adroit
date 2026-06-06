@@ -589,6 +589,13 @@ it's CI-usable; `--ai` appends one advisory finding from `ai::draft_lint`. Exits
 non-zero on **mechanical** findings only (AI is advisory); `-o json` emits the
 findings.
 
+**`related <ID>` / `dedupe <ID>`** (`cmd_related`, `src/similar.rs`) are the
+retrieval verbs but **mechanical — NO AI/provider**: TF-IDF cosine over the corpus
+(title + body). `related` excludes ADRs already linked to the target (link
+candidates); `dedupe` includes them (duplicate-catching). Read-only; `-o json`.
+The semantic/embeddings upgrade (and `ask`) is future work — Anthropic has no
+embeddings API, so it needs a separate embedding-capable provider + a cache.
+
 **Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
 `model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by
 default); the key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY`

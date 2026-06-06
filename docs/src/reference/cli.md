@@ -267,6 +267,23 @@ adroit graph
 adroit graph -o json
 ```
 
+### `adroit related <ID>` / `adroit dedupe <ID>`
+
+Find ADRs textually similar to a given one — **mechanical** (TF-IDF cosine over
+titles + bodies), no AI and no provider. `related` surfaces similar ADRs the
+target **isn't already linked to** (candidates to `link`); `dedupe` includes the
+linked ones and is framed for catching "did we already decide this?" before a new
+ADR re-litigates a decision. Read-only; `-o json` emits the ranked matches
+(`reference`, `title`, `score`).
+
+```sh
+adroit related 21            # similar ADRs you might want to link
+adroit dedupe 21 -o json     # overlaps as JSON, highest score first
+```
+
+> Similarity is lexical for now (shared significant terms); a semantic
+> (embeddings) upgrade is future work.
+
 ### `adroit check`
 
 Validate the ADR repo and **exit non-zero if any error-severity problem is

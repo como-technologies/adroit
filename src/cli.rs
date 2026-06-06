@@ -53,6 +53,8 @@ Browse & inspect:
   search        Search ADRs by title and body
   stats         Show repo statistics (status counts, ages, growth)
   graph         Print the ADR relationship graph
+  related       Find similar ADRs to link (mechanical)
+  dedupe        Find existing ADRs that overlap a new one
   serve         Serve the read-only web dashboard
 
 Repo health:
@@ -105,6 +107,8 @@ Browse & inspect:
   search        Search ADRs by title and body
   stats         Show repo statistics (status counts, ages, growth)
   graph         Print the ADR relationship graph
+  related       Find similar ADRs to link (mechanical)
+  dedupe        Find existing ADRs that overlap a new one
   serve         Serve the read-only web dashboard
 
 Repo health:
@@ -448,6 +452,22 @@ pub enum Command {
     /// Most useful with `-o json` (`view::Graph`, nodes + edges); the human view
     /// summarizes counts.
     Graph,
+    /// Find ADRs textually similar to this one that it isn't already linked to.
+    ///
+    /// Mechanical (TF-IDF over titles + bodies) — no AI. Surfaces ADRs you may
+    /// want to `link`. `-o json` emits the ranked matches.
+    Related {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+    },
+    /// Surface existing ADRs that overlap a (new) one — "did we already decide this?"
+    ///
+    /// Like `related`, but includes already-linked ADRs and is framed for
+    /// catching duplicates before a decision is re-litigated. Mechanical; no AI.
+    Dedupe {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+    },
     /// Rewrite cross-ADR relative links to each ADR's current location.
     ///
     /// Fixes links left stale by status-change file moves (run by hand or in
