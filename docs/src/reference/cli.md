@@ -413,6 +413,23 @@ adroit review 1 --out review-kickoff.md      # write to a file
 | `--quorum <N>` | config `review_quorum` (3) | Number of approvals required |
 | `--out <PATH>` | — | Write the doc to a file instead of stdout (long-only; `-o`/`--output` is the global result-format selector) |
 
+### `adroit plan <ID>`
+
+Draft an **AI implementation plan** for an (accepted) ADR: reads the ADR + the
+existing corpus and asks the configured AI provider for an ordered, actionable
+checklist (steps, components touched, testing, rollout, risks). **Read-only** —
+it never modifies the ADR. Prints to stdout unless `--out <PATH>` is given. Needs
+an AI provider — see [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring).
+
+```sh
+adroit plan 21                       # print the plan
+adroit plan 21 --out plan-0021.md    # write it to a file
+```
+
+| Flag | Description |
+|---|---|
+| `--out <PATH>` | Write the plan to a file instead of stdout |
+
 ### `adroit edit <ID>`
 
 Open an ADR in your editor (`<ID>` resolved as in [`show`](#adroit-show-id)).

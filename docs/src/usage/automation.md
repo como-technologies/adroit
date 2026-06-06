@@ -71,6 +71,11 @@ review and edit before committing.
 mechanical in the write path. If no provider is available, `--interview` degrades
 to the plain template (the ADR is still created).
 
+`adroit plan <ID>` is the read-only companion: it reads an (accepted) ADR plus
+the corpus and asks the provider for an ordered implementation checklist (steps,
+components touched, testing, rollout, risks). It prints to stdout (or `--out`) and
+never modifies the ADR.
+
 ### Enabling it
 
 The AI adapters live behind the `ai` Cargo feature (it brings rig + tokio; the

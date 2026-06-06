@@ -570,6 +570,12 @@ the prose with the marked draft, written through `Store::set_body_ref`. AI only
 ever writes prose — identity/status/dates/links stay mechanical. Degrades to the
 plain template when no provider is available, so the ADR is always created.
 
+**`plan <ID>`** (`cmd_plan`, `ai::build_plan_request`/`draft_plan`): the
+**read-only** companion — reads an ADR (`query::detail_at`) + corpus, asks the
+provider for an ordered implementation checklist, prints it (or `--out`). Never
+modifies the ADR; bails (not degrades) when no provider is available, since a
+plan is inherently AI.
+
 **Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
 `model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by
 default); the key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY`

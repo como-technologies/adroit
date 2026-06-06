@@ -2519,3 +2519,39 @@ fn new_interview_without_a_provider_keeps_the_plain_template() {
     // The ADR still exists and is valid (the plain template).
     adroit(&dir).arg("check").assert().success();
 }
+
+// ---------------------------------------------------------------------------
+// `adroit plan` (AI implementation plan; read-only; FakeProvider seam)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plan_generates_an_implementation_plan_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["plan", "1"])
+        .env("ADROIT_AI_FAKE", "## Implementation Plan\n\n- [ ] Step one")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Implementation Plan"))
+        .stdout(predicate::str::contains("Step one"));
+    // Read-only: the ADR is untouched and the repo stays valid.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn plan_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["plan", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("needs an AI provider"));
+}

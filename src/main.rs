@@ -315,6 +315,9 @@ fn main() -> Result<()> {
         }
         Some(Command::Stats) => cmd_stats(&store, output)?,
         Some(Command::Graph) => cmd_graph(&store, output)?,
+        Some(Command::Plan { id, out }) => {
+            cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
+        }
         Some(Command::Relink {
             dry_run,
             #[cfg(feature = "forge")]
@@ -1320,6 +1323,46 @@ fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
     );
     for e in &graph.edges {
         println!("  {} --{:?}--> {}", e.from, e.kind, e.to);
+    }
+    Ok(())
+}
+
+/// `adroit plan <ID>`: an AI implementation plan for an (accepted) ADR. Reads the
+/// ADR + corpus, asks the provider for an ordered checklist, and prints it (or
+/// writes `--out`). Read-only — the ADR is never modified.
+fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Path>) -> Result<()> {
+    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
+        anyhow::bail!(
+            "`plan` needs an AI provider — set `ai.enabled` in a `--features ai` build \
+             (or `ADROIT_AI_FAKE` for testing)"
+        );
+    };
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    // Corpus context: the other ADRs' `reference — title` lines (exclude self).
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .filter(|s| s.address != detail.summary.address)
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+    eprintln!(
+        "Planning {} with {} …",
+        detail.summary.reference,
+        provider.id()
+    );
+    let plan = adroit::ai::draft_plan(
+        provider.as_ref(),
+        &detail.summary.title,
+        &detail.body,
+        &corpus,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    match out {
+        Some(p) => {
+            std::fs::write(p, &plan)?;
+            println!("Wrote implementation plan to {}", p.display());
+        }
+        None => println!("{plan}"),
     }
     Ok(())
 }

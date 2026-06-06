@@ -42,6 +42,7 @@ Authoring:
   supersede     Mark an older ADR superseded by a newer one
   set-review    Set or clear an ADR's review deadline
   review        Generate a review-kickoff doc for an ADR
+  plan          Draft an AI implementation plan for an ADR
   link          Add or remove a typed link between two ADRs
 
 Browse & inspect:
@@ -91,6 +92,7 @@ Authoring:
   supersede     Mark an older ADR superseded by a newer one
   set-review    Set or clear an ADR's review deadline
   review        Generate a review-kickoff doc for an ADR
+  plan          Draft an AI implementation plan for an ADR
   link          Add or remove a typed link between two ADRs
 
 Browse & inspect:
@@ -563,6 +565,19 @@ pub enum Command {
         id: String,
     },
     /// Generate a review-kickoff doc for an ADR (prints to stdout by default).
+    /// Generate an AI implementation plan for an (accepted) ADR.
+    ///
+    /// Reads the ADR + corpus and asks the configured AI provider for an ordered,
+    /// actionable implementation checklist. Read-only — it never changes the ADR.
+    /// Prints to stdout unless `--out <PATH>` is given. Needs an AI provider
+    /// (`ai.enabled` with a `--features ai` build, or the `ADROIT_AI_FAKE` seam).
+    Plan {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Write the plan to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     Review {
         /// ADR number to generate a review kickoff for.
         number: u32,

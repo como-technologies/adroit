@@ -139,6 +139,43 @@ pub fn draft_body(
     Ok(format!("{AI_MARKER}\n\n{}\n", body.trim()))
 }
 
+/// Build the completion request for `plan`: a concrete implementation plan for
+/// an (accepted) ADR, grounded in its body + the corpus.
+pub fn build_plan_request(title: &str, adr_body: &str, corpus: &[String]) -> CompletionRequest {
+    let corpus_block = if corpus.is_empty() {
+        "(no other ADRs)".to_string()
+    } else {
+        corpus.join("\n")
+    };
+    let system = "You are a senior engineer turning an accepted Architecture \
+        Decision Record into a concrete implementation plan. Produce an ordered, \
+        actionable markdown checklist: the steps to implement the decision, the \
+        components/files likely touched, testing, rollout/migration, and the risks \
+        to watch. Be specific and concise, reference the decision, and don't \
+        restate the whole ADR. Output markdown only."
+        .to_string();
+    let prompt = format!(
+        "ADR title: {title}\n\nADR body:\n{adr_body}\n\nOther ADRs (for context):\n\
+         {corpus_block}\n\nWrite the implementation plan now."
+    );
+    CompletionRequest {
+        system,
+        prompt,
+        max_tokens: 1800,
+    }
+}
+
+/// Draft an implementation plan via the provider. Read-only — the ADR is input,
+/// never modified.
+pub fn draft_plan(
+    provider: &dyn AiProvider,
+    title: &str,
+    adr_body: &str,
+    corpus: &[String],
+) -> Result<String, AiError> {
+    provider.complete(&build_plan_request(title, adr_body, corpus))
+}
+
 /// An offline provider for tests and the `ADROIT_AI_FAKE` seam: echoes a canned
 /// response so the interview flow runs end-to-end with no network.
 pub struct FakeProvider {
@@ -188,6 +225,28 @@ mod tests {
     fn empty_corpus_is_labeled_not_blank() {
         let req = build_request(&sample(), &[]);
         assert!(req.prompt.contains("(no existing ADRs yet)"));
+    }
+
+    #[test]
+    fn plan_request_includes_the_adr_body_and_corpus() {
+        let req = build_plan_request(
+            "Adopt feature flags",
+            "## Decision Outcome\n\nUse LaunchDarkly.",
+            &["ADR-0002 — Use Postgres".to_string()],
+        );
+        assert!(req.prompt.contains("Adopt feature flags"));
+        assert!(req.prompt.contains("Use LaunchDarkly."));
+        assert!(req.prompt.contains("ADR-0002 — Use Postgres"));
+        assert!(req.system.contains("implementation plan"));
+    }
+
+    #[test]
+    fn draft_plan_returns_provider_output_unwrapped() {
+        let fake = FakeProvider {
+            canned: "- [ ] Step one".into(),
+        };
+        let plan = draft_plan(&fake, "T", "body", &[]).unwrap();
+        assert_eq!(plan, "- [ ] Step one");
     }
 
     #[test]
