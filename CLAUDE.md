@@ -121,8 +121,16 @@ Error-severity problem (the CI gate). The destination flags on `publish` and
 `stats` + `graph` are thin CLI verbs over `query::stats`/`query::graph` (added to
 both `help_template`s — the `commands_are_all_grouped` guard). Note the five
 on-disk *shape* globals (`--format/--layout/--naming/--date-source/--relink-scope`)
-are now **top-level-only** (env still binds) so each subcommand's `--help` stays
-terse; only `--dir` stays `global`.
+are **top-level-only** (env still binds); only `--dir` stays `global`.
+
+**Help model.** `-h` and `--help` show the **same concise** help (command list +
+`--dir`/`--output`); `--help-all` shows everything. Done with the canonical clap
+recipe: `disable_help_flag = true` on the root, then custom **global** `help`
+(`-h`/`--help`, `ArgAction::HelpShort`) + `help_all` (`--help-all`,
+`ArgAction::HelpLong`) flags — `disable_help_flag` propagates to subcommands, so
+the help flags are `global = true` to re-provide `-h`/`--help`/`--help-all`
+everywhere. The repo-shape + command-default options carry `hide_short_help = true`
+so they surface only under `--help-all`. (Do not re-add a built-in help flag.)
 
 **Repo validation is shared here too.** `query::check` runs the five `adroit
 check` rules (status/dir mismatch, duplicate identifiers, unparseable files,

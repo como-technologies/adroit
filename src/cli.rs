@@ -28,7 +28,18 @@ pub enum OutputFormat {
 // a "Forge integration" section; the no-forge build omits it (those commands are
 // `#[cfg]`-gated away). The `commands_are_all_grouped` test guards against drift
 // in whichever build runs it.
-#[command(name = "adroit", version, about)]
+// `-h` and `--help` show the SAME concise help (command list + the everyday
+// options); `--help-all` shows every option in full. Implemented with the
+// canonical clap recipe (disable the built-in flag, then HelpShort/HelpLong
+// custom flags); the repo-shape options carry `hide_short_help` so they appear
+// only under `--help-all`.
+#[command(
+    name = "adroit",
+    version,
+    about,
+    disable_help_flag = true,
+    after_help = "Run `adroit --help-all` to see every option, or `adroit <command> --help` for one command."
+)]
 #[cfg_attr(
     feature = "forge",
     command(help_template = "\
@@ -158,6 +169,7 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
+        hide_short_help = true,
         env = "ADROIT_FORMAT",
         help_heading = "Repo selection"
     )]
@@ -169,6 +181,7 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
+        hide_short_help = true,
         env = "ADROIT_LAYOUT",
         help_heading = "Repo selection"
     )]
@@ -181,6 +194,7 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
+        hide_short_help = true,
         env = "ADROIT_NAMING",
         help_heading = "Repo selection"
     )]
@@ -194,6 +208,7 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
+        hide_short_help = true,
         env = "ADROIT_DATE_SOURCE",
         help_heading = "Repo selection"
     )]
@@ -207,6 +222,7 @@ pub struct Cli {
     #[arg(
         long,
         value_enum,
+        hide_short_help = true,
         env = "ADROIT_RELINK_SCOPE",
         help_heading = "Repo selection"
     )]
@@ -221,14 +237,14 @@ pub struct Cli {
     ///
     /// Only the TUI (bare `adroit`) and `serve` consult it. Also settable via
     /// `ADROIT_THEME`.
-    #[arg(long, value_enum, env = "ADROIT_THEME")]
+    #[arg(long, value_enum, hide_short_help = true, env = "ADROIT_THEME")]
     pub theme: Option<MarkdownTheme>,
 
     /// Default template for `new`: a built-in (`madr`, `nygard`) or a path.
     ///
     /// Overrides config; `new --template` still wins per-invocation. Also
     /// settable via `ADROIT_TEMPLATE`.
-    #[arg(long, env = "ADROIT_TEMPLATE")]
+    #[arg(long, hide_short_help = true, env = "ADROIT_TEMPLATE")]
     pub default_template: Option<String>,
 
     /// Days after which a still-Proposed ADR with no `review_by` is flagged
@@ -236,7 +252,7 @@ pub struct Cli {
     ///
     /// Used by `list` / `stats` / `check` and the dashboard. Also settable via
     /// `ADROIT_REVIEW_OVERDUE_DAYS`.
-    #[arg(long, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
+    #[arg(long, hide_short_help = true, env = "ADROIT_REVIEW_OVERDUE_DAYS")]
     pub review_overdue_days: Option<u32>,
 
     /// Output format for read verbs: `human` (default) or `json`.
@@ -253,6 +269,19 @@ pub struct Cli {
         help_heading = "Output"
     )]
     pub output: OutputFormat,
+
+    /// Print help — the same concise view for `-h` and `--help`.
+    #[arg(
+        short = 'h',
+        long = "help",
+        action = clap::ArgAction::HelpShort,
+        global = true
+    )]
+    pub help: Option<bool>,
+
+    /// Print help including every option in full detail.
+    #[arg(long = "help-all", action = clap::ArgAction::HelpLong, global = true)]
+    pub help_all: Option<bool>,
 
     #[command(subcommand)]
     pub command: Option<Command>,

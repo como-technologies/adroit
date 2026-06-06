@@ -2793,3 +2793,45 @@ fn ask_without_a_provider_errors() {
         .failure()
         .stderr(predicate::str::contains("needs an AI provider"));
 }
+
+// ---------------------------------------------------------------------------
+// Help model: -h == --help (concise); --help-all is the full reference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn h_and_help_are_identical_and_concise_help_all_is_full() {
+    let bin = || Command::cargo_bin("adroit").unwrap();
+    let h = bin().arg("-h").output().unwrap();
+    let help = bin().arg("--help").output().unwrap();
+    assert!(h.status.success() && help.status.success());
+    // -h and --help render the exact same (concise) help.
+    assert_eq!(h.stdout, help.stdout, "`-h` and `--help` must be identical");
+
+    let concise = String::from_utf8(h.stdout).unwrap();
+    assert!(
+        concise.contains("Authoring:"),
+        "concise help lists commands"
+    );
+    assert!(
+        !concise.contains("--relink-scope"),
+        "concise help must NOT dump the repo-shape options"
+    );
+
+    let all = String::from_utf8(bin().arg("--help-all").output().unwrap().stdout).unwrap();
+    assert!(
+        all.contains("--relink-scope") && all.contains("--layout"),
+        "--help-all lists every option"
+    );
+}
+
+#[test]
+fn subcommand_h_and_help_also_match() {
+    let bin = || Command::cargo_bin("adroit").unwrap();
+    let h = bin().args(["new", "-h"]).output().unwrap();
+    let help = bin().args(["new", "--help"]).output().unwrap();
+    assert!(h.status.success() && help.status.success());
+    assert_eq!(
+        h.stdout, help.stdout,
+        "`new -h` and `new --help` must match"
+    );
+}

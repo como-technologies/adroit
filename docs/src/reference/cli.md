@@ -12,9 +12,9 @@ The on-disk **shape** flags below (`--format`, `--layout`, `--naming`,
 `--date-source`, `--relink-scope`) are **top-level only** — pass them *before*
 the subcommand (`adroit --format frontmatter migrate`) or, more usually, set them
 once via `config` / `.env` (the `ADROIT_*` env var binds everywhere regardless of
-position). They're listed on `adroit --help` (the full top-level reference) but
-kept **off** each subcommand's `--help` so per-command help stays terse — run
-`adroit --help` to see them.
+position). They're listed on `adroit --help-all` (the full reference) but kept
+**off** the concise `-h` / `--help` so the default help stays a command list —
+run `adroit --help-all` to see them.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -29,8 +29,8 @@ kept **off** each subcommand's `--help` so per-command help stays terse — run
 
 Top-level only — pass them *before* the subcommand (e.g. `adroit --theme gruvbox`)
 or, more usually, set them in config / `.env`. The environment variable binds
-everywhere regardless; only the flag is kept off each subcommand's `--help`,
-since just a few commands use each.
+everywhere regardless; the flag is kept off the concise help (it's under
+`--help-all`), since just a few commands use each.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -38,7 +38,13 @@ since just a few commands use each.
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables. Used by `list`/`stats`/`check` (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
 
-`--version` / `--help` (`-h` for a short summary) are available everywhere.
+### Help
+
+`-h` and `--help` show the **same concise** view — the command list plus the
+everyday options (`--dir`, `--output`). **`--help-all`** adds every option in
+full detail (the repo-shape + command-default flags above, with their possible
+values). Both work on the top level and on each subcommand (`adroit new --help`
+vs `adroit new --help-all`). `--version` prints the version.
 
 ### Output
 
