@@ -1,6 +1,6 @@
 ---
 name: gate
-description: Use before finishing or committing work on adroit — the full quality gate (fmt + clippy and tests across default/forge/web + book build), then commit only the specific files. STOPS before pushing. Invoke for "verify before commit", "is this ready to commit", "run the gate", or after any change.
+description: Use before finishing or committing work on adroit — the full quality gate (fmt + clippy and tests across core/default/web + book build), then commit only the specific files. STOPS before pushing. Invoke for "verify before commit", "is this ready to commit", "run the gate", or after any change.
 user-invocable: true
 ---
 
@@ -14,14 +14,12 @@ the first step).
 ## Gate — all must pass
 ```sh
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo clippy --features forge --all-targets -- -D warnings
+cargo clippy --no-default-features --all-targets -- -D warnings   # bare core (no tui/ai/forge)
+cargo clippy --all-targets -- -D warnings                         # default = tui + ai + forge
 cargo clippy --features web --all-targets -- -D warnings
-cargo clippy --features ai --all-targets -- -D warnings
-cargo test                       # default features
-cargo test --features forge      # incl. forge_faults.rs, forge_cli.rs
+cargo test --no-default-features  # bare core: the #[cfg(not(feature=…))] paths
+cargo test                        # default = tui + ai + forge (CLI, oracle, AI/interview, forge_faults)
 cargo test --features web         # incl. the serve security tests
-cargo test --features ai          # incl. the AI module + interview tests
 just book                         # the manual builds, no broken links
 ```
 (`just ci` runs the full pipeline including `crate-audit`/`crate-outdated`.)

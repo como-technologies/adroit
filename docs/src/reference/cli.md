@@ -693,7 +693,7 @@ editor: vim
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 | `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
 | `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |
-| `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Opt-in forge integration (requires the `forge` feature build). `github` drives GitHub PRs + Issues. |
+| `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Forge integration (the `forge` feature is in the default build; `none` keeps it off). `github` drives GitHub PRs + Issues. |
 | `forge.repo` | `owner/repo` | — | The provider slug (GitHub `owner/repo`). Required when a provider is set. |
 | `forge.host` | host | provider default | API host for self-managed / enterprise. GitLab self-hosted: the host (`gitlab.example.com`); GitHub Enterprise: the host incl. base path (`ghe.example.com/api/v3`). Same token auth as the cloud version. |
 | `forge.branch_prefix` | string | `adr/` | Branch prefix `new --forge` generates (`adr/0021-…`). |
@@ -705,7 +705,8 @@ editor: vim
 Tokens are **never** stored in config. They resolve in order: the environment
 (`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +
 `ADROIT_JIRA_EMAIL`), then a local credential file written by `adroit auth`. The
-binary must be built `--features forge`. **Jira auth follows the deployment:**
+`forge` feature is in the default build (only a `--no-default-features` core omits
+it). **Jira auth follows the deployment:**
 set `ADROIT_JIRA_EMAIL` for Jira **Cloud** (Basic `email:token`); omit it for
 Jira **Server/Data Center** and supply a Personal Access Token as
 `ADROIT_JIRA_TOKEN` (Bearer). GitHub/GitLab use the same token whether cloud or

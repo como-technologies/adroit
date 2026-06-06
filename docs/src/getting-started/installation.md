@@ -13,13 +13,14 @@ source.
 git clone https://github.com/como-technologies/adroit.git
 cd adroit
 just init      # one-time: install the toolchain (clippy, rustfmt, mdbook, …)
-just build     # debug build  → target/debug/adroit  (CLI + TUI)
+just build     # debug build  → target/debug/adroit  (TUI + AI + forge)
 just release   # release build → target/release/adroit
 ```
 
-The read-only web dashboard is behind the `web` feature (off by default since it
-needs the Vue bundle). Build and run it with `just serve`. See
-[Web Dashboard](../usage/web.md).
+`just build` includes the AI and forge integrations by default; the bare core
+builds with `cargo build --no-default-features` (`just build-core`). The read-only
+web dashboard is the one opt-in feature (it needs the Vue bundle) — build and run
+it with `just serve`. See [Web Dashboard](../usage/web.md).
 
 ## Verify
 

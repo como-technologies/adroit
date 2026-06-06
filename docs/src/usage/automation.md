@@ -97,11 +97,12 @@ mechanical similarity verbs and need **no provider** at all.
 
 ### Enabling it
 
-The AI adapters live behind the `ai` Cargo feature (it brings rig + tokio; the
-core CLI stays sync). Build with it, then opt in via config:
+The AI adapters are in the default build (the `ai` Cargo feature is on by
+default; it brings rig + tokio, while a `--no-default-features` core stays sync).
+You just opt in at runtime via config:
 
 ```sh
-cargo build --features ai          # or: just build (after adding the feature)
+just build                         # the default binary already includes the AI verbs
 adroit auth anthropic              # store the key (or export ADROIT_ANTHROPIC_KEY)
 ```
 

@@ -7,8 +7,11 @@ init:
     rustup component add clippy rustfmt
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
-# Run all CI checks (used by .github/workflows/ci.yml)
-ci: fmt-check lint lint-forge lint-web lint-ai test test-forge test-web test-ai book crate-outdated crate-audit
+# Run all CI checks (used by .github/workflows/ci.yml). `ai`+`forge` are default
+# features now, so the plain `lint`/`test` cover them; `lint-core`/`test-core`
+# guard the `--no-default-features` core (no tui/ai/forge — stays tokio-free), and
+# `lint-web`/`test-web` cover the opt-in web feature.
+ci: fmt-check lint-core lint lint-web test-core test test-web book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -18,9 +21,14 @@ fmt:
 fmt-check:
     cargo fmt --check
 
-# Run clippy lints
+# Run clippy lints (default features: tui + ai + forge)
 lint:
     cargo clippy -- -D warnings
+
+# Clippy the bare core (no tui/ai/forge) — guards the layering: the lib + CLI must
+# build with NO ratatui/crossterm, NO rig/tokio, NO ureq.
+lint-core:
+    cargo clippy --no-default-features -- -D warnings
 
 # Run clippy with the forge feature (GitHub/GitLab adapters)
 lint-forge:
@@ -34,29 +42,18 @@ lint-web:
 lint-ai:
     cargo clippy --features ai -- -D warnings
 
-# Build the binary WITH the AI feature (rig adapters). Needed for the live AI
-# verbs (`new --interview`, `plan`, `lint --ai`, `summarize`, `ask`); the default
-# `just build` omits it. Enable at runtime via `ai.enabled` / `ADROIT_AI_ENABLED`.
-build-ai:
-    cargo build --features ai
+# Build the bare core: no tui/ai/forge (the minimal, tokio-free CLI).
+build-core:
+    cargo build --no-default-features
 
-# Run the AI-featured binary (e.g. `just run-ai summarize 1 --dir adr`).
-run-ai *ARGS:
-    cargo run --features ai -- {{ARGS}}
-
-# Build the full-featured dogfooding binary: default tui + ai + forge in one.
-# (`web` stays separate — it needs the SPA bundle; use `just serve`.) This is
-# the build to use while we work toward ai+forge being on by default.
-build-all:
-    cargo build --features ai,forge
-
-# Run the full-featured (ai+forge) binary, e.g. `just run-all ask "..." --dir adr`.
-run-all *ARGS:
-    cargo run --features ai,forge -- {{ARGS}}
-
-# Run all tests
+# Run all tests (default features: tui + ai + forge)
 test *ARGS:
     cargo test {{ARGS}}
+
+# Test the bare core (no tui/ai/forge) — exercises the `#[cfg(not(feature=…))]`
+# paths (e.g. forge verbs absent) that the default build compiles out.
+test-core *ARGS:
+    cargo test --no-default-features {{ARGS}}
 
 # Run tests with the forge feature enabled
 test-forge *ARGS:

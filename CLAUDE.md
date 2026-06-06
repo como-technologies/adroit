@@ -97,7 +97,7 @@ just run <args>  # run the binary
   (model-based oracle over the format×layout×scheme×relink_scope matrix),
   `parsers.rs` + `fuzz_parsers.rs` (parser properties / bolero coverage-guided fuzz),
   `config_precedence.rs`, `date_source_git.rs`, `forge_faults.rs` + `forge_cli.rs`
-  (`--features forge`). See the book's **Development → Testing & Fuzzing** page
+  (`forge`, now in the default build). See the book's **Development → Testing & Fuzzing** page
   (`docs/src/dev/testing.md`); the campaign that built them is **Hardening & Quality**.
 - `docs/` — mdbook user manual source (`book.toml` + `src/`), published to
   GitHub Pages; build output goes to `docs/book/` (gitignored)
@@ -576,8 +576,9 @@ pull in tokio.
 stand-in. So the interview flow is unit-testable with **no network and no `ai`
 feature**. `ai_hook::open_provider(cfg)` is the facade (mirrors `forge_hook`):
 it returns a `Box<dyn AiProvider>` or `None`, resolving in order — the
-`ADROIT_AI_FAKE` test seam (offline echo) → the configured rig provider (only
-under `--features ai` + `ai.enabled`) → `None`.
+`ADROIT_AI_FAKE` test seam (offline echo) → the configured rig provider (the `ai`
+feature is on by default; a provider is only built when `ai.enabled`, and never in
+a `--no-default-features` core build) → `None`.
 
 **`ai`-gated** (`src/ai/rig_provider.rs`): `RigProvider` wraps rig (aliased from
 `rig-core` so `use rig::…` works) — Anthropic (`Client::builder().api_key(k)`) and

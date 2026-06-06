@@ -25,36 +25,30 @@ One binary, three surfaces over the same ADR repo:
 
 ```sh
 just init          # one-time: install toolchain (clippy, rustfmt, mdbook, …)
-just build         # debug build  → target/debug/adroit  (CLI + TUI)
+just build         # debug build  → target/debug/adroit  (TUI + AI + forge)
 just release       # release build → target/release/adroit
 ```
 
-### Optional features
+### Features
 
-Integrations are Cargo features, so a minimal build stays small and synchronous.
-Turn them on at build time:
+`just build` gives you the full binary: the TUI plus the **AI** and **forge**
+integrations. Each is a Cargo feature, and the bare core still builds without any
+of them (`cargo build --no-default-features` / `just build-core`) — small and
+synchronous (no tui, no rig/tokio, no http client).
 
-| Feature | Adds | Build it |
+| Feature | Default? | Adds |
 |---|---|---|
-| `tui` *(default)* | the interactive TUI (bare `adroit`) | `just build` |
-| `ai` | AI authoring: `new --interview`, `draft`, `plan`, `lint --ai`, `summarize`, `ask` (Anthropic or local Ollama) | `just build-ai` |
-| `forge` | GitHub/GitLab issue + PR/MR sync: `init`, `auth`, `sync`, `reconcile`, `notify` | `cargo build --features forge` |
-| `web` | the read-only web dashboard (`adroit serve`) | `just serve` |
-
-```sh
-just build-all     # the full dogfooding binary: tui + ai + forge in one
-```
-
-The direction is for `ai` and `forge` to fold into the default build as they
-stabilize, so you won't need the flags. `web` stays opt-in — it needs the Vue
-SPA bundle, which `just serve` builds for you.
+| `tui` | ✅ | the interactive TUI (bare `adroit`) |
+| `ai` | ✅ | AI authoring: `new --interview`, `draft`, `plan`, `lint --ai`, `summarize`, `ask` (Anthropic or local Ollama). Calls are still gated at runtime by `ai.enabled` |
+| `forge` | ✅ | GitHub/GitLab issue + PR/MR sync: `init`, `auth`, `sync`, `reconcile`, `notify` |
+| `web` | — | the read-only web dashboard. Opt-in (it needs the Vue SPA bundle); build + run with `just serve` |
 
 ## Test
 
 ```sh
 just ci            # the full gate: fmt, clippy, all suites, book, audit
-just test          # default-feature tests (unit + CLI + model oracle + parsers)
-just test-ai       # the ai-feature suite   (also: test-forge, test-web)
+just test          # default-feature tests (TUI + AI + forge: unit + CLI + oracle + parsers)
+just test-core     # the bare core (--no-default-features); just test-web for the dashboard
 just model         # wide property soak (PROPTEST_CASES, default 2000)
 ```
 
@@ -107,7 +101,7 @@ maintain. The full set, beyond the cheatsheet: `link`, `relink`, `renumber`,
 
 ## AI-assisted authoring (opt-in)
 
-Build with the `ai` feature (`just build-ai`), then enable it via config or
+The AI verbs are in the default build — just enable them via config or
 `ADROIT_AI_ENABLED=true` and pick a provider (hosted Anthropic, or local Ollama
 for an air-gapped, no-key setup):
 

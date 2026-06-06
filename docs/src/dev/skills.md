@@ -14,7 +14,7 @@ e.g. `/harden` or `/gate`.
 | Skill | When to use | What it does |
 |---|---|---|
 | `/harden` | "find bugs in X", "harden / fuzz X", widening coverage, before a release | Runs a bug-hunting campaign: build/extend the oracle or a property/fuzz/fault-injection harness, soak it, and turn every finding into a root-cause fix + regression. |
-| `/gate` | before committing or finishing work | The pre-commit quality gate: fmt + clippy and tests across default/forge/web/ai + `just book`; commit only the changed files; **stop before pushing**. |
+| `/gate` | before committing or finishing work | The pre-commit quality gate: fmt + clippy and tests across core/default/web (`ai`+`forge` are in the default build) + `just book`; commit only the changed files; **stop before pushing**. |
 | `/doc-sync` | after changing behavior, or a periodic sweep | Keep code and docs in sync: update `CLAUDE.md` + the mdbook, verify by running the CLI, build the book. |
 | `/extend` | "add a gitea/bitbucket provider", "add a naming scheme", "add a publish adapter", "add a config key" | Scaffold a new variant of an adroit seam (forge provider, tracker, naming scheme, format, layout, publish adapter, template, config key, CLI subcommand) with the tests + docs each requires. |
 | `/adr` | making an architectural decision while working on adroit | Record the decision in adroit's own `adr/` corpus, authored with the `adroit` binary (dogfooding). Always `--dir adr`; keep it generic. |

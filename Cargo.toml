@@ -6,11 +6,13 @@ license = "Apache-2.0"
 description = "A snappy tool for managing Architecture Decision Records"
 
 [features]
-# `tui` is on by default so `adroit` (no subcommand) launches the interactive
-# TUI for dogfooding. The core lib + CLI build with `--no-default-features`
-# and pull in NO ratatui/crossterm — the read (`query`/`view`) and write
-# (`store`) layers never depend on the terminal UI.
-default = ["tui"]
+# Default build = TUI + the AI and forge integrations, so a plain `cargo build` /
+# `just build` is the full-featured binary. The core lib + CLI still build with
+# `--no-default-features` (NO ratatui/crossterm, NO rig/tokio, NO ureq) — the read
+# (`query`/`view`) and write (`store`) layers never depend on the TUI, AI, or a
+# forge; `just lint-core` guards that layering in CI. `web` stays opt-in (it needs
+# the Vue SPA bundle — `just serve`).
+default = ["tui", "ai", "forge"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:the-other-tui-markdown"]
 # `web` is off by default because it needs the Vue build (`just web-build`).
 # It pulls in the async/web stack only when enabled; the core lib + CLI
@@ -27,16 +29,16 @@ web = [
     "dep:notify",
 ]
 the-other-tui-markdown = ["dep:the-other-tui-markdown"]
-# `forge` is off by default. It adds a small *blocking* HTTP client (ureq) for
+# `forge` is on by default. It adds a small *blocking* HTTP client (ureq) for
 # the GitHub/GitLab issue + PR adapters; the core CLI stays synchronous and
-# never pulls in tokio/async. `--no-default-features`, `tui`, and `web` do not
-# depend on `forge`.
+# never pulls in tokio/async. A `--no-default-features` build drops it cleanly.
 forge = ["dep:ureq"]
-# `ai` is off by default. It brings rig (async LLM framework) + tokio for the
+# `ai` is on by default. It brings rig (async LLM framework) + tokio for the
 # Anthropic/Ollama adapters; the AI verbs bridge to async with a single
-# `block_on` at the CLI boundary, so `--no-default-features`/`tui`/`forge` stay
+# `block_on` at the CLI boundary, so a `--no-default-features` build stays
 # tokio-free. The `AiProvider` trait, `FakeProvider`, and interview logic are
-# always compiled (the rig-backed adapter is the only `ai`-gated part).
+# always compiled (the rig-backed adapter is the only `ai`-gated part). AI calls
+# are still gated at runtime by the `ai.enabled` kill-switch (default off).
 ai = ["dep:rig", "dep:tokio"]
 
 [dependencies]
