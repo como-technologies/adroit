@@ -601,6 +601,42 @@ adroit publish --out ./public/adrs     # export accepted ADRs to a static dir
 adroit publish --out ./public/adrs --dry-run
 ```
 
+### Forge integration
+
+Drive the linked GitHub/GitLab issue + PR. In the default build but **off** until
+you configure `forge.*`; every action is opt-in and previews by default. See
+[Forge Integration](../usage/forge.md) for the full workflow.
+
+#### `adroit init`
+
+Interactive wizard — detect the forge from the git remote and write the `forge.*`
+config. `--print` shows the detected settings + planned steps without writing;
+`--yes` runs a non-interactive setup from the detected defaults.
+
+#### `adroit auth <PROVIDER>`
+
+Store a forge token (`github` / `gitlab` / `jira`) in the local credential store
+(omit `--token` to be prompted, hidden). `--email` saves the Jira account email.
+
+#### `adroit sync <ID>`
+
+Refresh the ADR's linked PR/MR description from its current content. Previews
+unless you pass `--yes`.
+
+#### `adroit reconcile`
+
+Reconcile local ADR status with the forge after out-of-band changes (e.g. a PR
+merged in the web UI). Reports drift by default; `--yes` applies the fixable part.
+
+#### `adroit notify <ID>`
+
+Post the ADR's current state to a chat webhook (Slack/Teams-compatible).
+`--dry-run` previews the message without posting.
+
+> `new --forge`, `review --forge`, and `set-status --forge` add forge actions to
+> those verbs — see each in [Author a decision](#author-a-decision) /
+> [Review & decide](#review--decide) and the [Forge Integration](../usage/forge.md) guide.
+
 ### Configuration
 
 #### `adroit config [show | get <key> | set <key> <value> [--local]]`
