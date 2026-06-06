@@ -15,6 +15,7 @@
 use std::io::Read;
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::adr::Status;
 use crate::config::{Config, ForgeConfig, Provider, TrackerProvider};
@@ -214,6 +215,60 @@ fn read_response(resp: ureq::Response) -> HttpResponse {
     // Best-effort body read; an unreadable body is just empty bytes.
     let _ = resp.into_reader().read_to_end(&mut body);
     HttpResponse { status, body }
+}
+
+/// Run one REST call: serialize `body`, send via `transport`, classify the
+/// status (2xx ok; 401/403 → Auth; else Api), return `Value::Null` for an empty
+/// 2xx body, else parse JSON. `label` names the provider in the parse-error
+/// message; `extract_error` pulls the provider's error text from a failed body.
+pub(crate) fn rest_call(
+    transport: &dyn HttpTransport,
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<Value>,
+    label: &str,
+    extract_error: fn(&[u8]) -> String,
+) -> Result<Value, ForgeError> {
+    let bytes = body.map(|b| serde_json::to_vec(&b).expect("serialize JSON body"));
+    let resp = transport.request(method, url, headers, bytes.as_deref())?;
+    match resp.status {
+        200..=299 => {}
+        401 | 403 => return Err(ForgeError::Auth(extract_error(&resp.body))),
+        status => {
+            return Err(ForgeError::Api {
+                status,
+                message: extract_error(&resp.body),
+            });
+        }
+    }
+    if resp.body.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&resp.body).map_err(|e| ForgeError::Api {
+        status: resp.status,
+        message: format!("invalid JSON from {label}: {e}"),
+    })
+}
+
+/// Require a string field from a JSON response, else an `Api` error naming the
+/// missing key (`label` = the provider, e.g. "GitHub").
+pub(crate) fn want_str(v: &Value, key: &str, label: &str) -> Result<String, ForgeError> {
+    v[key].as_str().map(str::to_string).ok_or(ForgeError::Api {
+        status: 0,
+        message: format!("{label} response missing `{key}`"),
+    })
+}
+
+/// Require a numeric id field, rendered as a string.
+pub(crate) fn want_num(v: &Value, key: &str, label: &str) -> Result<String, ForgeError> {
+    v[key]
+        .as_u64()
+        .map(|n| n.to_string())
+        .ok_or(ForgeError::Api {
+            status: 0,
+            message: format!("{label} response missing numeric `{key}`"),
+        })
 }
 
 // ---------------------------------------------------------------------------

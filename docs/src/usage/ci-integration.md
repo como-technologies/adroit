@@ -114,12 +114,12 @@ quorum, and what the merge changes — see
 ## Templates
 
 Copy-and-customize starters live in the repo under
-[`ci-templates/`](https://github.com/como-technologies/adroit/tree/main/ci-templates):
+[`templates/ci/`](https://github.com/como-technologies/adroit/tree/main/templates/ci):
 
-- **GitHub Actions** → `ci-templates/github/adr.yml` → `.github/workflows/adr.yml`
-  (validate + review brief), and `ci-templates/github/relink.yml` →
+- **GitHub Actions** → `templates/ci/github/adr.yml` → `.github/workflows/adr.yml`
+  (validate + review brief), and `templates/ci/github/relink.yml` →
   `.github/workflows/adr-relink.yml` (the post-merge heal-on-main relink)
-- **GitLab CI** → `ci-templates/gitlab/.gitlab-ci.yml` (includes the `adr:relink` job)
+- **GitLab CI** → `templates/ci/gitlab/.gitlab-ci.yml` (includes the `adr:relink` job)
 
 Each has two knobs at the top: `ADROIT_DIR` (your ADR tree) and how `adroit` is
 installed (it isn't on crates.io yet — pin to a tag, vendor a binary, or use a

@@ -13,9 +13,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{
-    Forge, ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport,
-};
+use super::{ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport};
 
 /// A Jira REST client scoped to one project (Cloud or Server/Data Center).
 #[derive(Clone)]
@@ -66,27 +64,15 @@ impl Jira {
             ("Accept", "application/json"),
             ("User-Agent", "adroit"),
         ];
-        let bytes = body.map(|b| serde_json::to_vec(&b).expect("serialize JSON body"));
-        let resp = self
-            .transport
-            .request(method, &url, &headers, bytes.as_deref())?;
-        match resp.status {
-            200..=299 => {}
-            401 | 403 => return Err(ForgeError::Auth(message_of(&resp.body))),
-            status => {
-                return Err(ForgeError::Api {
-                    status,
-                    message: message_of(&resp.body),
-                });
-            }
-        }
-        if resp.body.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&resp.body).map_err(|e| ForgeError::Api {
-            status: resp.status,
-            message: format!("invalid JSON from Jira: {e}"),
-        })
+        super::rest_call(
+            self.transport.as_ref(),
+            method,
+            &url,
+            &headers,
+            body,
+            "Jira",
+            message_of,
+        )
     }
 
     fn browse_url(&self, key: &str) -> String {
@@ -138,13 +124,10 @@ impl Tracker for Jira {
                 }
             })),
         )?;
-        let key = v["key"].as_str().ok_or(ForgeError::Api {
-            status: 0,
-            message: "Jira response missing `key`".to_string(),
-        })?;
+        let key = super::want_str(&v, "key", "Jira")?;
         Ok(IssueRef {
-            id: key.to_string(),
-            url: self.browse_url(key),
+            id: key.clone(),
+            url: self.browse_url(&key),
             title: title.to_string(),
         })
     }
@@ -209,31 +192,10 @@ impl Tracker for Jira {
     }
 }
 
-// Jira (unlike GitHub/GitLab) is tracker-only; provide a Forge impl that is never
-// constructed (the factory never boxes Jira as a Forge) so the type is complete.
-impl Forge for Jira {
-    fn open_pr(&self, _: &super::PrDraft) -> Result<super::PrRef, ForgeError> {
-        unreachable!("Jira is a tracker, not a code-review host")
-    }
-    fn pr_state(&self, _: &str) -> Result<super::PrState, ForgeError> {
-        unreachable!("Jira is a tracker, not a code-review host")
-    }
-    fn merge_pr(&self, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn close_pr(&self, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn comment_pr(&self, _: &str, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn set_pr_body(&self, _: &str, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn describe(&self) -> String {
-        format!("jira:{}", self.project)
-    }
-}
+// Jira is tracker-only: it implements `Tracker`, not `Forge` (the factory only
+// ever boxes it as `Box<dyn Tracker>`). The `(Option<dyn Forge>, Option<dyn
+// Tracker>)` adapter pair keeps the two roles independent, so there's no need —
+// and it would be a Liskov violation — to give Jira a `Forge` impl that panics.
 
 /// Standard base64 (RFC 4648) — tiny, to avoid a dep for the one Basic-auth header.
 fn base64(input: &[u8]) -> String {

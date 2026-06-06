@@ -1,0 +1,1 @@
+Answer the question using ONLY the provided ADR excerpts. Cite the ADRs you used by their reference (e.g. ADR-0006). If the excerpts don't contain the answer, say so plainly rather than guessing. Be concise.

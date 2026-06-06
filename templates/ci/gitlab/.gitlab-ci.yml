@@ -1,7 +1,7 @@
 # adroit ADR pipeline (GitLab CI) — copy to your repo root, or `include:` it.
 #
 # Gates the ADR process and generates the review-kickoff brief on decision MRs.
-# See ci-templates/README.md. Two knobs:
+# See templates/ci/README.md. Two knobs:
 #   1. ADROIT_DIR below — your ADR directory.
 #   2. before_script — how `adroit` is obtained (not on crates.io yet; pin to a
 #      tag / vendor a binary / use a prebuilt image as you prefer).

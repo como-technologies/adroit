@@ -241,8 +241,79 @@ fn file_stats(path: &Path) -> (usize, u64) {
 /// CLI renders `problem.message` verbatim, so its output is unchanged.
 pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     let files = store.list_files()?;
+    let scheme = store.options().naming;
+    let markdown = store.options().format == Format::Markdown;
     let mut problems: Vec<Problem> = Vec::new();
 
+    // First read-loop: flag unparseable files, group identities/titles, collect
+    // frontmatter supersession refs, and flag status↔directory mismatches.
+    let corpus = collect_corpus(store, &files, markdown, &mut problems)?;
+
+    // The remaining checks all read over the grouped corpus; order is irrelevant
+    // because problems are sorted by (severity, message) before returning.
+    check_broken_supersession(store, &files, markdown, scheme, &corpus, &mut problems);
+    check_links(store, &files, scheme, &corpus.by_ident, &mut problems);
+    check_duplicate_ids(store, scheme, &corpus.by_ident, &mut problems);
+    check_duplicate_titles(store, &corpus.by_title, &mut problems);
+
+    problems.sort_by(|a, b| {
+        a.severity
+            .cmp(&b.severity)
+            .then_with(|| a.message.cmp(&b.message))
+    });
+    Ok(CheckReport {
+        checked: files.len(),
+        problems,
+    })
+}
+
+/// A path relative to the store root (or the path itself if it isn't under it),
+/// as a display string — the form every `check` problem message uses.
+fn rel_of(store: &Store, path: &Path) -> String {
+    path.strip_prefix(store.root())
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+/// Build the `ProblemFile` list (with size hints) and the comma-joined display
+/// of their paths, shared by the duplicate-id and duplicate-title problems.
+fn problem_files(store: &Store, paths: &[std::path::PathBuf]) -> (Vec<ProblemFile>, String) {
+    let files: Vec<ProblemFile> = paths
+        .iter()
+        .map(|p| {
+            let path = rel_of(store, p);
+            let (lines, bytes) = file_stats(p);
+            ProblemFile { path, lines, bytes }
+        })
+        .collect();
+    let list = files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    (files, list)
+}
+
+/// The groupings the first read-loop produces, shared by the later checks.
+struct Corpus {
+    /// Scheme identity → the files carrying it (duplicate / link resolution).
+    by_ident: BTreeMap<String, Vec<std::path::PathBuf>>,
+    /// Normalized title → (original-case title, files sharing it).
+    by_title: BTreeMap<String, (String, Vec<std::path::PathBuf>)>,
+    /// Frontmatter supersession refs (rel path, supersedes, superseded_by).
+    fm_supersession: Vec<(String, Option<AdrRef>, Option<AdrRef>)>,
+}
+
+/// First read-loop: flag `(3)` Unparseable files, group files into `by_ident`
+/// and `by_title`, collect `(4b)` frontmatter supersession refs, and flag `(1)`
+/// status↔directory mismatches (markdown).
+fn collect_corpus(
+    store: &Store,
+    files: &[std::path::PathBuf],
+    markdown: bool,
+    problems: &mut Vec<Problem>,
+) -> Result<Corpus, QueryError> {
     // Group paths by the scheme's identity (to flag duplicates, and to resolve
     // cross-ADR links / supersession refs — works for every naming scheme, not
     // just the numeric ones).
@@ -250,18 +321,12 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     // Group by normalized title for the duplicate-title check (value: the
     // original-case title + the files that share it).
     let mut by_title: BTreeMap<String, (String, Vec<std::path::PathBuf>)> = BTreeMap::new();
-    let scheme = store.options().naming;
-    let markdown = store.options().format == Format::Markdown;
     // Frontmatter supersession refs (YAML fields, not markdown links), collected
     // for a broken-supersession check mirroring the markdown one below.
     let mut fm_supersession: Vec<(String, Option<AdrRef>, Option<AdrRef>)> = Vec::new();
 
-    for path in &files {
-        let rel = path
-            .strip_prefix(store.root())
-            .unwrap_or(path)
-            .display()
-            .to_string();
+    for path in files {
+        let rel = rel_of(store, path);
 
         // (3) Unparseable / missing H1.
         let adr = match store.read(path) {
@@ -349,16 +414,32 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
         }
     }
 
+    Ok(Corpus {
+        by_ident,
+        by_title,
+        fm_supersession,
+    })
+}
+
+/// Checks `(4)` markdown `## Status` supersession links and `(4b)` frontmatter
+/// YAML supersession fields against the identity set — a referenced ADR that
+/// doesn't exist is a broken supersession.
+fn check_broken_supersession(
+    store: &Store,
+    files: &[std::path::PathBuf],
+    markdown: bool,
+    scheme: NamingScheme,
+    corpus: &Corpus,
+    problems: &mut Vec<Problem>,
+) {
+    let by_ident = &corpus.by_ident;
+
     // (4) Broken supersession links. Resolved through the naming seam and
     // checked against the full identity set, so forward/backward references in
     // any order — and slug schemes — all work.
     if markdown {
-        for path in &files {
-            let rel = path
-                .strip_prefix(store.root())
-                .unwrap_or(path)
-                .display()
-                .to_string();
+        for path in files {
+            let rel = rel_of(store, path);
             let Ok(content) = std::fs::read_to_string(path) else {
                 continue;
             };
@@ -398,7 +479,7 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
     // they're checked here against the same identity set — closing the gap that
     // let a renumber strand a frontmatter supersession pointer silently.
     if !markdown {
-        for (rel, supersedes, superseded_by) in &fm_supersession {
+        for (rel, supersedes, superseded_by) in &corpus.fm_supersession {
             for (kind, r) in [("Supersedes", supersedes), ("Superseded by", superseded_by)] {
                 if let Some(r) = r
                     && !by_ident.contains_key(&ident_key(r))
@@ -418,20 +499,24 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             }
         }
     }
+}
 
-    // (5) Cross-ADR relative links: each must resolve to an existing file, and a
-    // link should point at where the ADR it names currently lives. **Scheme-aware**
-    // (mirrors `relink`/check #4): the link target is resolved to an `AdrRef` and
-    // looked up in the identity set, so date/uuid/per_category links classify
-    // correctly. (A numeric-only resolution mis-flagged a *stale* slug-scheme link
-    // — an ADR that merely moved — as a *broken* error, which broke the
-    // `relink_scope = self/none` heal-on-main flow for those schemes.)
-    for path in &files {
-        let rel = path
-            .strip_prefix(store.root())
-            .unwrap_or(path)
-            .display()
-            .to_string();
+/// Phase `(5)`: cross-ADR relative links — each must resolve to an existing
+/// file, and a link should point at where the ADR it names currently lives.
+/// **Scheme-aware** (mirrors `relink`/check #4): the link target is resolved to
+/// an `AdrRef` and looked up in the identity set, so date/uuid/per_category
+/// links classify correctly. (A numeric-only resolution mis-flagged a *stale*
+/// slug-scheme link — an ADR that merely moved — as a *broken* error, which
+/// broke the `relink_scope = self/none` heal-on-main flow for those schemes.)
+fn check_links(
+    store: &Store,
+    files: &[std::path::PathBuf],
+    scheme: NamingScheme,
+    by_ident: &BTreeMap<String, Vec<std::path::PathBuf>>,
+    problems: &mut Vec<Problem>,
+) {
+    for path in files {
+        let rel = rel_of(store, path);
         let Ok(content) = std::fs::read_to_string(path) else {
             continue;
         };
@@ -439,6 +524,20 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
         // The source file's parent dir is the per_category category (ignored by
         // other schemes), needed to resolve a same-category link.
         let source_category = dir.file_name().and_then(|n| n.to_str());
+        // The two stale-link problems (missing-target arm and moved-target arm)
+        // are byte-identical, so build both from one closure.
+        let stale = |target: &str, disp: &str, want: &str| Problem {
+            severity: Severity::Warning,
+            kind: ProblemKind::StaleLink,
+            label: rel.clone(),
+            summary: format!(
+                "stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
+            ),
+            paths: Vec::new(),
+            message: format!(
+                "{rel}: stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
+            ),
+        };
         for target in crate::links::relative_md_targets(&content) {
             let pathpart = target.split('#').next().unwrap_or(target);
             let resolved = dir.join(pathpart);
@@ -465,18 +564,7 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 // BROKEN (an error).
                 if let (Some(disp), Some(canon)) = (&disp, canon) {
                     let want = crate::links::rel_link(dir, canon);
-                    problems.push(Problem {
-                        severity: Severity::Warning,
-                        kind: ProblemKind::StaleLink,
-                        label: rel.clone(),
-                        summary: format!(
-                            "stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
-                        ),
-                        paths: Vec::new(),
-                        message: format!(
-                            "{rel}: stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
-                        ),
-                    });
+                    problems.push(stale(target, disp, &want));
                 } else {
                     problems.push(Problem {
                         severity: Severity::Error,
@@ -498,30 +586,26 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                 && rp != cp
             {
                 let want = crate::links::rel_link(dir, canon);
-                problems.push(Problem {
-                    severity: Severity::Warning,
-                    kind: ProblemKind::StaleLink,
-                    label: rel.clone(),
-                    summary: format!(
-                        "stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
-                    ),
-                    paths: Vec::new(),
-                    message: format!(
-                        "{rel}: stale link [{target}] — {disp} is now [{want}] (run `adroit relink`)"
-                    ),
-                });
+                problems.push(stale(target, disp, &want));
             }
         }
     }
+}
 
-    // (2) Duplicate identifiers (scheme-aware). The wording stays "number" for
-    // numeric schemes (byte-identical message) and "identifier" otherwise.
+/// Phase `(2)`: duplicate identifiers (scheme-aware). The wording stays "number"
+/// for numeric schemes (byte-identical message) and "identifier" otherwise.
+fn check_duplicate_ids(
+    store: &Store,
+    scheme: NamingScheme,
+    by_ident: &BTreeMap<String, Vec<std::path::PathBuf>>,
+    problems: &mut Vec<Problem>,
+) {
     let noun = if scheme.is_numeric() {
         "number"
     } else {
         "identifier"
     };
-    for (key, paths) in &by_ident {
+    for (key, paths) in by_ident {
         if paths.len() > 1 {
             // Numeric identity → `ADR-NNNN` (from the key, so the message is
             // byte-identical); slug identity → the scheme's display string.
@@ -533,23 +617,7 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
                     .map(|r| scheme.display(&r))
                     .unwrap_or_else(|| key.trim_start_matches("s:").to_string())
             };
-            let files: Vec<ProblemFile> = paths
-                .iter()
-                .map(|p| {
-                    let path = p
-                        .strip_prefix(store.root())
-                        .unwrap_or(p)
-                        .display()
-                        .to_string();
-                    let (lines, bytes) = file_stats(p);
-                    ProblemFile { path, lines, bytes }
-                })
-                .collect();
-            let list = files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
+            let (files, list) = problem_files(store, paths);
             let message = format!("{disp}: duplicate {noun} used by {list}");
             problems.push(Problem {
                 severity: Severity::Error,
@@ -561,28 +629,19 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             });
         }
     }
+}
 
-    // (6) Duplicate titles (advisory). Titles may legitimately repeat, so this is
-    // a Warning — `check` still exits 0 — but it surfaces the accidental `new`.
+/// Phase `(6)`: duplicate titles (advisory). Titles may legitimately repeat, so
+/// this is a Warning — `check` still exits 0 — but it surfaces the accidental
+/// `new`.
+fn check_duplicate_titles(
+    store: &Store,
+    by_title: &BTreeMap<String, (String, Vec<std::path::PathBuf>)>,
+    problems: &mut Vec<Problem>,
+) {
     for (title, paths) in by_title.values() {
         if paths.len() > 1 {
-            let files: Vec<ProblemFile> = paths
-                .iter()
-                .map(|p| {
-                    let path = p
-                        .strip_prefix(store.root())
-                        .unwrap_or(p)
-                        .display()
-                        .to_string();
-                    let (lines, bytes) = file_stats(p);
-                    ProblemFile { path, lines, bytes }
-                })
-                .collect();
-            let list = files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
+            let (files, list) = problem_files(store, paths);
             problems.push(Problem {
                 severity: Severity::Warning,
                 kind: ProblemKind::DuplicateTitle,
@@ -593,16 +652,6 @@ pub fn check(store: &Store) -> Result<CheckReport, QueryError> {
             });
         }
     }
-
-    problems.sort_by(|a, b| {
-        a.severity
-            .cmp(&b.severity)
-            .then_with(|| a.message.cmp(&b.message))
-    });
-    Ok(CheckReport {
-        checked: files.len(),
-        problems,
-    })
 }
 
 /// The supersession / relationship graph across all ADRs.
@@ -923,27 +972,16 @@ fn pair_matches(e: &GraphEdge, a: &str, b: &str) -> bool {
 /// through the naming `scheme` (e.g. `[ADR-0006](../accepted/0006-foo.md)` →
 /// `Number(6)`, or `[x](20260601-foo.md)` → `Slug(..)`).
 fn linked_refs(body: &str, scheme: NamingScheme) -> Vec<crate::naming::AdrRef> {
+    // Reuse the one markdown `](target)` scanner (`links::for_each_link`) rather
+    // than a second copy; resolve each target to an ADR ref via the naming seam.
     let mut out = Vec::new();
-    // Scan each "](...)" link target for an ADR reference.
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b']'
-            && i + 1 < bytes.len()
-            && bytes[i + 1] == b'('
-            && let Some(end) = body[i + 2..].find(')')
+    crate::links::for_each_link(body, |target, _, _| {
+        if let Some(r) = scheme.ref_in_link(target)
+            && !out.contains(&r)
         {
-            let target = &body[i + 2..i + 2 + end];
-            if let Some(r) = scheme.ref_in_link(target)
-                && !out.contains(&r)
-            {
-                out.push(r);
-            }
-            i = i + 2 + end + 1;
-            continue;
+            out.push(r);
         }
-        i += 1;
-    }
+    });
     out
 }
 

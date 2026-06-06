@@ -22,70 +22,10 @@ use crate::adr::{Number, Status};
 /// unfinished (see [`crate::lint`]), so the prompts double as the authoring
 /// checklist. AI `--interview`/`draft` replace the prose from
 /// `## Context and Problem Statement` onward.
-pub const MADR: &str = "{{heading}}\n\
-\n\
-> State: {{status}}\n\
-\n\
-## Status\n\
-\n\
-{{status}}\n\
-\n\
-## Stakeholders\n\
-\n\
-_Who owns this decision, and who needs to sign off? List the roles or people involved._\n\
-\n\
-## Context and Problem Statement\n\
-\n\
-_What situation is forcing a decision? Describe the problem and the forces at play — \
-technical constraints, business goals, team context — and why it has to be settled now._\n\
-\n\
-## Decision Drivers\n\
-\n\
-_What should drive the choice? List the requirements and constraints that matter — a \
-quality attribute, a deadline, a cost ceiling, a compatibility need. One per line._\n\
-\n\
-## Considered Options\n\
-\n\
-_List the options you actually weighed — at least two, including the one(s) you \
-rejected — so the trade-off is on the record._\n\
-\n\
-## Decision Outcome\n\
-\n\
-_Name the chosen option and the core reason in one line (\"Chosen: **X**, because …\"), \
-then explain how it answers the drivers above._\n\
-\n\
-### Positive Consequences\n\
-\n\
-_What gets better, easier, or safer as a result?_\n\
-\n\
-### Negative Consequences\n\
-\n\
-_What gets worse, harder, or riskier? Every decision has trade-offs — name them \
-honestly, including any new debt or follow-up this creates._\n\
-\n\
-## Implementation\n\
-\n\
-_How will the decision be carried out — rollout, migration, the follow-up tasks? \
-Optional: draft it later with `adroit plan`, or delete this section if it doesn't apply._\n";
+pub const MADR: &str = include_str!("../templates/adr/madr.md");
 
 /// The built-in Nygard template.
-pub const NYGARD: &str = "{{heading}}\n\
-\n\
-## Status\n\
-\n\
-{{status}}\n\
-\n\
-## Context\n\
-\n\
-What is the issue that we're seeing that is motivating this decision?\n\
-\n\
-## Decision\n\
-\n\
-What is the change that we're proposing and/or doing?\n\
-\n\
-## Consequences\n\
-\n\
-What becomes easier or more difficult to do because of this change?\n";
+pub const NYGARD: &str = include_str!("../templates/adr/nygard.md");
 
 /// The built-in review-kickoff template.
 ///
@@ -93,52 +33,7 @@ What becomes easier or more difficult to do because of this change?\n";
 /// an ADR for formal review (mirrors the structure of the real artifact). It is
 /// rendered by [`render_kickoff`] rather than [`render`] because it carries its
 /// own set of placeholders (dates, quorum, the ADR's own path, etc.).
-pub const REVIEW_KICKOFF: &str = "# {{date}} — ADR-{{number}} Review Kickoff\n\
-\n\
-ADR-{{number}} ({{title}}) is open for review. Tracking issue: [TODO: tracking issue].\n\
-\n\
----\n\
-\n\
-## What you're being asked to do\n\
-\n\
-Read [ADR-{{number}} — {{title}}]({{adr_path}}), then **approve** this MR or \
-**start a discussion** in the comments.\n\
-\n\
-[TODO: one-paragraph decision summary]\n\
-\n\
-### Key docs\n\
-\n\
-|  | Doc | Link |\n\
-|--|-----|------|\n\
-| **What** | ADR-{{number}} — the decision being reviewed | [Read the ADR]({{adr_path}}) |\n\
-| **Why** | ADR README — why we use decision records | [Read the README](../README.md) |\n\
-| **How** | Review Process Guide — how to participate | [Read the guide](../../guides/adr-review-process.md) |\n\
-\n\
-### Timeline and rules\n\
-\n\
-- **Review period:** {{review_start}} – {{review_end}}\n\
-- **Quorum:** {{quorum}} team members must approve this MR\n\
-- **All discussion happens in the MR** — not in chats, email, or meetings.\n\
-\n\
-### What happens on {{decision_date}}\n\
-\n\
-- **Quorum approves** — merge the MR and move the ADR to its target directory\n\
-- **No quorum** — [TODO: decider] decides\n\
-- **Team disagrees** — close this MR; the ADR stays in `proposed/` and we revisit\n\
-\n\
----\n\
-\n\
-<details>\n\
-<summary>What the MR changes</summary>\n\
-\n\
-- Moves the ADR from `proposed/` to its target directory\n\
-- Updates the status\n\
-- Updates `SUMMARY.md` to reflect the new location\n\
-- Fixes cross-doc references that pointed at the old `proposed/` path\n\
-\n\
-**Tracking:** [TODO: tracking issue]\n\
-\n\
-</details>\n";
+pub const REVIEW_KICKOFF: &str = include_str!("../templates/review/kickoff.md");
 
 /// Errors raised while resolving or loading a template.
 #[derive(Debug, thiserror::Error)]
