@@ -8,8 +8,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{
-    CiStatus, Forge, ForgeError, HttpResponse, HttpTransport, IssueRef, IssueState, PrDraft, PrRef,
-    PrState, Tracker, Transition, UreqTransport,
+    CiStatus, Forge, ForgeError, HttpTransport, IssueRef, IssueState, PrDraft, PrRef, PrState,
+    Tracker, Transition, UreqTransport,
 };
 
 /// A GitHub REST client scoped to one `owner/repo`.
@@ -55,18 +55,15 @@ impl Github {
             ("User-Agent", "adroit"),
             ("X-GitHub-Api-Version", "2022-11-28"),
         ];
-        let bytes = body.map(|b| serde_json::to_vec(&b).expect("serialize JSON body"));
-        let resp = self
-            .transport
-            .request(method, &url, &headers, bytes.as_deref())?;
-        classify(&resp)?;
-        if resp.body.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&resp.body).map_err(|e| ForgeError::Api {
-            status: resp.status,
-            message: format!("invalid JSON from GitHub: {e}"),
-        })
+        super::rest_call(
+            self.transport.as_ref(),
+            method,
+            &url,
+            &headers,
+            body,
+            "GitHub",
+            message_of,
+        )
     }
 }
 
@@ -86,18 +83,6 @@ pub fn open(cfg: &crate::config::ForgeConfig) -> super::Adapters {
             (Some(Box::new(gh.clone())), Some(Box::new(gh)))
         }
         _ => (None, None),
-    }
-}
-
-/// Map a response status to an error (or `Ok` for 2xx).
-fn classify(resp: &HttpResponse) -> Result<(), ForgeError> {
-    match resp.status {
-        200..=299 => Ok(()),
-        401 | 403 => Err(ForgeError::Auth(message_of(&resp.body))),
-        status => Err(ForgeError::Api {
-            status,
-            message: message_of(&resp.body),
-        }),
     }
 }
 
@@ -138,25 +123,6 @@ fn message_of(body: &[u8]) -> String {
         .unwrap_or_else(|| String::from_utf8_lossy(body).trim().to_string())
 }
 
-/// Require a string field, else an `Api` error naming the missing key.
-fn want_str(v: &Value, key: &str) -> Result<String, ForgeError> {
-    v[key].as_str().map(str::to_string).ok_or(ForgeError::Api {
-        status: 0,
-        message: format!("GitHub response missing `{key}`"),
-    })
-}
-
-/// A numeric id rendered as a string (GitHub issue/PR numbers).
-fn want_num(v: &Value, key: &str) -> Result<String, ForgeError> {
-    v[key]
-        .as_u64()
-        .map(|n| n.to_string())
-        .ok_or(ForgeError::Api {
-            status: 0,
-            message: format!("GitHub response missing numeric `{key}`"),
-        })
-}
-
 impl Tracker for Github {
     fn create_issue(&self, title: &str, body: &str) -> Result<IssueRef, ForgeError> {
         let v = self.call(
@@ -165,8 +131,8 @@ impl Tracker for Github {
             Some(json!({ "title": title, "body": body })),
         )?;
         Ok(IssueRef {
-            id: want_num(&v, "number")?,
-            url: want_str(&v, "html_url")?,
+            id: super::want_num(&v, "number", "GitHub")?,
+            url: super::want_str(&v, "html_url", "GitHub")?,
             title: title.to_string(),
         })
     }
@@ -202,7 +168,7 @@ impl Tracker for Github {
         let v = self.call("GET", &format!("repos/{}/issues/{issue}", self.repo), None)?;
         Ok(IssueState {
             open: v["state"].as_str() == Some("open"),
-            url: want_str(&v, "html_url")?,
+            url: super::want_str(&v, "html_url", "GitHub")?,
         })
     }
 
@@ -225,8 +191,8 @@ impl Forge for Github {
             })),
         )?;
         Ok(PrRef {
-            id: want_num(&v, "number")?,
-            url: want_str(&v, "html_url")?,
+            id: super::want_num(&v, "number", "GitHub")?,
+            url: super::want_str(&v, "html_url", "GitHub")?,
             branch: draft.branch.clone(),
         })
     }
@@ -333,6 +299,7 @@ impl Forge for Github {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forge::HttpResponse;
     use std::sync::Mutex;
 
     /// A transport that records requests and replays canned responses keyed by

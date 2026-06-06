@@ -64,27 +64,15 @@ impl Jira {
             ("Accept", "application/json"),
             ("User-Agent", "adroit"),
         ];
-        let bytes = body.map(|b| serde_json::to_vec(&b).expect("serialize JSON body"));
-        let resp = self
-            .transport
-            .request(method, &url, &headers, bytes.as_deref())?;
-        match resp.status {
-            200..=299 => {}
-            401 | 403 => return Err(ForgeError::Auth(message_of(&resp.body))),
-            status => {
-                return Err(ForgeError::Api {
-                    status,
-                    message: message_of(&resp.body),
-                });
-            }
-        }
-        if resp.body.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&resp.body).map_err(|e| ForgeError::Api {
-            status: resp.status,
-            message: format!("invalid JSON from Jira: {e}"),
-        })
+        super::rest_call(
+            self.transport.as_ref(),
+            method,
+            &url,
+            &headers,
+            body,
+            "Jira",
+            message_of,
+        )
     }
 
     fn browse_url(&self, key: &str) -> String {
@@ -136,13 +124,10 @@ impl Tracker for Jira {
                 }
             })),
         )?;
-        let key = v["key"].as_str().ok_or(ForgeError::Api {
-            status: 0,
-            message: "Jira response missing `key`".to_string(),
-        })?;
+        let key = super::want_str(&v, "key", "Jira")?;
         Ok(IssueRef {
-            id: key.to_string(),
-            url: self.browse_url(key),
+            id: key.clone(),
+            url: self.browse_url(&key),
             title: title.to_string(),
         })
     }

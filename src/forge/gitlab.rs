@@ -8,8 +8,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{
-    CiStatus, Forge, ForgeError, HttpResponse, HttpTransport, IssueRef, IssueState, PrDraft, PrRef,
-    PrState, Tracker, Transition, UreqTransport,
+    CiStatus, Forge, ForgeError, HttpTransport, IssueRef, IssueState, PrDraft, PrRef, PrState,
+    Tracker, Transition, UreqTransport,
 };
 
 /// A GitLab REST v4 client scoped to one project.
@@ -58,18 +58,15 @@ impl Gitlab {
             ("Content-Type", "application/json"),
             ("User-Agent", "adroit"),
         ];
-        let bytes = body.map(|b| serde_json::to_vec(&b).expect("serialize JSON body"));
-        let resp = self
-            .transport
-            .request(method, &url, &headers, bytes.as_deref())?;
-        classify(&resp)?;
-        if resp.body.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&resp.body).map_err(|e| ForgeError::Api {
-            status: resp.status,
-            message: format!("invalid JSON from GitLab: {e}"),
-        })
+        super::rest_call(
+            self.transport.as_ref(),
+            method,
+            &url,
+            &headers,
+            body,
+            "GitLab",
+            message_of,
+        )
     }
 }
 
@@ -90,17 +87,6 @@ pub fn open(cfg: &crate::config::ForgeConfig) -> super::Adapters {
     }
 }
 
-fn classify(resp: &HttpResponse) -> Result<(), ForgeError> {
-    match resp.status {
-        200..=299 => Ok(()),
-        401 | 403 => Err(ForgeError::Auth(message_of(&resp.body))),
-        status => Err(ForgeError::Api {
-            status,
-            message: message_of(&resp.body),
-        }),
-    }
-}
-
 /// GitLab error bodies use `{"message": …}` or `{"error": …}`.
 fn message_of(body: &[u8]) -> String {
     serde_json::from_slice::<Value>(body)
@@ -112,13 +98,6 @@ fn message_of(body: &[u8]) -> String {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| String::from_utf8_lossy(body).trim().to_string())
-}
-
-fn want_str(v: &Value, key: &str) -> Result<String, ForgeError> {
-    v[key].as_str().map(str::to_string).ok_or(ForgeError::Api {
-        status: 0,
-        message: format!("GitLab response missing `{key}`"),
-    })
 }
 
 fn want_iid(v: &Value) -> Result<String, ForgeError> {
@@ -140,7 +119,7 @@ impl Tracker for Gitlab {
         )?;
         Ok(IssueRef {
             id: want_iid(&v)?,
-            url: want_str(&v, "web_url")?,
+            url: super::want_str(&v, "web_url", "GitLab")?,
             title: title.to_string(),
         })
     }
@@ -180,7 +159,7 @@ impl Tracker for Gitlab {
         Ok(IssueState {
             // GitLab issue state is "opened" / "closed".
             open: v["state"].as_str() == Some("opened"),
-            url: want_str(&v, "web_url")?,
+            url: super::want_str(&v, "web_url", "GitLab")?,
         })
     }
 
@@ -204,7 +183,7 @@ impl Forge for Gitlab {
         )?;
         Ok(PrRef {
             id: want_iid(&v)?,
-            url: want_str(&v, "web_url")?,
+            url: super::want_str(&v, "web_url", "GitLab")?,
             branch: draft.branch.clone(),
         })
     }
@@ -284,6 +263,7 @@ impl Forge for Gitlab {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forge::HttpResponse;
     use std::sync::Mutex;
 
     struct FakeTransport {
