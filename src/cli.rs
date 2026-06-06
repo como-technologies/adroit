@@ -7,6 +7,20 @@ use crate::config::{DateSource, Layout, MarkdownTheme, RelinkScope};
 use crate::format::Format;
 use crate::naming::NamingScheme;
 
+/// How a read verb prints its result.
+///
+/// `human` (default) is the formatted text rendering; `json` emits the
+/// [`crate::view`] types verbatim — the same structured contract the web API
+/// returns — for scripts and AI agents that drive adroit's CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 /// A snappy tool for managing Architecture Decision Records.
 #[derive(Debug, Parser)]
 // clap 4 can't group subcommands under headings, so the command list is
@@ -14,36 +28,58 @@ use crate::naming::NamingScheme;
 // a "Forge integration" section; the no-forge build omits it (those commands are
 // `#[cfg]`-gated away). The `commands_are_all_grouped` test guards against drift
 // in whichever build runs it.
-#[command(name = "adroit", version, about, max_term_width = 100)]
+// `-h` and `--help` show the SAME concise help (command list + the everyday
+// options); `--help-all` shows every option in full. Implemented with the
+// canonical clap recipe (disable the built-in flag, then HelpShort/HelpLong
+// custom flags); the config-override options carry `hide_short_help` so they
+// appear only under `--help-all`. `max_term_width` caps wrapping on wide
+// terminals (from `cli: tighten --help output`).
+#[command(
+    name = "adroit",
+    version,
+    about,
+    max_term_width = 100,
+    disable_help_flag = true,
+    after_help = "Run `adroit --help-all` to see every option, or `adroit <command> --help` for one command."
+)]
 #[cfg_attr(
     feature = "forge",
     command(help_template = "\
 {about-with-newline}
 {usage-heading} {usage}
 
-Authoring:
-  new           Create a new ADR
+Author a decision:
+  new           Create a new ADR (--interview for an AI Q&A draft)
+  draft         Fill in an existing ADR via the AI interview
+  plan          Draft an AI implementation plan for an ADR
   edit          Open an ADR in your editor ($EDITOR / $VISUAL)
-  set-status    Change an ADR's status (moves the file in by_status)
-  supersede     Mark an older ADR superseded by a newer one
-  set-review    Set or clear an ADR's review deadline
-  review        Generate a review-kickoff doc for an ADR
+  lint          Check one ADR's authoring quality (--ai for a model review)
+  dedupe        Find existing ADRs that overlap a new one
+  related       Find similar ADRs to link (mechanical)
   link          Add or remove a typed link between two ADRs
 
-Browse & inspect:
+Review & decide:
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  summarize     One-paragraph AI TL;DR of an ADR
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+
+Explore the corpus:
   list          List ADRs
   show          Show one ADR by its identifier
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
+  stats         Show repo statistics (status counts, ages, growth)
+  graph         Print the ADR relationship graph
+  ask           Ask the corpus a question (AI answer + citations)
   serve         Serve the read-only web dashboard
 
-Repo health:
+Maintain the repo:
   check         Validate the repo (exits non-zero on problems)
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
-
-Publishing:
   index         Regenerate the ADR section of SUMMARY.md
   publish       Export the accepted ADR set to a directory
 
@@ -68,29 +104,38 @@ Options:
 {about-with-newline}
 {usage-heading} {usage}
 
-Authoring:
-  new           Create a new ADR
+Author a decision:
+  new           Create a new ADR (--interview for an AI Q&A draft)
+  draft         Fill in an existing ADR via the AI interview
+  plan          Draft an AI implementation plan for an ADR
   edit          Open an ADR in your editor ($EDITOR / $VISUAL)
-  set-status    Change an ADR's status (moves the file in by_status)
-  supersede     Mark an older ADR superseded by a newer one
-  set-review    Set or clear an ADR's review deadline
-  review        Generate a review-kickoff doc for an ADR
+  lint          Check one ADR's authoring quality (--ai for a model review)
+  dedupe        Find existing ADRs that overlap a new one
+  related       Find similar ADRs to link (mechanical)
   link          Add or remove a typed link between two ADRs
 
-Browse & inspect:
+Review & decide:
+  set-review    Set or clear an ADR's review deadline
+  review        Generate a review-kickoff doc for an ADR
+  summarize     One-paragraph AI TL;DR of an ADR
+  set-status    Change an ADR's status (moves the file in by_status)
+  supersede     Mark an older ADR superseded by a newer one
+
+Explore the corpus:
   list          List ADRs
   show          Show one ADR by its identifier
   status        Print an ADR's status (lowercase, scriptable)
   search        Search ADRs by title and body
+  stats         Show repo statistics (status counts, ages, growth)
+  graph         Print the ADR relationship graph
+  ask           Ask the corpus a question (AI answer + citations)
   serve         Serve the read-only web dashboard
 
-Repo health:
+Maintain the repo:
   check         Validate the repo (exits non-zero on problems)
   relink        Rewrite cross-ADR links to current locations
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
-
-Publishing:
   index         Regenerate the ADR section of SUMMARY.md
   publish       Export the accepted ADR set to a directory
 
@@ -103,22 +148,44 @@ Options:
 {options}{after-help}")
 )]
 pub struct Cli {
-    /// ADR directory (default: `~/.local/share/adroit/`)
+    // --- Config / repo-selection flags --------------------------------------
+    // `--dir` is the everyday global, shown in the concise help. The on-disk
+    // shape + behavior flags below stay `global` (so they bind on any command,
+    // per `cli: tighten --help output`) but carry `hide_short_help`, so they
+    // surface only under `--help-all` rather than being fully hidden — set them
+    // once via `adroit config` / the `ADROIT_*` env vars.
+    /// ADR directory (overrides config; default `~/.local/share/adroit/`). [env: ADROIT_DIR]
     #[arg(short, long, global = true, env = "ADROIT_DIR")]
     pub dir: Option<PathBuf>,
 
-    // Config-override flags — hidden from help; set these once with
-    // `adroit config set <key> <value>` or via the ADROIT_* env vars.
     /// On-disk format: `markdown` or `frontmatter` (overrides config) [env: ADROIT_FORMAT]
-    #[arg(long, value_enum, global = true, env = "ADROIT_FORMAT", hide = true)]
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_FORMAT",
+        hide_short_help = true
+    )]
     pub format: Option<Format>,
 
     /// Directory layout: `by_status`, `by_category`, or `flat` (overrides config) [env: ADROIT_LAYOUT]
-    #[arg(long, value_enum, global = true, env = "ADROIT_LAYOUT", hide = true)]
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_LAYOUT",
+        hide_short_help = true
+    )]
     pub layout: Option<Layout>,
 
     /// ADR naming scheme: `sequential`, `date`, `uuid`, `per_category` (overrides config) [env: ADROIT_NAMING]
-    #[arg(long, value_enum, global = true, env = "ADROIT_NAMING", hide = true)]
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        env = "ADROIT_NAMING",
+        hide_short_help = true
+    )]
     pub naming: Option<NamingScheme>,
 
     /// Date/lifecycle source: `auto`, `git`, `filesystem` (overrides config) [env: ADROIT_DATE_SOURCE]
@@ -127,7 +194,7 @@ pub struct Cli {
         value_enum,
         global = true,
         env = "ADROIT_DATE_SOURCE",
-        hide = true
+        hide_short_help = true
     )]
     pub date_source: Option<DateSource>,
 
@@ -137,21 +204,51 @@ pub struct Cli {
         value_enum,
         global = true,
         env = "ADROIT_RELINK_SCOPE",
-        hide = true
+        hide_short_help = true
     )]
     pub relink_scope: Option<RelinkScope>,
 
+    // These are NOT `global` (only a few commands use each), but the env var
+    // still binds and they show under `--help-all`.
     /// TUI/serve markdown theme: `default` or `gruvbox` (overrides config) [env: ADROIT_THEME]
-    #[arg(long, value_enum, env = "ADROIT_THEME", hide = true)]
+    #[arg(long, value_enum, env = "ADROIT_THEME", hide_short_help = true)]
     pub theme: Option<MarkdownTheme>,
 
     /// Default template for `new` — a built-in name or path (overrides config) [env: ADROIT_TEMPLATE]
-    #[arg(long, env = "ADROIT_TEMPLATE", hide = true)]
+    #[arg(long, env = "ADROIT_TEMPLATE", hide_short_help = true)]
     pub default_template: Option<String>,
 
     /// Days before a Proposed ADR with no deadline is flagged review-due; `0` disables (overrides config) [env: ADROIT_REVIEW_OVERDUE_DAYS]
-    #[arg(long, env = "ADROIT_REVIEW_OVERDUE_DAYS", hide = true)]
+    #[arg(long, env = "ADROIT_REVIEW_OVERDUE_DAYS", hide_short_help = true)]
     pub review_overdue_days: Option<u32>,
+
+    /// Output format for read verbs: `human` (default) or `json`.
+    ///
+    /// `json` emits the structured `view` types — the same contract the web API
+    /// returns — for scripts and AI agents. Honored by `list` / `show` /
+    /// `search` / `stats` / `graph` / `check`; other verbs ignore it.
+    #[arg(
+        short = 'o',
+        long,
+        value_enum,
+        global = true,
+        default_value_t = OutputFormat::Human,
+        help_heading = "Output"
+    )]
+    pub output: OutputFormat,
+
+    /// Print help — the same concise view for `-h` and `--help`.
+    #[arg(
+        short = 'h',
+        long = "help",
+        action = clap::ArgAction::HelpShort,
+        global = true
+    )]
+    pub help: Option<bool>,
+
+    /// Print help including every option in full detail.
+    #[arg(long = "help-all", action = clap::ArgAction::HelpLong, global = true)]
+    pub help_all: Option<bool>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -173,6 +270,17 @@ pub enum Command {
         /// layout; rejected by the others).
         #[arg(short, long)]
         category: Option<String>,
+        /// Create even if an ADR with this exact title already exists (skip the
+        /// duplicate guard). `new` always allocates a fresh number regardless.
+        #[arg(long)]
+        force: bool,
+        /// Run a short Socratic interview and have the configured AI provider
+        /// draft the ADR body from your answers + the existing corpus. The draft
+        /// is marked `<!-- adroit:ai-suggested -->` for you to review/edit before
+        /// commit. Opt-in; needs `ai.enabled` (build with `--features ai`) or the
+        /// `ADROIT_AI_FAKE` test seam.
+        #[arg(long)]
+        interview: bool,
         /// Also create the linked tracker issue + a draft PR and record their
         /// URLs in `## References` (opt-in; requires a configured `forge`).
         #[cfg(feature = "forge")]
@@ -199,6 +307,18 @@ pub enum Command {
         /// ADR identifier: a number (`9`/`ADR-0009`) under the sequential scheme,
         /// or the slug / uuid prefix under the date / uuid schemes.
         id: String,
+    },
+    /// Summarize an ADR in one paragraph via AI (read-only).
+    ///
+    /// A plain-language TL;DR for a PR description, a chat notification, or a
+    /// decision-log entry. Prints to stdout unless `--out <PATH>`. Needs an AI
+    /// provider (`ai.enabled` with `--features ai`, or the `ADROIT_AI_FAKE` seam).
+    Summarize {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Write the summary to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Print an ADR's current status — lowercase and scriptable, so it feeds
     /// straight into `set-status` or a shell test. Use `show` for the full record.
@@ -311,6 +431,54 @@ pub enum Command {
         #[arg(long)]
         forge: bool,
     },
+    /// Lint an ADR draft for authoring quality (read-only).
+    ///
+    /// Mechanical checks by default — sections still left as their `_…_` prompt,
+    /// no honest negative consequences, only one option considered. `--ai` adds a model
+    /// review against ADR best practices + house style. Exits non-zero on
+    /// mechanical findings; distinct from `check` (structural repo validity).
+    Lint {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Also run an AI review (needs a configured AI provider).
+        #[arg(long)]
+        ai: bool,
+    },
+    /// Print repo statistics: per-status counts, proposed-age rows (review-due
+    /// flagged), and a created-per-period histogram.
+    ///
+    /// `-o json` emits `view::Stats`; the human view is a compact summary.
+    Stats,
+    /// Print the ADR relationship graph — supersession + typed-link edges.
+    ///
+    /// Most useful with `-o json` (`view::Graph`, nodes + edges); the human view
+    /// summarizes counts.
+    Graph,
+    /// Find ADRs textually similar to this one that it isn't already linked to.
+    ///
+    /// Mechanical (TF-IDF over titles + bodies) — no AI. Surfaces ADRs you may
+    /// want to `link`. `-o json` emits the ranked matches.
+    Related {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+    },
+    /// Surface existing ADRs that overlap a (new) one — "did we already decide this?"
+    ///
+    /// Like `related`, but includes already-linked ADRs and is framed for
+    /// catching duplicates before a decision is re-litigated. Mechanical; no AI.
+    Dedupe {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+    },
+    /// Ask a question of the ADR corpus and get an AI answer with citations.
+    ///
+    /// Retrieval is mechanical (TF-IDF over your question); the configured AI
+    /// provider synthesizes the answer, citing the ADRs it used. Read-only;
+    /// `-o json` emits `{answer, sources}`. Needs an AI provider.
+    Ask {
+        /// The natural-language question (quote it).
+        question: String,
+    },
     /// Rewrite cross-ADR relative links to each ADR's current location.
     ///
     /// Fixes links left stale by status-change file moves (run by hand or in
@@ -422,7 +590,10 @@ pub enum Command {
     /// accepted ADR plus an `index.md` to `--out`. Idempotent.
     Publish {
         /// Output directory for the published ADRs.
-        #[arg(short, long)]
+        ///
+        /// Long-only (`--out`); the short `-o` is the global `--output`
+        /// (human/json) selector.
+        #[arg(long)]
         out: PathBuf,
         /// Preview what would be written without writing.
         #[arg(long)]
@@ -454,6 +625,33 @@ pub enum Command {
         id: String,
     },
     /// Generate a review-kickoff doc for an ADR (prints to stdout by default).
+    /// Generate an AI implementation plan for an (accepted) ADR.
+    ///
+    /// Reads the ADR + corpus and asks the configured AI provider for an ordered,
+    /// actionable implementation checklist. Read-only — it never changes the ADR.
+    /// Prints to stdout unless `--out <PATH>` is given. Needs an AI provider
+    /// (`ai.enabled` with a `--features ai` build, or the `ADROIT_AI_FAKE` seam).
+    Plan {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Write the plan to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Run the AI interview on an existing ADR — the after-the-fact `new
+    /// --interview`, for an ADR you created with a plain `new` (template) and want
+    /// filled in before review.
+    ///
+    /// Asks the same Socratic questions, drafts the body, and splices it over the
+    /// prose (identity / status / heading stay mechanical, marked
+    /// `<!-- adroit:ai-suggested -->`), then opens your editor. Needs an AI provider.
+    Draft {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// Do not open the editor after drafting.
+        #[arg(long)]
+        no_edit: bool,
+    },
     Review {
         /// ADR number to generate a review kickoff for.
         number: u32,
@@ -464,8 +662,11 @@ pub enum Command {
         #[arg(long)]
         quorum: Option<u32>,
         /// Write the generated doc to this path instead of stdout.
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        ///
+        /// Long-only (`--out`); the short `-o` / `--output` is the global
+        /// human/json result-format selector.
+        #[arg(long)]
+        out: Option<PathBuf>,
         /// Also post the kickoff as a comment on the ADR's linked issue/PR.
         #[cfg(feature = "forge")]
         #[arg(long)]

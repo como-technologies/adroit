@@ -1,4 +1,9 @@
 pub mod adr;
+// AI authoring: the trait, value types, FakeProvider, and interview logic are
+// always compiled; the rig-backed adapter is gated behind the `ai` feature (the
+// facade falls back to None/the ADROIT_AI_FAKE seam when ai is off).
+pub mod ai;
+pub mod ai_hook;
 pub mod cli;
 pub mod config;
 pub mod format;
@@ -12,9 +17,11 @@ pub mod git;
 pub mod history;
 pub mod index;
 pub mod links;
+pub mod lint;
 pub mod naming;
 pub mod publish;
 pub mod query;
+pub mod similar;
 pub mod store;
 pub mod template;
 #[cfg(feature = "tui")]

@@ -12,6 +12,22 @@ fn adroit(dir: &TempDir) -> Command {
     cmd.arg("--dir").arg(dir.path());
     // Never block on an editor in tests.
     cmd.env("EDITOR", "true").env("VISUAL", "true");
+    // Hermetic AI config. Run in the temp dir so the binary's `dotenvy` load
+    // can't discover a developer's repo-root `.env` (e.g. a dogfooding
+    // `ADROIT_AI_*`), and drop any inherited AI env. Otherwise the
+    // "no provider configured" tests reach a real provider whenever one happens
+    // to be set up locally. Tests that want a provider set `ADROIT_AI_FAKE`
+    // explicitly, which takes precedence regardless.
+    cmd.current_dir(dir.path());
+    for var in [
+        "ADROIT_AI_ENABLED",
+        "ADROIT_AI_PROVIDER",
+        "ADROIT_AI_MODEL",
+        "ADROIT_AI_HOST",
+        "ADROIT_ANTHROPIC_KEY",
+    ] {
+        cmd.env_remove(var);
+    }
     cmd
 }
 
@@ -935,7 +951,7 @@ fn review_writes_output_file() {
     let out = dir.path().join("kickoff.md");
     adroit(&dir)
         .args(["review", "1", "--quorum", "5", "--days", "5"])
-        .arg("--output")
+        .arg("--out")
         .arg(&out)
         .assert()
         .success()
@@ -2315,4 +2331,712 @@ fn init_yes_writes_config_env_template_and_hook() {
     let hook = repo.join(".git").join("hooks").join("pre-commit");
     assert!(hook.exists(), "pre-commit hook not installed");
     assert!(fs::read_to_string(&hook).unwrap().contains("adroit check"));
+}
+
+// ---------------------------------------------------------------------------
+// `-o json` output for the read verbs (agent-consumable CLI)
+// ---------------------------------------------------------------------------
+
+/// Run `args` against `dir`, assert success, and parse stdout as JSON.
+fn json_ok(dir: &TempDir, args: &[&str]) -> serde_json::Value {
+    let out = adroit(dir).args(args).assert().success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("`{args:?}` did not emit valid JSON: {e}\n{text}"))
+}
+
+#[test]
+fn list_json_emits_array_of_summaries() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "First decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Second decision", "--no-edit"])
+        .assert()
+        .success();
+
+    let v = json_ok(&dir, &["list", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(2));
+    assert_eq!(v[0]["reference"], "ADR-0001");
+    assert_eq!(v[0]["title"], "First decision");
+    assert_eq!(v[0]["status"], "Proposed");
+}
+
+#[test]
+fn list_json_empty_repo_is_empty_array() {
+    let dir = TempDir::new().unwrap();
+    let v = json_ok(&dir, &["list", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(0));
+}
+
+#[test]
+fn show_json_emits_detail_object() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Only decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["show", "1", "-o", "json"]);
+    // AdrDetail flattens the summary to the top level alongside `body`.
+    assert_eq!(v["reference"], "ADR-0001");
+    assert_eq!(v["title"], "Only decision");
+    assert!(v["body"].is_string(), "detail JSON carries the raw body");
+}
+
+#[test]
+fn search_json_emits_matching_array() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt Postgres", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Adopt Redis", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["search", "Postgres", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(1));
+    assert_eq!(v[0]["title"], "Adopt Postgres");
+}
+
+#[test]
+fn stats_json_has_totals_and_status_breakdown() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["stats", "-o", "json"]);
+    assert_eq!(v["total"], 1);
+    assert!(v["by_status"].is_array());
+}
+
+#[test]
+fn graph_json_has_nodes_and_edges() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["graph", "-o", "json"]);
+    assert_eq!(v["nodes"].as_array().map(|a| a.len()), Some(1));
+    assert!(v["edges"].is_array());
+}
+
+#[test]
+fn check_json_clean_repo_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["check", "-o", "json"]);
+    assert_eq!(v["checked"], 1);
+    assert_eq!(v["problems"].as_array().map(|a| a.len()), Some(0));
+}
+
+#[test]
+fn check_json_broken_link_emits_json_and_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    // Inject a broken cross-ADR link (ADR-0099 doesn't exist) → Error severity.
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let mut body = fs::read_to_string(&file).unwrap();
+    body.push_str("\nSee [ADR-0099](./0099-ghost.md) for context.\n");
+    fs::write(&file, body).unwrap();
+
+    // The CI gate still holds (non-zero exit), but stdout is still valid JSON.
+    let out = adroit(&dir)
+        .args(["check", "-o", "json"])
+        .assert()
+        .failure();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("check -o json must emit JSON even on failure: {e}\n{text}"));
+    assert!(
+        !v["problems"].as_array().unwrap().is_empty(),
+        "expected the broken link to be reported as a problem"
+    );
+}
+
+#[test]
+fn read_verbs_default_to_human_output() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "A decision", "--no-edit"])
+        .assert()
+        .success();
+    // No -o flag → human table (header line), not JSON.
+    adroit(&dir)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Status"))
+        .stdout(predicate::str::starts_with("[").not());
+}
+
+// ---------------------------------------------------------------------------
+// `new --interview` (AI-assisted authoring; FakeProvider via ADROIT_AI_FAKE)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_interview_drafts_body_but_keeps_mechanical_heading_and_status() {
+    let dir = TempDir::new().unwrap();
+    let canned = "## Context and Problem Statement\n\nDrafted by the fake provider.\n\n\
+                  ## Decision Outcome\n\nChosen option: **A**.";
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--interview", "--no-edit"])
+        .env("ADROIT_AI_FAKE", canned)
+        .write_stdin("ctx\ndrivers\noptions\nrisks\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"));
+
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    // Identity + status stay mechanical; the AI prose lands under the marker.
+    assert!(
+        body.contains("# ADR-0001: Adopt feature flags"),
+        "heading preserved"
+    );
+    assert!(body.contains("## Status"), "status section preserved");
+    assert!(
+        body.contains("<!-- adroit:ai-suggested -->"),
+        "AI marker present"
+    );
+    assert!(
+        body.contains("Drafted by the fake provider."),
+        "AI prose present"
+    );
+
+    // The result is a valid repo and the status getter still works.
+    adroit(&dir).arg("check").assert().success();
+    adroit(&dir)
+        .args(["status", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("proposed"));
+}
+
+#[test]
+fn new_interview_without_a_provider_keeps_the_plain_template() {
+    let dir = TempDir::new().unwrap();
+    // No ADROIT_AI_FAKE and no provider configured → degrade gracefully. The
+    // wording differs by build (lacking the `ai` feature vs. AI not enabled),
+    // but both keep the plain template — assert that shared, on-point phrase.
+    adroit(&dir)
+        .args(["new", "Some decision", "--interview", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("could not run")
+                .and(predicate::str::contains("plain template")),
+        );
+    // The ADR still exists and is valid (the plain template).
+    adroit(&dir).arg("check").assert().success();
+}
+
+// ---------------------------------------------------------------------------
+// `adroit plan` (AI implementation plan; read-only; FakeProvider seam)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plan_generates_an_implementation_plan_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["plan", "1"])
+        .env("ADROIT_AI_FAKE", "## Implementation Plan\n\n- [ ] Step one")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Implementation Plan"))
+        .stdout(predicate::str::contains("Step one"));
+    // Read-only: the ADR is untouched and the repo stays valid.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn plan_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["plan", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+// ---------------------------------------------------------------------------
+// `adroit lint` (authoring-quality checks; read-only)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_flags_a_fresh_template_and_exits_nonzero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["lint", "1"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("still holds only its prompt"));
+}
+
+#[test]
+fn lint_json_emits_findings_on_stdout() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    let out = adroit(&dir)
+        .args(["lint", "1", "-o", "json"])
+        .assert()
+        .failure();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(!v.as_array().unwrap().is_empty());
+    assert_eq!(v[0]["source"], "mechanical");
+}
+
+#[test]
+fn lint_passes_a_complete_adr() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    // Overwrite with a fully-filled ADR (no placeholders, 2 options, real downside).
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    fs::write(
+        &file,
+        "# ADR-0001: Adopt feature flags\n\n> State: Proposed\n\n## Status\n\nProposed\n\n\
+         ## Stakeholders\n\n- Platform team\n\n## Context and Problem Statement\n\n\
+         We ship risky changes and want to decouple deploy from release.\n\n\
+         ## Considered Options\n\n1. Feature flags\n2. Long-lived branches\n\n\
+         ## Decision Outcome\n\nChosen: feature flags, to decouple deploy from release.\n\n\
+         ### Negative Consequences\n\n- Flag debt accumulates and needs periodic cleanup.\n",
+    )
+    .unwrap();
+    adroit(&dir)
+        .args(["lint", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no lint findings"));
+}
+
+#[test]
+fn lint_ai_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["lint", "1", "--ai"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+// ---------------------------------------------------------------------------
+// `adroit summarize` (one-paragraph AI TL;DR; read-only)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summarize_prints_the_tldr_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["summarize", "1"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "A crisp one-paragraph TL;DR of the decision.",
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("A crisp one-paragraph TL;DR"));
+    // Read-only.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn summarize_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["summarize", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+// ---------------------------------------------------------------------------
+// `adroit related` / `dedupe` (mechanical TF-IDF similarity; read-only)
+// ---------------------------------------------------------------------------
+
+/// Three ADRs (two about databases, one about the frontend) with topical bodies.
+fn three_topical_adrs(dir: &TempDir) {
+    for t in [
+        "Adopt PostgreSQL datastore",
+        "Use Redis cache database",
+        "Pick Vue frontend UI",
+    ] {
+        adroit(dir).args(["new", t, "--no-edit"]).assert().success();
+    }
+    for f in adr_files(dir.path()) {
+        let name = f.file_name().unwrap().to_str().unwrap().to_string();
+        let extra = if name.contains("postgresql") {
+            "relational postgresql database storage sql persistence datastore"
+        } else if name.contains("redis") {
+            "redis caching database in-memory storage lookups persistence"
+        } else {
+            "vue react frontend browser dashboard interface components"
+        };
+        let mut body = fs::read_to_string(&f).unwrap();
+        body.push_str(&format!("\n{extra}\n"));
+        fs::write(&f, body).unwrap();
+    }
+}
+
+#[test]
+fn related_ranks_the_topically_similar_adr_first() {
+    let dir = TempDir::new().unwrap();
+    three_topical_adrs(&dir);
+    let out = adroit(&dir)
+        .args(["related", "1", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let arr = v.as_array().unwrap();
+    assert!(!arr.is_empty());
+    // The other database ADR (ADR-0002) outranks the frontend one (ADR-0003).
+    assert_eq!(v[0]["reference"], "ADR-0002");
+    assert!(v[0]["score"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn dedupe_emits_ranked_json() {
+    let dir = TempDir::new().unwrap();
+    three_topical_adrs(&dir);
+    let out = adroit(&dir)
+        .args(["dedupe", "1", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(v[0]["title"].is_string() && v[0]["score"].is_number());
+}
+
+#[test]
+fn related_on_a_single_adr_is_empty() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Lonely decision", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["related", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No unlinked related ADRs"));
+}
+
+// ---------------------------------------------------------------------------
+// `adroit ask` (mechanical retrieval + AI answer with citations)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ask_answers_with_retrieved_sources_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt PostgreSQL datastore", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Use Vue frontend", "--no-edit"])
+        .assert()
+        .success();
+    for f in adr_files(dir.path()) {
+        let name = f.file_name().unwrap().to_str().unwrap().to_string();
+        let extra = if name.contains("postgresql") {
+            "relational postgresql database storage acid durability"
+        } else {
+            "vue frontend browser dashboard interface"
+        };
+        let mut b = fs::read_to_string(&f).unwrap();
+        b.push_str(&format!("\n{extra}\n"));
+        fs::write(&f, b).unwrap();
+    }
+    let out = adroit(&dir)
+        .args(["ask", "Which database did we choose?", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "PostgreSQL, per the datastore ADR.")
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["answer"], "PostgreSQL, per the datastore ADR.");
+    // The database ADR is among the retrieved sources.
+    let sources = v["sources"].as_array().unwrap();
+    assert!(sources.iter().any(|s| s == "ADR-0001"));
+}
+
+#[test]
+fn ask_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["ask", "anything?"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+// ---------------------------------------------------------------------------
+// Help model: -h == --help (concise); --help-all is the full reference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn h_and_help_are_identical_and_concise_help_all_is_full() {
+    let bin = || Command::cargo_bin("adroit").unwrap();
+    let h = bin().arg("-h").output().unwrap();
+    let help = bin().arg("--help").output().unwrap();
+    assert!(h.status.success() && help.status.success());
+    // -h and --help render the exact same (concise) help.
+    assert_eq!(h.stdout, help.stdout, "`-h` and `--help` must be identical");
+
+    let concise = String::from_utf8(h.stdout).unwrap();
+    assert!(
+        concise.contains("Author a decision:"),
+        "concise help lists commands grouped by workflow stage"
+    );
+    assert!(
+        !concise.contains("--relink-scope"),
+        "concise help must NOT dump the repo-shape options"
+    );
+
+    let all = String::from_utf8(bin().arg("--help-all").output().unwrap().stdout).unwrap();
+    assert!(
+        all.contains("--relink-scope") && all.contains("--layout"),
+        "--help-all lists every option"
+    );
+}
+
+#[test]
+fn subcommand_h_and_help_also_match() {
+    let bin = || Command::cargo_bin("adroit").unwrap();
+    let h = bin().args(["new", "-h"]).output().unwrap();
+    let help = bin().args(["new", "--help"]).output().unwrap();
+    assert!(h.status.success() && help.status.success());
+    assert_eq!(
+        h.stdout, help.stdout,
+        "`new -h` and `new --help` must match"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `new` duplicate-title guard (non-idempotent, but catches the accidental re-run)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_duplicate_title_warns_but_proceeds_non_interactive() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    // Non-interactive (assert_cmd has no TTY): warn + proceed, still allocating 0002.
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already use this title"))
+        .stderr(predicate::str::contains("ADR-0001"));
+    let v = json_ok(&dir, &["list", "-o", "json"]);
+    assert_eq!(v.as_array().map(|a| a.len()), Some(2));
+}
+
+#[test]
+fn new_force_skips_the_dup_guard() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit", "--force"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already use this title").not());
+}
+
+#[test]
+fn new_unique_title_has_no_dup_warning() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Use a message queue", "--no-edit"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already use this title").not());
+}
+
+#[test]
+fn new_interview_keeps_template_when_the_ai_call_fails() {
+    let dir = TempDir::new().unwrap();
+    // `__ERROR__` makes the fake provider fail (simulating an API credit/network error).
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--interview", "--no-edit"])
+        .env("ADROIT_AI_FAKE", "__ERROR__")
+        .write_stdin("ctx\ndrivers\noptions\nrisks\n")
+        .assert()
+        .success() // NOT an error exit — the ADR is created from the template
+        .stderr(predicate::str::contains("AI draft failed"));
+    // The ADR exists, is valid, and kept the template (no AI marker).
+    adroit(&dir).arg("check").assert().success();
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    assert!(body.contains("# ADR-0001: Adopt feature flags"));
+    assert!(
+        !body.contains("adroit:ai-suggested"),
+        "no AI draft on failure"
+    );
+}
+
+#[test]
+fn check_warns_on_duplicate_titles_but_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--no-edit", "--force"])
+        .assert()
+        .success();
+    // A warning (not an error): reported on stderr, but `check` still exits 0.
+    adroit(&dir)
+        .arg("check")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("duplicate title"))
+        .stdout(predicate::str::contains("warning"));
+    let v = json_ok(&dir, &["check", "-o", "json"]);
+    assert!(
+        v["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "duplicate_title" && p["severity"] == "warning")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `adroit draft <ID>` — AI-complete an existing template ADR
+// ---------------------------------------------------------------------------
+
+#[test]
+fn draft_fills_an_existing_template_adr_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Heal on main", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "## Context and Problem Statement\n\nDrafted by the fake.\n\n\
+             ## Decision Outcome\n\nChosen: relink on main.",
+        )
+        // `draft` runs the same interview as `new --interview` (4 questions).
+        .write_stdin("ctx\ndrivers\noptions\nrisks\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("AI-drafted"));
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    assert!(body.contains("# ADR-0001: Heal on main"), "heading kept");
+    assert!(body.contains("## Status"), "status kept");
+    assert!(body.contains("adroit:ai-suggested"));
+    assert!(body.contains("Drafted by the fake."));
+    assert!(
+        !body.contains("What should drive the choice"),
+        "the template's post-Context prompts are replaced by the AI draft"
+    );
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn draft_shows_cost_estimate_and_journals_the_raw_draft() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt CQRS", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "## Context and Problem Statement\n\nFake.\n\n## Decision Outcome\n\nChosen: CQRS.",
+        )
+        .write_stdin("c\nd\no\nr\n")
+        .assert()
+        .success()
+        // the one-line pre-call cost notice …
+        .stderr(predicate::str::contains("input tokens"))
+        // … and the raw draft is journaled to a `.draft` sidecar.
+        .stderr(predicate::str::contains("journaled"));
+    // Exactly one `.md.draft` sidecar exists next to the ADR …
+    let sidecars = fs::read_dir(dir.path().join("proposed"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "draft"))
+        .count();
+    assert_eq!(
+        sidecars, 1,
+        "the raw draft is journaled to one .draft sidecar"
+    );
+    // … and the store ignores it (not an ADR): the repo still validates.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn draft_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
 }

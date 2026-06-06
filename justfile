@@ -7,8 +7,11 @@ init:
     rustup component add clippy rustfmt
     cargo install cargo-watch mdbook cargo-outdated cargo-edit cargo-audit
 
-# Run all CI checks (used by .github/workflows/ci.yml)
-ci: fmt-check lint lint-forge lint-web test test-forge test-web book crate-outdated crate-audit
+# Run all CI checks (used by .github/workflows/ci.yml). `ai`+`forge` are default
+# features now, so the plain `lint`/`test` cover them; `lint-core`/`test-core`
+# guard the `--no-default-features` core (no tui/ai/forge — stays tokio-free), and
+# `lint-web`/`test-web` cover the opt-in web feature.
+ci: fmt-check lint-core lint lint-web test-core test test-web book crate-outdated crate-audit
 
 # Format code
 fmt:
@@ -18,9 +21,14 @@ fmt:
 fmt-check:
     cargo fmt --check
 
-# Run clippy lints
+# Run clippy lints (default features: tui + ai + forge)
 lint:
     cargo clippy -- -D warnings
+
+# Clippy the bare core (no tui/ai/forge) — guards the layering: the lib + CLI must
+# build with NO ratatui/crossterm, NO rig/tokio, NO ureq.
+lint-core:
+    cargo clippy --no-default-features -- -D warnings
 
 # Run clippy with the forge feature (GitHub/GitLab adapters)
 lint-forge:
@@ -30,9 +38,22 @@ lint-forge:
 lint-web:
     cargo clippy --features web -- -D warnings
 
-# Run all tests
+# Run clippy with the ai feature (rig-backed Anthropic/Ollama adapter)
+lint-ai:
+    cargo clippy --features ai -- -D warnings
+
+# Build the bare core: no tui/ai/forge (the minimal, tokio-free CLI).
+build-core:
+    cargo build --no-default-features
+
+# Run all tests (default features: tui + ai + forge)
 test *ARGS:
     cargo test {{ARGS}}
+
+# Test the bare core (no tui/ai/forge) — exercises the `#[cfg(not(feature=…))]`
+# paths (e.g. forge verbs absent) that the default build compiles out.
+test-core *ARGS:
+    cargo test --no-default-features {{ARGS}}
 
 # Run tests with the forge feature enabled
 test-forge *ARGS:
@@ -42,6 +63,11 @@ test-forge *ARGS:
 # Builds without a Vue SPA present (the embed dir has a .gitkeep).
 test-web *ARGS:
     cargo test --features web {{ARGS}}
+
+# Run tests with the ai feature enabled (rig-backed adapter compiles + the
+# always-on interview flow). Live calls still need a key/Ollama at runtime.
+test-ai *ARGS:
+    cargo test --features ai {{ARGS}}
 
 # Run only unit tests (skip integration tests)
 unit:

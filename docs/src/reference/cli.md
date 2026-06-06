@@ -4,9 +4,18 @@
 
 ### Repo selection
 
-Global — inherited by every subcommand and shown under **Repo selection** in each
-`--help`. They work before *or* after the subcommand (`adroit --dir X list` and
-`adroit list --dir X` are equivalent).
+`--dir` is **global** — inherited by every subcommand, shown under **Repo
+selection** in each `--help`, and accepted before *or* after the subcommand
+(`adroit --dir X list` and `adroit list --dir X` are equivalent).
+
+The on-disk **shape** flags below (`--format`, `--layout`, `--naming`,
+`--date-source`, `--relink-scope`) are also **global** — accepted before *or*
+after the subcommand (`adroit --format frontmatter migrate` and `adroit migrate
+--format frontmatter` are equivalent) — but **hidden** from the concise `-h` /
+`--help` so the default help stays a clean command list. They surface on `adroit
+--help-all` (the full reference). Most teams set them once via `config` / `.env`
+(the `ADROIT_*` env var binds everywhere regardless of position) rather than
+passing them per-command.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -21,8 +30,8 @@ Global — inherited by every subcommand and shown under **Repo selection** in e
 
 Top-level only — pass them *before* the subcommand (e.g. `adroit --theme gruvbox`)
 or, more usually, set them in config / `.env`. The environment variable binds
-everywhere regardless; only the flag is kept off each subcommand's `--help`,
-since just a few commands use each.
+everywhere regardless; the flag is kept off the concise help (it's under
+`--help-all`), since just a few commands use each.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -30,7 +39,27 @@ since just a few commands use each.
 | `--review-overdue-days <N>` | `30` | Days after which a Proposed ADR with no `review_by` is flagged review-due; `0` disables. Used by `list`/`stats`/`check` (env: `ADROIT_REVIEW_OVERDUE_DAYS`; overrides config) |
 | `--default-template <name\|path>` | `madr` | Default template for `new` — `madr`/`nygard` or a path (env: `ADROIT_TEMPLATE`; overrides config; `new --template` still wins) |
 
-`--version` / `--help` (`-h` for a short summary) are available everywhere.
+### Help
+
+`-h` and `--help` show the **same concise** view — the command list plus the
+everyday options (`--dir`, `--output`). **`--help-all`** adds every option in
+full detail (the repo-shape + command-default flags above, with their possible
+values). Both work on the top level and on each subcommand (`adroit new --help`
+vs `adroit new --help-all`). `--version` prints the version.
+
+### Output
+
+Global — works before *or* after any verb (`adroit list -o json`). Selects how the
+**read** verbs print their result.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-o`, `--output <human\|json>` | `human` | Result format for `list` / `show` / `search` / `stats` / `graph` / `check`. `json` emits the structured `view` types — the same contract the web API returns — for scripts and AI agents. Other verbs ignore it. |
+
+`json` goes to **stdout**; warnings/errors go to **stderr**. `check -o json` still
+exits non-zero on an Error-severity problem, so a CI gate or agent can branch on
+the exit code while parsing the report from stdout. See
+[Automation & AI](../usage/automation.md).
 
 Each also reads from an environment variable, so you don't have to pass it on
 every command: `ADROIT_DIR`, `ADROIT_FORMAT`, `ADROIT_LAYOUT`, `ADROIT_THEME`,
@@ -61,7 +90,11 @@ match, or run [`adroit migrate`](#adroit-migrate-yes) to convert the repo.
 
 ## Commands
 
-### `adroit new <TITLE>`
+These mirror `adroit --help`, grouped by workflow stage — reading top to bottom tracks a decision's life.
+
+### Author a decision
+
+#### `adroit new <TITLE>`
 
 Create a new ADR with the given title. The ADR directory is created automatically if it doesn't exist. In markdown mode the file is scaffolded from a template and written into the `proposed/` directory, then opened in your editor.
 
@@ -69,6 +102,7 @@ Create a new ADR with the given title. The ADR directory is created automaticall
 adroit new "Use PostgreSQL for primary datastore"
 adroit new "Use Redis" --template nygard   # pick a template by name or path
 adroit new "Use Redis" --no-edit           # skip opening the editor
+adroit new "Adopt feature flags" --interview   # AI drafts the body from a short Q&A
 ```
 
 | Flag | Description |
@@ -76,8 +110,238 @@ adroit new "Use Redis" --no-edit           # skip opening the editor
 | `--template <name\|path>` | Template to scaffold from (`madr`, `nygard`, or a file path) |
 | `--no-edit` | Do not open the editor after creating the ADR |
 | `--category <name>` / `-c` | Category subdirectory — **required** under the `by_category` layout, rejected otherwise |
+| `--force` | Create even if an ADR with this exact title already exists (skip the duplicate guard) |
+| `--interview` | Run a short Socratic interview and have the configured AI provider draft the body from your answers + the existing corpus (opt-in). See [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring) |
 
-### `adroit list [--status <STATUS>]`
+**Duplicate guard.** `new` is an imperative event — it always allocates the next
+number, so it is **not** idempotent (running it twice makes two ADRs). To catch
+the *accidental* re-run, it checks for an ADR with the same (case-insensitive)
+title first: it warns and lists the match plus the most similar existing ADRs
+(via the same engine as [`dedupe`](#adroit-related-id--adroit-dedupe-id)), then,
+on a terminal, prompts `[y/N]` before creating. On a non-terminal (scripts/CI) it
+warns and proceeds; `--force` skips the check entirely.
+
+With `--interview`, the identity, status, and heading stay mechanical — the AI
+only writes the prose sections, marked `<!-- adroit:ai-suggested -->` for you to
+review and edit before committing. If no provider is configured it degrades to
+the plain template (the ADR is still created).
+
+#### `adroit draft <ID>`
+
+The **after-the-fact `new --interview`**: run the same AI interview on an ADR you
+already created. Use it when you made an ADR with a plain `adroit new "Title"`
+(a bare template) and want to fill it in later — at any point before review.
+
+It asks the same Socratic questions, drafts the body from your answers + the
+corpus, and **splices** it over the prose — the `# ADR-NNNN` heading and
+`## Status` stay mechanical — marks it `<!-- adroit:ai-suggested -->`, then opens
+your editor. So the iterative flow is: `new` → (`draft` whenever you want AI help)
+→ `edit` / hand-tune → PR. Needs an AI provider (no template fallback, since the
+ADR already exists).
+
+```sh
+adroit draft 2            # interview + draft ADR-0002, then open the editor to review
+adroit draft 2 --no-edit  # draft it without opening the editor
+```
+
+| Flag | Description |
+|---|---|
+| `--no-edit` | Do not open the editor after drafting |
+
+#### `adroit plan <ID>`
+
+Draft an **AI implementation plan** for an (accepted) ADR: reads the ADR + the
+existing corpus and asks the configured AI provider for an ordered, actionable
+checklist (steps, components touched, testing, rollout, risks). **Read-only** —
+it never modifies the ADR. Prints to stdout unless `--out <PATH>` is given. Needs
+an AI provider — see [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring).
+
+```sh
+adroit plan 21                       # print the plan
+adroit plan 21 --out plan-0021.md    # write it to a file
+```
+
+| Flag | Description |
+|---|---|
+| `--out <PATH>` | Write the plan to a file instead of stdout |
+
+#### `adroit edit <ID>`
+
+Open an ADR in your editor (`<ID>` resolved as in [`show`](#adroit-show-id)).
+
+```sh
+adroit edit 1
+```
+
+adroit finds your editor using this precedence chain:
+
+1. The `$VISUAL` or `$EDITOR` environment variable (session override)
+2. The `editor` field in `config.yaml` (see [Configuration](#configuration))
+3. Auto-detection — probes your PATH for common editors (nano, vim, nvim, VS Code, etc.)
+4. Interactive prompt — if nothing is detected and you're in a terminal, adroit asks you to choose from the editors installed on your system. Your choice is saved to `config.yaml` so you're only asked once.
+
+#### `adroit lint <ID>`
+
+Check one ADR's **authoring quality** (read-only) — distinct from `check`, which
+validates structural repo integrity. The mechanical checks need no AI: sections
+still left as their italic `_…_` prompt, a missing or empty
+`### Negative Consequences`, and fewer than two `## Considered Options`. The
+prompt check is template-agnostic — any section whose only content is the prompt
+the template shipped. `--ai` adds a model review against ADR best
+practices + house style (needs a provider; see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)). Exits
+**non-zero** on mechanical findings, so it works as an authoring gate; the AI
+review is advisory. `-o json` emits the findings.
+
+```sh
+adroit lint 21            # mechanical checks
+adroit lint 21 --ai       # + an AI review
+adroit lint 21 -o json    # structured findings for an editor/agent
+```
+
+| Flag | Description |
+|---|---|
+| `--ai` | Also run an AI review (needs a configured AI provider) |
+
+#### `adroit related <ID>` / `adroit dedupe <ID>`
+
+Find ADRs textually similar to a given one — **mechanical** (TF-IDF cosine over
+titles + bodies), no AI and no provider. `related` surfaces similar ADRs the
+target **isn't already linked to** (candidates to `link`); `dedupe` includes the
+linked ones and is framed for catching "did we already decide this?" before a new
+ADR re-litigates a decision. Read-only; `-o json` emits the ranked matches
+(`reference`, `title`, `score`).
+
+```sh
+adroit related 21            # similar ADRs you might want to link
+adroit dedupe 21 -o json     # overlaps as JSON, highest score first
+```
+
+> Similarity is lexical for now (shared significant terms); a semantic
+> (embeddings) upgrade is future work.
+
+#### `adroit link <ID> <--relates-to|--depends-on|--refines> <TARGET>`
+
+Add (or remove with `--remove`) a **typed relational link** from `<ID>` to
+`<TARGET>` (both addressed as in [`show`](#adroit-show-id)). Exactly one of the
+three kind flags names the target. The link is recorded in `<ID>`'s frontmatter,
+listed by `adroit show`, and drawn as a distinct edge in the dashboard's
+relationship graph. Adding validates that the target exists.
+
+This is a **frontmatter-profile** feature; under the markdown profile it errors
+with a hint to run `adroit --format frontmatter migrate`. See
+[ADR Format → Relationships](./adr-format.md#relationships).
+
+```sh
+adroit link 6 --depends-on 2          # ADR-0006 depends on ADR-0002
+adroit link 6 --relates-to 4
+adroit link 6 --refines 3
+adroit link 6 --depends-on 2 --remove
+```
+
+| Flag | Description |
+|---|---|
+| `--relates-to <TARGET>` | A non-directional related link |
+| `--depends-on <TARGET>` | This ADR depends on the target |
+| `--refines <TARGET>` | This ADR refines / elaborates the target |
+| `--remove` | Remove the link instead of adding it |
+
+### Review & decide
+
+#### `adroit set-review <ID> <DATE>`
+
+Set (or clear) an ADR's **review deadline** as an ISO-8601 `YYYY-MM-DD` date. A
+still-`Proposed` ADR whose deadline has passed is flagged **review-due** in
+`stats` and the web dashboard's "Review due" panel.
+
+In markdown mode this writes a `Review by: <date>` line into the `## Status`
+region (format-preserving — only that line changes). In frontmatter mode it sets
+the optional `review_by` field. Pass `--clear` to remove the deadline.
+
+```sh
+adroit set-review 3 2026-07-15   # propose a review by July 15
+adroit set-review 3 --clear      # remove the deadline
+```
+
+| Flag | Description |
+|---|---|
+| `--clear` | Remove the review deadline instead of setting one |
+
+#### `adroit review <NUMBER>`
+
+Generate a **review-kickoff** document for an ADR — the doc the team writes when
+opening an ADR for formal review. It mirrors the hand-written artifact: an H1
+with the date and ADR number, a "What you're being asked to do" section, a
+**Key docs** table (the ADR, the ADR README, the review-process guide), the
+review timeline and quorum, what happens on the decision date, and a collapsible
+"What the MR changes" block. Placeholders (`[TODO: ...]`) are left for the
+proposer to fill in.
+
+This is **pure generation** — it performs no git operations and does not modify
+the ADR. The ADR is resolved by number through the store, so it works in
+by-status mode and errors cleanly if the number isn't found. Because the kickoff
+doc is built around the ADR number, `review` is **numeric-only** (requires a
+`sequential`/`per_category` scheme).
+
+Dates are computed from today using business days (weekends skipped):
+the review period runs from today to today + `--days` business days, and the
+decision date is the next business day after that.
+
+```sh
+adroit review 1                              # print to stdout
+adroit review 1 --days 5 --quorum 3          # 5-business-day window, quorum 3
+adroit review 1 --out review-kickoff.md      # write to a file
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--days <N>` | config `review_days` (3) | Review period length in business days |
+| `--quorum <N>` | config `review_quorum` (3) | Number of approvals required |
+| `--out <PATH>` | — | Write the doc to a file instead of stdout (long-only; `-o`/`--output` is the global result-format selector) |
+
+#### `adroit summarize <ID>`
+
+A one-paragraph, plain-language **AI TL;DR** of an ADR — for a PR description, a
+chat notification, or a decision-log entry. Read-only; prints to stdout unless
+`--out <PATH>`. Needs an AI provider (see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)).
+
+```sh
+adroit summarize 21
+adroit summarize 21 --out tldr.md
+```
+
+#### `adroit set-status <ID> <STATUS>`
+
+Set the lifecycle status of an ADR (`<ID>` resolved as in [`show`](#adroit-show-id)).
+Status names are case-insensitive. In by-status markdown mode this **moves the
+file** to the matching status directory and rewrites the `## Status` section
+(minimal-diff), then reconciles cross-ADR links per
+[`relink_scope`](#configuration). Mirrors [`set-review`](#adroit-set-review-id-date).
+
+Valid statuses: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
+
+```sh
+adroit set-status 1 accepted
+```
+
+#### `adroit supersede <NEW> <OLD>`
+
+Mark `<OLD>` as superseded by `<NEW>` in one command (each addressed as in
+[`show`](#adroit-show-id)): moves the old ADR to `superseded/` (or rewrites its
+status in place under `by_category`), writes `Superseded by [<NEW>](...)` into
+its status, and adds a reciprocal `Supersedes [<OLD>](...)` note to the new ADR.
+Works under every naming scheme — the supersession links carry the scheme's
+reference (a number or a slug).
+
+```sh
+adroit supersede 6 2                 # sequential
+adroit supersede 20260601-b 20260515-a   # date scheme
+```
+
+### Explore the corpus
+
+#### `adroit list [--status <STATUS>]`
 
 List ADRs as a table showing number, status, and title. Recurses into all status directories in by-status mode. Pass `--status` to filter.
 
@@ -86,7 +350,7 @@ adroit list
 adroit list --status accepted
 ```
 
-### `adroit show <ID>`
+#### `adroit show <ID>`
 
 Display a single ADR: its status, creation and
 last-modified dates, supersession links, path, body, and — when the repo is a
@@ -108,7 +372,7 @@ move git records. Outside a git repository adroit falls back to the file's
 modification time, and the timeline is omitted. See
 [ADR Format](./adr-format.md#dates-come-from-git).
 
-### `adroit status <ID>`
+#### `adroit status <ID>`
 
 Print an ADR's current status — just the word, **lowercase** (`<ID>` resolved as
 in [`show`](#adroit-show-id)). It's a focused, scriptable getter: the output
@@ -121,88 +385,83 @@ adroit status 1            # -> proposed
 [ "$(adroit status 1)" = accepted ] && echo "ready to publish"
 ```
 
-### `adroit set-status <ID> <STATUS>`
-
-Set the lifecycle status of an ADR (`<ID>` resolved as in [`show`](#adroit-show-id)).
-Status names are case-insensitive. In by-status markdown mode this **moves the
-file** to the matching status directory and rewrites the `## Status` section
-(minimal-diff), then reconciles cross-ADR links per
-[`relink_scope`](#configuration). Mirrors [`set-review`](#adroit-set-review-id-date).
-
-Valid statuses: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
-
-```sh
-adroit set-status 1 accepted
-```
-
-### `adroit supersede <NEW> <OLD>`
-
-Mark `<OLD>` as superseded by `<NEW>` in one command (each addressed as in
-[`show`](#adroit-show-id)): moves the old ADR to `superseded/` (or rewrites its
-status in place under `by_category`), writes `Superseded by [<NEW>](...)` into
-its status, and adds a reciprocal `Supersedes [<OLD>](...)` note to the new ADR.
-Works under every naming scheme — the supersession links carry the scheme's
-reference (a number or a slug).
-
-```sh
-adroit supersede 6 2                 # sequential
-adroit supersede 20260601-b 20260515-a   # date scheme
-```
-
-### `adroit set-review <ID> <DATE>`
-
-Set (or clear) an ADR's **review deadline** as an ISO-8601 `YYYY-MM-DD` date. A
-still-`Proposed` ADR whose deadline has passed is flagged **review-due** in
-`stats` and the web dashboard's "Review due" panel.
-
-In markdown mode this writes a `Review by: <date>` line into the `## Status`
-region (format-preserving — only that line changes). In frontmatter mode it sets
-the optional `review_by` field. Pass `--clear` to remove the deadline.
-
-```sh
-adroit set-review 3 2026-07-15   # propose a review by July 15
-adroit set-review 3 --clear      # remove the deadline
-```
-
-| Flag | Description |
-|---|---|
-| `--clear` | Remove the review deadline instead of setting one |
-
-### `adroit link <ID> <--relates-to|--depends-on|--refines> <TARGET>`
-
-Add (or remove with `--remove`) a **typed relational link** from `<ID>` to
-`<TARGET>` (both addressed as in [`show`](#adroit-show-id)). Exactly one of the
-three kind flags names the target. The link is recorded in `<ID>`'s frontmatter,
-listed by `adroit show`, and drawn as a distinct edge in the dashboard's
-relationship graph. Adding validates that the target exists.
-
-This is a **frontmatter-profile** feature; under the markdown profile it errors
-with a hint to run `adroit migrate --format frontmatter`. See
-[ADR Format → Relationships](./adr-format.md#relationships).
-
-```sh
-adroit link 6 --depends-on 2          # ADR-0006 depends on ADR-0002
-adroit link 6 --relates-to 4
-adroit link 6 --refines 3
-adroit link 6 --depends-on 2 --remove
-```
-
-| Flag | Description |
-|---|---|
-| `--relates-to <TARGET>` | A non-directional related link |
-| `--depends-on <TARGET>` | This ADR depends on the target |
-| `--refines <TARGET>` | This ADR refines / elaborates the target |
-| `--remove` | Remove the link instead of adding it |
-
-### `adroit search <TERM>`
+#### `adroit search <TERM>`
 
 Case-insensitive search across ADR titles and bodies (recursive). Prints number, status, and title for each match.
 
 ```sh
 adroit search postgres
+adroit search postgres -o json   # structured matches for scripts/agents
 ```
 
-### `adroit check`
+#### `adroit stats`
+
+Repo statistics: total ADRs, a per-status breakdown (a colored bar chart), the
+oldest still-`Proposed` ADRs (with review-due flags), and a created-per-month
+histogram. `-o json` emits the full `view::Stats`.
+
+```sh
+adroit stats
+adroit stats -o json
+```
+
+#### `adroit graph`
+
+The ADR relationship graph — supersession plus typed (`relates_to` /
+`depends_on` / `refines`) links. The human view is a **tree**: each ADR with
+outgoing relationships, its edges indented beneath it (with an `unconnected:`
+footnote for isolated ADRs); `-o json` emits `view::Graph` (the same nodes/edges
+the web dashboard's relationship graph consumes).
+
+```sh
+adroit graph
+adroit graph -o json
+```
+
+> Human output is colored (status, edge kinds, scores) when stdout is a terminal;
+> it's plain under a pipe, `-o json`, or `NO_COLOR`.
+
+#### `adroit ask "<question>"`
+
+Ask a natural-language question of the ADR corpus. Retrieval is **mechanical**
+(TF-IDF over your question picks the most relevant ADRs); the configured **AI
+provider** then synthesizes an answer, citing the ADRs it used. Read-only. The
+human view prints the answer to stdout and the sources to stderr; `-o json` emits
+`{ "answer": …, "sources": [refs] }`. Needs an AI provider (see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring)).
+
+```sh
+adroit ask "Why did we pick Postgres over MySQL?"
+adroit ask "What did we decide about caching?" -o json
+```
+
+#### `adroit serve` (requires the `web` feature)
+
+Serve the read-only web dashboard (browse, search, stats, relationship graph,
+repo-health checks) over a local HTTP server. Built behind the `web` Cargo feature; without it the
+command prints a rebuild hint and exits. See [Web Dashboard](../usage/web.md).
+
+```sh
+cargo run --features web -- serve                      # http://127.0.0.1:8080
+cargo run --features web -- serve --host 0.0.0.0 --port 9000
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host <ADDR>` | `127.0.0.1` | Interface to bind (env: `ADROIT_HOST`) |
+| `--port <N>` | `8080` | Port to listen on (env: `ADROIT_PORT`) |
+
+#### `adroit` (no command)
+
+Launch the interactive TUI (browse, triage, in-terminal body editing). The TUI
+opens the same ADR directory the CLI resolves — `adroit --dir X` launches the
+TUI against `X`. In a non-interactive context (no TTY) it prints a hint and
+exits instead of seizing the terminal. Built behind the `tui` Cargo feature
+(on by default); without it, a hint points you at the CLI subcommands.
+
+### Maintain the repo
+
+#### `adroit check`
 
 Validate the ADR repo and **exit non-zero if any error-severity problem is
 found** — a structural CI gate. Problems are listed on stderr. A clean repo
@@ -229,6 +488,9 @@ It checks for:
    **warning** — `adroit relink` fixes it); if it names no existing ADR it's a
    **broken** link (an **error**). External URLs, anchors, and non-ADR links are
    ignored.
+6. **Duplicate titles** (a **warning**): two or more ADRs share the same
+   (case-insensitive) title — usually an accidental re-run of `new`. Titles *can*
+   legitimately repeat, so this never fails the gate; it just surfaces the dups.
 
 Of these, duplicate identifiers, status↔directory mismatch, unparseable files,
 broken supersession links, and broken links are **errors** (they fail `check`);
@@ -245,7 +507,7 @@ The same validation runs behind the web dashboard's **repo-health panel** (via
 `GET /api/check`), so the issues `check` reports on the command line also show up
 there — see [Web Dashboard](../usage/web.md).
 
-### `adroit relink`
+#### `adroit relink`
 
 Rewrite every cross-ADR relative link so it points at the ADR's **current**
 location, then write back only the files that changed. Use it to repair links
@@ -266,7 +528,7 @@ adroit relink              # rewrite stale links in place
 adroit relink --dry-run    # show what would change, write nothing
 ```
 
-### `adroit renumber <OLD> <NEW> [--file <PATH>]`
+#### `adroit renumber <OLD> <NEW> [--file <PATH>]`
 
 Renumber a sequential ADR — to resolve a duplicate `NNNN` (e.g. two branches
 that each created `0009`). It renames the file (slug preserved), rewrites its
@@ -284,7 +546,7 @@ adroit renumber 9 21 --file proposed/0009-adopt-crossplane.md
 `<NEW>` must be unused; an ambiguous `<OLD>` (two files) errors unless you pass
 `--file`. (Applies to the sequential / per-category numbering schemes.)
 
-### `adroit migrate [--dry-run] [--yes]`
+#### `adroit migrate [--dry-run] [--yes]`
 
 Convert the repo on disk to the **configured** layout/format. The source profile
 is auto-detected; a layout change moves files between flat / by-status dirs
@@ -310,7 +572,7 @@ doesn't match your config (see below), `migrate` is the supported way to change
 your `layout`/`format` preference on an existing repo. It is idempotent (a repo
 already in the target profile reports nothing to do).
 
-### `adroit index [--check]`
+#### `adroit index [--check]`
 
 Regenerate the ADR section of `SUMMARY.md`, grouped by status, preserving the non-ADR parts of the file. If no `summary_path` is configured and no `SUMMARY.md` is found next to or one level above the ADR directory, the generated block is printed to stdout.
 
@@ -328,78 +590,56 @@ adroit index --check    # verify SUMMARY.md is up to date; non-zero if stale
 |---|---|
 | `--check` | Verify `SUMMARY.md` is up to date without writing; exit non-zero if stale |
 
-### `adroit review <NUMBER>`
+#### `adroit publish --out <DIR>`
 
-Generate a **review-kickoff** document for an ADR — the doc the team writes when
-opening an ADR for formal review. It mirrors the hand-written artifact: an H1
-with the date and ADR number, a "What you're being asked to do" section, a
-**Key docs** table (the ADR, the ADR README, the review-process guide), the
-review timeline and quorum, what happens on the decision date, and a collapsible
-"What the MR changes" block. Placeholders (`[TODO: ...]`) are left for the
-proposer to fill in.
-
-This is **pure generation** — it performs no git operations and does not modify
-the ADR. The ADR is resolved by number through the store, so it works in
-by-status mode and errors cleanly if the number isn't found. Because the kickoff
-doc is built around the ADR number, `review` is **numeric-only** (requires a
-`sequential`/`per_category` scheme).
-
-Dates are computed from today using business days (weekends skipped):
-the review period runs from today to today + `--days` business days, and the
-decision date is the next business day after that.
+Export the accepted ADR set to a directory (static-dir publisher). `--out <OUT>`
+is **required**; `--dry-run` previews the export without writing. Also honors the
+global `-o`/`--output`.
 
 ```sh
-adroit review 1                              # print to stdout
-adroit review 1 --days 5 --quorum 3          # 5-business-day window, quorum 3
-adroit review 1 --output review-kickoff.md   # write to a file
+adroit publish --out ./public/adrs     # export accepted ADRs to a static dir
+adroit publish --out ./public/adrs --dry-run
 ```
 
-| Flag | Default | Description |
-|---|---|---|
-| `--days <N>` | config `review_days` (3) | Review period length in business days |
-| `--quorum <N>` | config `review_quorum` (3) | Number of approvals required |
-| `--output <PATH>` | — | Write the doc to a file instead of stdout |
+### Forge integration
 
-### `adroit edit <ID>`
+Drive the linked GitHub/GitLab issue + PR. In the default build but **off** until
+you configure `forge.*`; every action is opt-in and previews by default. See
+[Forge Integration](../usage/forge.md) for the full workflow.
 
-Open an ADR in your editor (`<ID>` resolved as in [`show`](#adroit-show-id)).
+#### `adroit init`
 
-```sh
-adroit edit 1
-```
+Interactive wizard — detect the forge from the git remote and write the `forge.*`
+config. `--print` shows the detected settings + planned steps without writing;
+`--yes` runs a non-interactive setup from the detected defaults.
 
-adroit finds your editor using this precedence chain:
+#### `adroit auth <PROVIDER>`
 
-1. The `$VISUAL` or `$EDITOR` environment variable (session override)
-2. The `editor` field in `config.yaml` (see [Configuration](#configuration))
-3. Auto-detection — probes your PATH for common editors (nano, vim, nvim, VS Code, etc.)
-4. Interactive prompt — if nothing is detected and you're in a terminal, adroit asks you to choose from the editors installed on your system. Your choice is saved to `config.yaml` so you're only asked once.
+Store a forge token (`github` / `gitlab` / `jira`) in the local credential store
+(omit `--token` to be prompted, hidden). `--email` saves the Jira account email.
 
-### `adroit serve` (requires the `web` feature)
+#### `adroit sync <ID>`
 
-Serve the read-only web dashboard (browse, search, stats, relationship graph,
-repo-health checks) over a local HTTP server. Built behind the `web` Cargo feature; without it the
-command prints a rebuild hint and exits. See [Web Dashboard](../usage/web.md).
+Refresh the ADR's linked PR/MR description from its current content. Previews
+unless you pass `--yes`.
 
-```sh
-cargo run --features web -- serve                      # http://127.0.0.1:8080
-cargo run --features web -- serve --host 0.0.0.0 --port 9000
-```
+#### `adroit reconcile`
 
-| Flag | Default | Description |
-|---|---|---|
-| `--host <ADDR>` | `127.0.0.1` | Interface to bind (env: `ADROIT_HOST`) |
-| `--port <N>` | `8080` | Port to listen on (env: `ADROIT_PORT`) |
+Reconcile local ADR status with the forge after out-of-band changes (e.g. a PR
+merged in the web UI). Reports drift by default; `--yes` applies the fixable part.
 
-### `adroit` (no command)
+#### `adroit notify <ID>`
 
-Launch the interactive TUI (browse, triage, in-terminal body editing). The TUI
-opens the same ADR directory the CLI resolves — `adroit --dir X` launches the
-TUI against `X`. In a non-interactive context (no TTY) it prints a hint and
-exits instead of seizing the terminal. Built behind the `tui` Cargo feature
-(on by default); without it, a hint points you at the CLI subcommands.
+Post the ADR's current state to a chat webhook (Slack/Teams-compatible).
+`--dry-run` previews the message without posting.
 
-### `adroit config [show | get <key> | set <key> <value> [--local]]`
+> `new --forge`, `review --forge`, and `set-status --forge` add forge actions to
+> those verbs — see each in [Author a decision](#author-a-decision) /
+> [Review & decide](#review--decide) and the [Forge Integration](../usage/forge.md) guide.
+
+### Configuration
+
+#### `adroit config [show | get <key> | set <key> <value> [--local]]`
 
 Inspect or change configuration.
 
@@ -426,7 +666,7 @@ mismatch. `config get`/`set` cover the **scalar** keys in the
 [Configuration](#configuration) table below; `status_dirs`, `templates_dir`, and
 `summary_path` are set by editing `config.yaml` directly.
 
-### `adroit completions <SHELL>`
+#### `adroit completions <SHELL>`
 
 Print a shell completion script to stdout, generated from adroit's command tree
 (so it always matches your installed version — and a build without the `forge`
@@ -489,7 +729,7 @@ editor: vim
 | `date_source` | `auto`\|`git`\|`filesystem` | `auto` | Where ADR creation/lifecycle dates come from. `git` warns if history is unavailable/shallow; `filesystem` never shells git. |
 | `naming` | `sequential`\|`date`\|`uuid`\|`per_category` | `sequential` | How ADR identifiers/filenames are formed. Pick one for the repo's lifetime — see [Naming schemes](./adr-format.md#naming-schemes). |
 | `relink_scope` | `all`\|`self`\|`none` | `all` | How much a status-change move auto-relinks. `all` heals every inbound link; `self` fixes only the moved file; `none` moves only. Use `self`/`none` for concurrent-PR teams and run `adroit relink` post-merge — see [Concurrent contributors](../usage/managing-adrs.md#concurrent-contributors--branching). |
-| `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Opt-in forge integration (requires the `forge` feature build). `github` drives GitHub PRs + Issues. |
+| `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Forge integration (the `forge` feature is in the default build; `none` keeps it off). `github` drives GitHub PRs + Issues. |
 | `forge.repo` | `owner/repo` | — | The provider slug (GitHub `owner/repo`). Required when a provider is set. |
 | `forge.host` | host | provider default | API host for self-managed / enterprise. GitLab self-hosted: the host (`gitlab.example.com`); GitHub Enterprise: the host incl. base path (`ghe.example.com/api/v3`). Same token auth as the cloud version. |
 | `forge.branch_prefix` | string | `adr/` | Branch prefix `new --forge` generates (`adr/0021-…`). |
@@ -501,7 +741,8 @@ editor: vim
 Tokens are **never** stored in config. They resolve in order: the environment
 (`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +
 `ADROIT_JIRA_EMAIL`), then a local credential file written by `adroit auth`. The
-binary must be built `--features forge`. **Jira auth follows the deployment:**
+`forge` feature is in the default build (only a `--no-default-features` core omits
+it). **Jira auth follows the deployment:**
 set `ADROIT_JIRA_EMAIL` for Jira **Cloud** (Basic `email:token`); omit it for
 Jira **Server/Data Center** and supply a Personal Access Token as
 `ADROIT_JIRA_TOKEN` (Bearer). GitHub/GitLab use the same token whether cloud or

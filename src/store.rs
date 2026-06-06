@@ -1006,8 +1006,8 @@ impl Store {
     ) -> Result<PathBuf, StoreError> {
         if self.opts.format != Format::Frontmatter {
             return Err(StoreError::Parse(
-                "typed links require the frontmatter format (run `adroit migrate --format \
-                 frontmatter`)"
+                "typed links require the frontmatter format (run `adroit --format \
+                 frontmatter migrate`)"
                     .into(),
             ));
         }

@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use colored::Colorize;
 
 use adroit::adr::{Number, ReviewBy, Status};
-use adroit::cli::{Cli, Command, ConfigAction};
+use adroit::cli::{Cli, Command, ConfigAction, OutputFormat};
 use adroit::config::{self, Config, Layout};
 use adroit::format::Format;
 use adroit::naming::AdrRef;
@@ -38,6 +39,11 @@ fn main() -> Result<()> {
     // friends can be sourced from a file instead of passed on every command.
     // Real environment variables already set take precedence over the file.
     let _ = dotenvy::dotenv();
+    // Disable ANSI color when stdout isn't a terminal (pipes, `-o json`, CI);
+    // when it is, `colored` still honors NO_COLOR / CLICOLOR.
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        colored::control::set_override(false);
+    }
     let cli = Cli::parse();
     let mut cfg = config::Config::load()?;
     config::bootstrap(&mut cfg);
@@ -118,6 +124,7 @@ fn main() -> Result<()> {
     let needs_editor = match &cli.command {
         Some(Command::Edit { .. }) => true,
         Some(Command::New { no_edit, .. }) => !no_edit && cfg.open_on_new,
+        Some(Command::Draft { no_edit, .. }) => !no_edit,
         _ => false,
     };
     let editor = if needs_editor {
@@ -160,18 +167,29 @@ fn main() -> Result<()> {
         anyhow::bail!("{msg}");
     }
 
+    // `-o/--output` is honored by the read verbs (Copy, so reading it here
+    // doesn't conflict with the `match cli.command` move below).
+    let output = cli.output;
+
     match cli.command {
         Some(Command::New {
             title,
             template,
             no_edit,
             category,
+            force,
+            interview,
             #[cfg(feature = "forge")]
             forge,
             #[cfg(feature = "forge")]
             dry_run,
         }) => {
-            let path = cmd_new(
+            // Duplicate guard (`new` stays non-idempotent — this only catches the
+            // accidental re-run). Aborts before allocating a number.
+            if !dup_guard(&store, &cfg, &title, force)? {
+                return Ok(());
+            }
+            let (path, r) = cmd_new(
                 &store,
                 &cfg,
                 &title,
@@ -179,6 +197,10 @@ fn main() -> Result<()> {
                 category.as_deref(),
             )?;
             println!("Created {}", path.display());
+            // Opt-in AI draft (writes over the template body before the forge
+            // hook commits it / the editor opens for review). `degraded` = the
+            // interview was asked for but no provider was available.
+            let degraded = interview && !run_interview(&store, &cfg, &title, &r)?;
             // Opt-in forge hook (issue + draft PR + ## References). The forge
             // flags only exist in `--features forge` builds; otherwise the hook
             // gets disabled flags and no-ops. Runs before the editor so the
@@ -192,7 +214,10 @@ fn main() -> Result<()> {
             #[cfg(not(feature = "forge"))]
             let forge_flags = adroit::forge_hook::ForgeFlags::default();
             adroit::forge_hook::after_new(&cfg, &path, &title, forge_flags)?;
-            if cfg.open_on_new && !no_edit {
+            // Don't bury a degraded-interview warning under the editor: when
+            // `--interview` was requested but couldn't run, skip the auto-open so
+            // the message stays on screen (the file is still there to `edit`).
+            if cfg.open_on_new && !no_edit && !degraded {
                 open_in_editor(editor, &path)?;
             }
         }
@@ -205,9 +230,12 @@ fn main() -> Result<()> {
             let forge_on = forge;
             #[cfg(not(feature = "forge"))]
             let forge_on = false;
-            cmd_list(&store, &cfg, status.as_deref(), forge_on)?;
+            cmd_list(&store, &cfg, status.as_deref(), forge_on, output)?;
         }
-        Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?)?,
+        Some(Command::Show { id }) => cmd_show(&store, &resolve_ref(&cfg, &id)?, output)?,
+        Some(Command::Summarize { id, out }) => {
+            cmd_summarize(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
+        }
         Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
         Some(Command::SetStatus {
             id,
@@ -292,7 +320,7 @@ fn main() -> Result<()> {
         }) => {
             cmd_link(&store, &cfg, &id, relates_to, depends_on, refines, remove)?;
         }
-        Some(Command::Search { term }) => cmd_search(&store, &term)?,
+        Some(Command::Search { term }) => cmd_search(&store, &term, output)?,
         Some(Command::Check {
             #[cfg(feature = "forge")]
             forge,
@@ -301,7 +329,25 @@ fn main() -> Result<()> {
             let forge_on = forge;
             #[cfg(not(feature = "forge"))]
             let forge_on = false;
-            cmd_check(&store, &cfg, forge_on)?;
+            cmd_check(&store, &cfg, forge_on, output)?;
+        }
+        Some(Command::Lint { id, ai }) => {
+            cmd_lint(&store, &cfg, &resolve_ref(&cfg, &id)?, ai, output)?
+        }
+        Some(Command::Stats) => cmd_stats(&store, output)?,
+        Some(Command::Graph) => cmd_graph(&store, output)?,
+        Some(Command::Related { id }) => {
+            cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, false, output)?
+        }
+        Some(Command::Dedupe { id }) => {
+            cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, true, output)?
+        }
+        Some(Command::Ask { question }) => cmd_ask(&store, &cfg, &question, output)?,
+        Some(Command::Plan { id, out }) => {
+            cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
+        }
+        Some(Command::Draft { id, no_edit }) => {
+            cmd_draft(&store, &cfg, &resolve_ref(&cfg, &id)?, no_edit, editor)?
         }
         Some(Command::Relink {
             dry_run,
@@ -343,7 +389,7 @@ fn main() -> Result<()> {
             number,
             days,
             quorum,
-            output,
+            out,
             #[cfg(feature = "forge")]
             forge,
             #[cfg(feature = "forge")]
@@ -366,7 +412,7 @@ fn main() -> Result<()> {
                 Number::new(number),
                 days,
                 quorum,
-                output.as_deref(),
+                out.as_deref(),
                 forge_flags,
             )?;
         }
@@ -435,13 +481,92 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
     }
 }
 
+/// Guard against accidentally creating a duplicate ADR. On an exact
+/// (case-insensitive) title match it warns and lists the matches plus the top
+/// similar ADRs; on a terminal it then prompts to confirm. Returns `false` to
+/// abort (no ADR created). `--force` and non-interactive contexts proceed — `new`
+/// stays non-idempotent by design, so this only catches the accidental re-run.
+fn dup_guard(store: &Store, cfg: &Config, title: &str, force: bool) -> Result<bool> {
+    use std::io::{IsTerminal, Write};
+    if force {
+        return Ok(true);
+    }
+    let summaries = query::summaries(store, &Filter::default())?;
+    let exact: Vec<&AdrSummary> = summaries
+        .iter()
+        .filter(|s| s.title.trim().eq_ignore_ascii_case(title.trim()))
+        .collect();
+    if exact.is_empty() {
+        return Ok(true);
+    }
+
+    eprintln!(
+        "{}",
+        format!(
+            "warning: {} existing ADR(s) already use this title:",
+            exact.len()
+        )
+        .yellow()
+    );
+    for s in &exact {
+        eprintln!(
+            "  {} {} [{}]",
+            s.reference.bold(),
+            s.title,
+            status_color(s.status)
+        );
+    }
+
+    // Top similar existing ADRs (excluding the exact matches), via the same
+    // TF-IDF engine as `dedupe` — the question text is the new title.
+    let exact_refs: std::collections::HashSet<&str> =
+        exact.iter().map(|s| s.reference.as_str()).collect();
+    let mut docs = corpus_docs(store, cfg)?;
+    docs.push(adroit::similar::Doc {
+        id: "__new__".to_string(),
+        reference: String::new(),
+        title: title.to_string(),
+        text: title.to_string(),
+    });
+    let similar: Vec<_> = adroit::similar::rank(&docs, "__new__")
+        .into_iter()
+        .filter(|m| !exact_refs.contains(m.reference.as_str()))
+        .take(3)
+        .collect();
+    if !similar.is_empty() {
+        eprintln!("similar existing ADRs:");
+        for m in &similar {
+            eprintln!(
+                "  {:.2}  {} {}",
+                m.score,
+                m.reference.bold(),
+                m.title.dimmed()
+            );
+        }
+    }
+
+    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        eprint!("Create another ADR with this title anyway? [y/N] ");
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            eprintln!("Aborted — no ADR created. (use --force to skip this check)");
+            return Ok(false);
+        }
+    } else {
+        eprintln!("(non-interactive: proceeding — pass --force to silence, or use a new title)");
+    }
+    Ok(true)
+}
+
 fn cmd_new(
     store: &Store,
     cfg: &Config,
     title: &str,
     template: Option<&str>,
     category: Option<&str>,
-) -> Result<std::path::PathBuf> {
+) -> Result<(std::path::PathBuf, AdrRef)> {
     let mut adr = adroit::adr::Adr::new(title)?;
     adr.status = cfg.default_status;
     // Assign the identity up front (so the heading renders correctly), via the
@@ -471,10 +596,201 @@ fn cmd_new(
         adr.body = adroit::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
     }
 
-    Ok(store.write(&mut adr)?)
+    let path = store.write(&mut adr)?;
+    Ok((path, r))
 }
 
-fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: bool) -> Result<()> {
+/// `new --interview`: resolve a provider then run the shared interview. Degrades
+/// to a note (keeping the plain template) when no provider is available, so the
+/// ADR is always created. Returns `true` when the draft actually ran (so the
+/// caller can skip auto-opening the editor on a degrade).
+fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result<bool> {
+    let Some(provider) = adroit::ai_hook::open_provider(cfg) else {
+        if cfg!(feature = "ai") {
+            eprintln!(
+                "{}",
+                "--interview could not run: enable AI (`ai.enabled` / `ADROIT_AI_ENABLED=true`) \
+                 and set `ADROIT_ANTHROPIC_KEY`. The ADR was created from the plain template — \
+                 fill it in later with `adroit draft <id>`."
+                    .yellow()
+            );
+        } else {
+            eprintln!(
+                "{}",
+                "--interview could not run: this binary lacks the AI feature. Rebuild with \
+                 `just build-ai` (then enable AI). The ADR was created from the plain template — \
+                 fill it in later with `adroit draft <id>`."
+                    .yellow()
+            );
+        }
+        return Ok(false);
+    };
+    interview_and_draft(store, title, r, provider.as_ref())
+}
+
+/// The shared Socratic interview → AI draft → splice, used by both `new
+/// --interview` (at creation) and `draft <ID>` (on an existing ADR). Asks the
+/// fixed [`INTERVIEW_QUESTIONS`] over stdin (prompts to stderr), drafts the body
+/// from the answers + corpus, and splices it over the prose — identity / status /
+/// heading stay mechanical, marked `<!-- adroit:ai-suggested -->`. Returns `true`
+/// on success; `false` if the AI call fails — the existing body is kept and a
+/// warning printed (never an error), so the ADR is never lost.
+fn interview_and_draft(
+    store: &Store,
+    title: &str,
+    r: &AdrRef,
+    provider: &dyn adroit::ai::AiProvider,
+) -> Result<bool> {
+    use adroit::ai::{self, INTERVIEW_QUESTIONS, Interview};
+    use std::io::{BufRead, Write};
+
+    // Plain stdin prompts (robust on a non-TTY, e.g. piped test input). Prompts
+    // go to stderr so stdout stays clean.
+    let stdin = std::io::stdin();
+    let mut lines = stdin.lock().lines();
+    let mut answers: Vec<String> = Vec::with_capacity(INTERVIEW_QUESTIONS.len());
+    for q in INTERVIEW_QUESTIONS {
+        eprintln!("\n{q}");
+        eprint!("> ");
+        std::io::stderr().flush().ok();
+        let a = lines.next().transpose()?.unwrap_or_default();
+        answers.push(a.trim().to_string());
+    }
+
+    let iv = Interview {
+        title: title.to_string(),
+        context: answers[0].clone(),
+        drivers: answers[1].clone(),
+        options: answers[2].clone(),
+        risks: answers[3].clone(),
+    };
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+
+    let req = ai::build_request(&iv, &corpus);
+    announce_estimate(provider, &req, "\nDrafting the ADR body");
+    let draft = match ai::draft_body(provider, &iv, &corpus) {
+        Ok(d) => d,
+        // A provider failure (credits, network, …) shouldn't error: keep the
+        // existing body, warn, and let the caller skip the editor.
+        Err(e) => {
+            eprintln!(
+                "{}",
+                format!(
+                    "warning: AI draft failed ({e}). Kept the existing body (your answers \
+                     weren't saved) — fix the provider and re-run, or edit by hand."
+                )
+                .yellow()
+            );
+            return Ok(false);
+        }
+    };
+    // Journal the raw draft before splicing, so it survives a failed write/edit.
+    let journal = journal_draft(store, r, &draft);
+    splice_ai_draft(store, r, &draft)?;
+    eprintln!(
+        "AI-drafted the body (marked `{}`). Review and edit before committing.",
+        ai::AI_MARKER
+    );
+    if let Some(p) = journal {
+        eprintln!(
+            "(Raw draft journaled to {} — delete when you're done.)",
+            p.display()
+        );
+    }
+    Ok(true)
+}
+
+/// Splice a marker-wrapped AI `draft` into the ADR at `r`: keep the mechanical
+/// header (every line before the first `## Context…` prose section) and replace
+/// the prose. In the markdown profile `adr.body` is the whole document, so this
+/// is what preserves the H1 + `## Status`; in frontmatter it's the prose after the
+/// YAML. AI never touches identity/status. Shared by `new --interview` + `draft`.
+fn splice_ai_draft(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
+    let path = store
+        .find_path_by_ref(r)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let adr = store.read(&path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let prefix: String = adr
+        .body
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with("## Context"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_body = if prefix.trim().is_empty() {
+        format!("{}\n", draft.trim())
+    } else {
+        format!("{}\n\n{}\n", prefix.trim_end(), draft.trim())
+    };
+    store
+        .set_body_ref(r, &new_body)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+/// One-line pre-call cost notice (RFC issue #5): the action, the provider, and a
+/// rough token estimate, to stderr — so a large call never happens silently.
+fn announce_estimate(
+    provider: &dyn adroit::ai::AiProvider,
+    req: &adroit::ai::CompletionRequest,
+    action: &str,
+) {
+    eprintln!(
+        "{action} via {} (~{} input tokens, up to {} generated — estimate) …",
+        provider.id(),
+        req.estimate_input_tokens(),
+        req.max_tokens,
+    );
+}
+
+/// Journal the raw AI `draft` to a git-ignored `<adr>.md.draft` sidecar before it
+/// is spliced in, so the model's output survives a failed write or a botched edit
+/// (resume or discard). Best-effort — a journaling failure is non-fatal. The
+/// sidecar's extension isn't `.md`, so the store never treats it as an ADR.
+fn journal_draft(store: &Store, r: &AdrRef, draft: &str) -> Option<std::path::PathBuf> {
+    let path = store.find_path_by_ref(r).ok()?;
+    let sidecar = std::path::PathBuf::from(format!("{}.draft", path.display()));
+    std::fs::write(&sidecar, draft).ok()?;
+    Some(sidecar)
+}
+
+/// `adroit draft <ID>`: run the **same interview** as `new --interview`, but on an
+/// ADR that already exists — for when you created it with a plain `new` (template)
+/// and want to fill it in later, before review. Drafts the body, then opens the
+/// editor. Unlike `new --interview` it requires a provider (the ADR already
+/// exists, so there's no template-fallback to degrade to).
+fn cmd_draft(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    no_edit: bool,
+    editor: Option<Option<String>>,
+) -> Result<()> {
+    let provider = require_provider(cfg, "draft")?;
+    let path = store.find_path_by_ref(r)?;
+    let adr = store.read(&path)?;
+    let drafted = interview_and_draft(store, &adr.title, r, provider.as_ref())?;
+    if drafted && !no_edit {
+        open_in_editor(editor, &path)?;
+    }
+    Ok(())
+}
+
+/// Print any `view` type as pretty JSON — the `-o json` path for the read verbs.
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn cmd_list(
+    store: &Store,
+    cfg: &Config,
+    status_filter: Option<&str>,
+    forge: bool,
+    output: OutputFormat,
+) -> Result<()> {
     let status: Option<Status> = match status_filter {
         Some(s) => Some(
             s.parse()
@@ -487,11 +803,14 @@ fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: boo
         ..Default::default()
     };
     let mut rows = query::summaries(store, &filter)?;
+    // Opt-in: attach live forge state (no-op unless --forge + feature + config).
+    adroit::forge_hook::enrich(cfg, store, &mut rows, forge)?;
+    if output == OutputFormat::Json {
+        return print_json(&rows);
+    }
     if rows.is_empty() {
         return Ok(());
     }
-    // Opt-in: attach live forge state (no-op unless --forge + feature + config).
-    adroit::forge_hook::enrich(cfg, store, &mut rows, forge)?;
     let id_w = id_col_width(&rows);
     println!("{:<id_w$}{:<12}Title", "#", "Status");
     for row in &rows {
@@ -500,12 +819,15 @@ fn cmd_list(store: &Store, cfg: &Config, status_filter: Option<&str>, forge: boo
     Ok(())
 }
 
-fn cmd_show(store: &Store, r: &AdrRef) -> Result<()> {
+fn cmd_show(store: &Store, r: &AdrRef, output: OutputFormat) -> Result<()> {
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
+    if output == OutputFormat::Json {
+        return print_json(&detail);
+    }
     let s = &detail.summary;
-    println!("{}: {}", s.reference, s.title);
-    println!("Status:  {}", s.status);
+    println!("{}: {}", s.reference.bold(), s.title);
+    println!("Status:  {}", status_color(s.status));
     if let Some(c) = &s.created {
         println!("Created: {}", ymd(c));
     }
@@ -736,8 +1058,11 @@ fn relative_link(from_file: &std::path::Path, to_file: &std::path::Path) -> Stri
     parts.join("/")
 }
 
-fn cmd_search(store: &Store, term: &str) -> Result<()> {
+fn cmd_search(store: &Store, term: &str, output: OutputFormat) -> Result<()> {
     let rows = query::search(store, term)?;
+    if output == OutputFormat::Json {
+        return print_json(&rows);
+    }
     let id_w = id_col_width(&rows);
     for row in &rows {
         print_summary_row(row, id_w);
@@ -768,13 +1093,67 @@ fn id_col_width(rows: &[AdrSummary]) -> usize {
 
 /// Render one `list` / `search` row. Shared so the two read commands stay
 /// byte-identical. `id_w` is the (dynamic) identifier column width.
+/// Color an ADR status for human output (a no-op when color is disabled).
+fn status_color(s: Status) -> colored::ColoredString {
+    let label = s.to_string();
+    match s {
+        Status::Proposed => label.yellow(),
+        Status::Accepted => label.green(),
+        Status::Rejected => label.red(),
+        Status::Superseded => label.magenta(),
+        Status::Deprecated => label.dimmed(),
+    }
+}
+
+/// The bar color matching a status (for the `stats` bar chart).
+fn status_bar_color(s: Status) -> colored::Color {
+    match s {
+        Status::Proposed => colored::Color::Yellow,
+        Status::Accepted => colored::Color::Green,
+        Status::Rejected => colored::Color::Red,
+        Status::Superseded => colored::Color::Magenta,
+        Status::Deprecated => colored::Color::BrightBlack,
+    }
+}
+
+/// Render `(label, value, bar_color)` rows as horizontal bars (rnought/talaria
+/// style: `label ██████░░ value`), scaled to the largest value.
+fn print_bars(rows: &[(String, usize, colored::Color)], width: usize) {
+    let max = rows.iter().map(|(_, v, _)| *v).max().unwrap_or(0).max(1);
+    let label_w = rows.iter().map(|(l, _, _)| l.len()).max().unwrap_or(0);
+    for (label, value, color) in rows {
+        let filled = if *value == 0 {
+            0
+        } else {
+            (((*value as f64 / max as f64) * width as f64).round() as usize).clamp(1, width)
+        };
+        let bar = "█".repeat(filled).color(*color);
+        let empty = "░".repeat(width - filled).dimmed();
+        println!("  {label:<label_w$}  {bar}{empty} {value}");
+    }
+}
+
+/// A short, colored label for a graph edge kind.
+fn edge_label(k: EdgeKind) -> colored::ColoredString {
+    match k {
+        EdgeKind::Supersedes => "supersedes".red(),
+        EdgeKind::DependsOn => "depends on".magenta(),
+        EdgeKind::Refines => "refines".blue(),
+        EdgeKind::RelatesTo => "relates to".cyan(),
+        EdgeKind::Related => "links".dimmed(),
+    }
+}
+
 fn print_summary_row(row: &AdrSummary, id_w: usize) {
+    // Pad the *plain* status to width before coloring, so ANSI codes don't break
+    // column alignment.
+    let pad = " ".repeat(12usize.saturating_sub(row.status.to_string().len()));
     println!(
-        "{:<id_w$}{:<12}{}{}",
+        "{:<id_w$}{}{pad}{}{}",
         row_id(row),
-        row.status,
+        status_color(row.status),
         row.title,
-        forge_suffix(row)
+        forge_suffix(row),
     );
 }
 
@@ -1109,7 +1488,7 @@ fn cmd_sync(store: &Store, cfg: &Config, id: &str, dry_run: bool, yes: bool) -> 
 /// `adroit relink` will heal) is printed but exits 0. This lets a status-change
 /// PR branch — which transiently carries stale inbound links under
 /// `relink_scope = self` — pass CI, while a genuine defect still fails it.
-fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
+fn cmd_check(store: &Store, cfg: &Config, forge: bool, output: OutputFormat) -> Result<()> {
     let mut report = query::check(store)?;
     // Opt-in forge-aware checks (issue/PR drift) appended to the same report;
     // they're Warning-severity so they report but don't fail the gate.
@@ -1119,17 +1498,30 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
             .problems
             .extend(adroit::forge_hook::check_repo(cfg, &entries, forge)?);
     }
+    let errors = report
+        .problems
+        .iter()
+        .filter(|p| p.severity == Severity::Error)
+        .count();
+    // `-o json` emits the structured report on stdout; the CI gate still holds —
+    // a non-zero exit on any Error-severity problem.
+    if output == OutputFormat::Json {
+        print_json(&report)?;
+        if errors > 0 {
+            anyhow::bail!(
+                "{} problem(s) found across {} ADR file(s)",
+                report.problems.len(),
+                report.checked
+            );
+        }
+        return Ok(());
+    }
     // Print every problem (errors and warnings), sorted for stable output.
     let mut messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
     messages.sort_unstable();
     for message in &messages {
         eprintln!("{message}");
     }
-    let errors = report
-        .problems
-        .iter()
-        .filter(|p| p.severity == Severity::Error)
-        .count();
     if errors > 0 {
         anyhow::bail!(
             "{} problem(s) found across {} ADR file(s)",
@@ -1142,6 +1534,419 @@ fn cmd_check(store: &Store, cfg: &Config, forge: bool) -> Result<()> {
     } else {
         let warnings = report.problems.len();
         println!("OK: {} ADRs, {} warning(s)", report.checked, warnings);
+    }
+    Ok(())
+}
+
+/// `adroit stats`: repo statistics (status counts, proposed ages, growth).
+/// `-o json` emits `view::Stats`; the human view is a compact summary.
+fn cmd_stats(store: &Store, output: OutputFormat) -> Result<()> {
+    let stats = query::stats(store)?;
+    if output == OutputFormat::Json {
+        return print_json(&stats);
+    }
+    println!("Total ADRs: {}", stats.total.to_string().bold());
+    println!("{}", "By status:".bold());
+    let status_rows: Vec<(String, usize, colored::Color)> = stats
+        .by_status
+        .iter()
+        .map(|sc| (sc.status.to_string(), sc.count, status_bar_color(sc.status)))
+        .collect();
+    print_bars(&status_rows, 24);
+    if !stats.review_due.is_empty() {
+        println!(
+            "Review due: {}",
+            stats.review_due.len().to_string().yellow()
+        );
+    }
+    if !stats.proposed_age.is_empty() {
+        println!("{}", "Oldest proposed:".bold());
+        for p in stats.proposed_age.iter().take(5) {
+            let age = p
+                .age_days
+                .map(|d| format!("{d}d"))
+                .unwrap_or_else(|| "?".into());
+            let flag = if p.review_due {
+                " (review due)".yellow()
+            } else {
+                "".normal()
+            };
+            println!("  {:<8} {:<5} {}{}", p.reference, age, p.title, flag);
+        }
+    }
+    if !stats.created_over_time.is_empty() {
+        println!("{}", "Created over time:".bold());
+        let month_rows: Vec<(String, usize, colored::Color)> = stats
+            .created_over_time
+            .iter()
+            .map(|b| (b.month.clone(), b.count, colored::Color::Cyan))
+            .collect();
+        print_bars(&month_rows, 24);
+    }
+    Ok(())
+}
+
+/// `adroit graph`: the ADR relationship graph (supersession + typed links).
+/// `-o json` emits `view::Graph` (nodes + edges); the human view is a **tree** —
+/// each ADR with outgoing edges, its relations indented under it.
+fn cmd_graph(store: &Store, output: OutputFormat) -> Result<()> {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    let graph = query::graph(store)?;
+    if output == OutputFormat::Json {
+        return print_json(&graph);
+    }
+    println!(
+        "{}",
+        format!(
+            "ADR relationship graph · {} ADRs · {} edges",
+            graph.nodes.len(),
+            graph.edges.len()
+        )
+        .bold()
+    );
+
+    // Look up a node's status/title by its reference.
+    let node: HashMap<&str, &adroit::view::GraphNode> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.reference.as_str(), n))
+        .collect();
+    // Group outgoing edges by source — BTreeMap keeps the output sorted/stable.
+    let mut outgoing: BTreeMap<&str, Vec<&adroit::view::GraphEdge>> = BTreeMap::new();
+    for e in &graph.edges {
+        outgoing.entry(e.from.as_str()).or_default().push(e);
+    }
+    // Every ref that participates in at least one edge.
+    let connected: HashSet<&str> = outgoing
+        .keys()
+        .copied()
+        .chain(graph.edges.iter().map(|e| e.to.as_str()))
+        .collect();
+
+    for (from, edges) in &outgoing {
+        match node.get(from) {
+            Some(n) => println!(
+                "\n{} {} [{}]",
+                from.bold(),
+                n.title.dimmed(),
+                status_color(n.status)
+            ),
+            None => println!("\n{}", from.bold()),
+        }
+        for (i, e) in edges.iter().enumerate() {
+            let connector = if i + 1 == edges.len() {
+                "└─"
+            } else {
+                "├─"
+            };
+            let to_title = node
+                .get(e.to.as_str())
+                .map(|n| n.title.as_str())
+                .unwrap_or("");
+            println!(
+                "  {} {} {} {} {}",
+                connector.dimmed(),
+                edge_label(e.kind),
+                "→".dimmed(),
+                e.to.bold(),
+                to_title.dimmed()
+            );
+        }
+    }
+
+    // Isolated ADRs (no relationships) — a dim footnote.
+    let isolated: Vec<&str> = graph
+        .nodes
+        .iter()
+        .map(|n| n.reference.as_str())
+        .filter(|r| !connected.contains(r))
+        .collect();
+    if !isolated.is_empty() {
+        println!(
+            "\n{} {}",
+            "unconnected:".dimmed(),
+            isolated.join(", ").dimmed()
+        );
+    }
+    Ok(())
+}
+
+/// `adroit related <ID>` / `dedupe <ID>`: mechanical TF-IDF similarity over the
+/// corpus (no AI). `related` excludes ADRs already linked to the target; `dedupe`
+/// shows all overlaps (framed for catching duplicates). Read-only; `-o json`
+/// emits the ranked matches.
+/// Assemble the corpus as similarity docs: each ADR's address (id) + reference +
+/// title + (title+body) text. Shared by `related` / `dedupe` / `ask`.
+fn corpus_docs(store: &Store, cfg: &Config) -> Result<Vec<adroit::similar::Doc>> {
+    let summaries = query::summaries(store, &Filter::default())?;
+    let mut docs = Vec::with_capacity(summaries.len());
+    for s in &summaries {
+        let body = resolve_ref(cfg, &s.address)
+            .ok()
+            .and_then(|rr| store.find_path_by_ref(&rr).ok())
+            .and_then(|p| store.read(&p).ok())
+            .map(|a| a.body)
+            .unwrap_or_default();
+        docs.push(adroit::similar::Doc {
+            id: s.address.clone(),
+            reference: s.reference.clone(),
+            title: s.title.clone(),
+            text: format!("{} {}", s.title, body),
+        });
+    }
+    Ok(docs)
+}
+
+/// `adroit ask "<question>"`: answer a question grounded in the ADR corpus.
+/// Retrieval is mechanical (TF-IDF over the question); the configured AI provider
+/// synthesizes the answer with citations. Read-only; `-o json` emits
+/// `{answer, sources}`.
+fn cmd_ask(store: &Store, cfg: &Config, question: &str, output: OutputFormat) -> Result<()> {
+    let provider = require_provider(cfg, "ask")?;
+    let mut docs = corpus_docs(store, cfg)?;
+    if docs.is_empty() {
+        anyhow::bail!("no ADRs to answer from");
+    }
+    // Rank the corpus against the question (added as a transient target doc).
+    docs.push(adroit::similar::Doc {
+        id: "__query__".to_string(),
+        reference: String::new(),
+        title: String::new(),
+        text: question.to_string(),
+    });
+    let top: Vec<adroit::similar::Match> = adroit::similar::rank(&docs, "__query__")
+        .into_iter()
+        .take(5)
+        .collect();
+
+    let mut context = String::new();
+    for m in &top {
+        if let Some(d) = docs.iter().find(|d| d.id == m.id) {
+            let excerpt: String = d.text.chars().take(800).collect();
+            context.push_str(&format!("### {} — {}\n{excerpt}\n\n", d.reference, d.title));
+        }
+    }
+    if context.is_empty() {
+        context.push_str("(no closely matching ADRs)");
+    }
+
+    let req = adroit::ai::build_ask_request(question, &context);
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Asking over {} ADR(s)", top.len()),
+    );
+    let answer = adroit::ai::draft_ask(provider.as_ref(), question, &context)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let answer = answer.trim();
+
+    if output == OutputFormat::Json {
+        let sources: Vec<&str> = top.iter().map(|m| m.reference.as_str()).collect();
+        return print_json(&serde_json::json!({ "answer": answer, "sources": sources }));
+    }
+    println!("{answer}");
+    if !top.is_empty() {
+        let refs: Vec<&str> = top.iter().map(|m| m.reference.as_str()).collect();
+        eprintln!("\n(sources: {})", refs.join(", "));
+    }
+    Ok(())
+}
+
+fn cmd_related(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    dedupe: bool,
+    output: OutputFormat,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let target_path = store.find_path_by_ref(r)?;
+    let target = query::detail_at(store, &target_path)?;
+    let linked: HashSet<&str> = target.related.iter().map(|l| l.address.as_str()).collect();
+
+    let docs = corpus_docs(store, cfg)?;
+
+    let shown: Vec<adroit::similar::Match> = adroit::similar::rank(&docs, &target.summary.address)
+        .into_iter()
+        .filter(|m| dedupe || !linked.contains(m.id.as_str()))
+        .take(3)
+        .collect();
+
+    if output == OutputFormat::Json {
+        return print_json(&shown);
+    }
+    if shown.is_empty() {
+        let what = if dedupe {
+            "overlapping"
+        } else {
+            "unlinked related"
+        };
+        println!("No {what} ADRs found for {}", target.summary.reference);
+        return Ok(());
+    }
+    let header = if dedupe {
+        "Possible overlaps (already decided?)"
+    } else {
+        "Related — consider linking"
+    };
+    println!("{} for {}:", header.bold(), target.summary.reference.bold());
+    for m in &shown {
+        // Color the similarity score by strength.
+        let score = format!("{:.2}", m.score);
+        let score = if m.score >= 0.5 {
+            score.green()
+        } else if m.score >= 0.25 {
+            score.yellow()
+        } else {
+            score.dimmed()
+        };
+        println!("  {score}  {} {}", m.reference.bold(), m.title.dimmed());
+    }
+    Ok(())
+}
+
+/// Resolve an AI provider for `verb`, or a clear error that distinguishes "this
+/// binary wasn't built with the `ai` feature" from "AI isn't enabled / no key".
+fn require_provider(cfg: &Config, verb: &str) -> Result<Box<dyn adroit::ai::AiProvider>> {
+    if let Some(p) = adroit::ai_hook::open_provider(cfg) {
+        return Ok(p);
+    }
+    if cfg!(feature = "ai") {
+        anyhow::bail!(
+            "`{verb}` needs an AI provider: set `ai.enabled` (or `ADROIT_AI_ENABLED=true`) and \
+             `ADROIT_ANTHROPIC_KEY` in config / `.env`"
+        )
+    }
+    anyhow::bail!(
+        "`{verb}` needs the AI feature, which this binary was not built with — rebuild with \
+         `just build-ai` (`cargo build --features ai`), then enable it via `ai.enabled` / \
+         `ADROIT_AI_ENABLED`"
+    )
+}
+
+/// `adroit summarize <ID>`: a one-paragraph AI TL;DR of an ADR (read-only).
+/// Prints to stdout unless `--out`. Needs a provider.
+fn cmd_summarize(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    out: Option<&std::path::Path>,
+) -> Result<()> {
+    let provider = require_provider(cfg, "summarize")?;
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    let req = adroit::ai::build_summary_request(&detail.summary.title, &detail.body);
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Summarizing {}", detail.summary.reference),
+    );
+    let summary = adroit::ai::draft_summary(provider.as_ref(), &detail.summary.title, &detail.body)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let summary = summary.trim();
+    match out {
+        Some(p) => {
+            std::fs::write(p, format!("{summary}\n"))?;
+            println!("Wrote summary to {}", p.display());
+        }
+        None => println!("{summary}"),
+    }
+    Ok(())
+}
+
+/// `adroit plan <ID>`: an AI implementation plan for an (accepted) ADR. Reads the
+/// ADR + corpus, asks the provider for an ordered checklist, and prints it (or
+/// writes `--out`). Read-only — the ADR is never modified.
+fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Path>) -> Result<()> {
+    let provider = require_provider(cfg, "plan")?;
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    // Corpus context: the other ADRs' `reference — title` lines (exclude self).
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .filter(|s| s.address != detail.summary.address)
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+    let req = adroit::ai::build_plan_request(&detail.summary.title, &detail.body, &corpus);
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Planning {}", detail.summary.reference),
+    );
+    let plan = adroit::ai::draft_plan(
+        provider.as_ref(),
+        &detail.summary.title,
+        &detail.body,
+        &corpus,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    match out {
+        Some(p) => {
+            std::fs::write(p, &plan)?;
+            println!("Wrote implementation plan to {}", p.display());
+        }
+        None => println!("{plan}"),
+    }
+    Ok(())
+}
+
+/// `adroit lint <ID>`: authoring-quality checks on one ADR (read-only).
+/// Mechanical findings by default; `--ai` adds a model review. Exits non-zero on
+/// mechanical findings (distinct from `check`'s structural gate). `-o json` emits
+/// the findings.
+fn cmd_lint(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    ai_review: bool,
+    output: OutputFormat,
+) -> Result<()> {
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    let mut findings = adroit::lint::lint(&detail.body);
+    let mechanical = findings.len();
+
+    if ai_review {
+        let provider = require_provider(cfg, "lint --ai")?;
+        let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+            .iter()
+            .filter(|s| s.address != detail.summary.address)
+            .map(|s| format!("{} — {}", s.reference, s.title))
+            .collect();
+        let req = adroit::ai::build_lint_request(&detail.summary.title, &detail.body, &corpus);
+        announce_estimate(
+            provider.as_ref(),
+            &req,
+            &format!("Reviewing {}", detail.summary.reference),
+        );
+        let review = adroit::ai::draft_lint(
+            provider.as_ref(),
+            &detail.summary.title,
+            &detail.body,
+            &corpus,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        findings.push(adroit::lint::LintFinding {
+            source: adroit::lint::LintSource::Ai,
+            message: review.trim().to_string(),
+        });
+    }
+
+    if output == OutputFormat::Json {
+        print_json(&findings)?;
+    } else if findings.is_empty() {
+        println!("OK: no lint findings for {}", detail.summary.reference);
+    } else {
+        for f in &findings {
+            println!("[{}] {}", f.source, f.message);
+        }
+    }
+
+    // Exit non-zero on mechanical findings (the AI review is advisory).
+    if mechanical > 0 {
+        anyhow::bail!("{mechanical} authoring finding(s)");
     }
     Ok(())
 }

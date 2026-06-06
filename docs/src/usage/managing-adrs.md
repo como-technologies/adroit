@@ -3,7 +3,9 @@
 This guide covers the day-to-day workflow of creating and maintaining ADRs.
 adroit defaults to the **markdown / by-status** profile: status is encoded by
 the directory, and number/title come from the H1 heading. See
-[ADR Format](../reference/adr-format.md) for the full format.
+[ADR Format](../reference/adr-format.md) for the full format. For the bird's-eye
+view of how these verbs sequence across a decision's life, see
+[The ADR Workflow](./workflow.md).
 
 ## Creating an ADR
 
@@ -123,7 +125,7 @@ The link is recorded in the source ADR's frontmatter, shows in `adroit show`,
 and appears as a distinct, colored edge in the dashboard's
 [relationship graph](./web.md). Typed links are a **frontmatter-profile**
 feature (they're structured fields); under the markdown profile `adroit link`
-asks you to switch with `adroit migrate --format frontmatter`. The targets use
+asks you to switch with `adroit --format frontmatter migrate`. The targets use
 the same identifiers as everything else (number / slug / uuid / `category/NNNN`).
 
 ## Setting a review deadline
@@ -150,7 +152,7 @@ rest of the file. Prints to stdout if no `SUMMARY.md` is found.
 
 ```sh
 adroit review 1
-adroit review 1 --days 5 --quorum 3 --output review-kickoff.md
+adroit review 1 --days 5 --quorum 3 --out review-kickoff.md
 ```
 
 Generates a review-kickoff doc for an ADR — the structured "here's what you're
@@ -158,7 +160,7 @@ reviewing" document the team writes when opening an ADR for a formal accept or
 reject decision. It includes the review timeline (computed in business days,
 weekends skipped), the quorum, a table of key docs, and a checklist of what the
 review MR changes. This is pure generation: no git operations, and the ADR
-itself is untouched. Without `--output` it prints to stdout.
+itself is untouched. Without `--out` it prints to stdout.
 
 ## Editing an ADR
 

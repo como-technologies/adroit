@@ -83,7 +83,7 @@ adroit search postgres
 adroit set-review 9 2026-07-15
 
 # Generate the review-kickoff doc when it's ready for a formal decision
-adroit review 9 --output review-kickoff.md
+adroit review 9 --out review-kickoff.md
 
 # Record the outcome — moves the file + rewrites status in one step
 adroit set-status 9 accepted

@@ -53,6 +53,12 @@ Treat both as invariants every change must preserve:
   `new` (allocates the next ADR each run), `renumber old new` (one-shot rename;
   re-running fails because `old` no longer exists), `notify` (posts a fresh
   message), and the forge/git side effects (issue/PR creation, commit, push).
+  `new` keeps its non-idempotent semantics but adds a **duplicate guard**
+  (`dup_guard` in `main.rs`): on an exact (case-insensitive) title match it warns,
+  lists the match + the top similar ADRs (`similar::rank` over the new title), and
+  prompts `[y/N]` on a TTY (non-TTY warns + proceeds; `--force` skips). This
+  catches the *accidental* re-run without pretending `new` is idempotent — and is
+  the RFC's "dedupe before commit" idea wired into `new`.
 - **New write paths must keep this true.** Don't introduce hidden persisted state
   (caches, lock files, a daemon) or a mutation that changes a file it didn't need
   to. The guard test `commands_are_idempotent` (in `tests/cli.rs`) runs the
@@ -91,7 +97,7 @@ just run <args>  # run the binary
   (model-based oracle over the format×layout×scheme×relink_scope matrix),
   `parsers.rs` + `fuzz_parsers.rs` (parser properties / bolero coverage-guided fuzz),
   `config_precedence.rs`, `date_source_git.rs`, `forge_faults.rs` + `forge_cli.rs`
-  (`--features forge`). See the book's **Development → Testing & Fuzzing** page
+  (`forge`, now in the default build). See the book's **Development → Testing & Fuzzing** page
   (`docs/src/dev/testing.md`); the campaign that built them is **Hardening & Quality**.
 - `docs/` — mdbook user manual source (`book.toml` + `src/`), published to
   GitHub Pages; build output goes to `docs/book/` (gitignored)
@@ -110,10 +116,41 @@ JSON with no extra mapping. Write logic stays in the `Store` write path (CLI +
 future TUI only); the query layer never writes. Markdown→HTML rendering is
 deliberately deferred to the web surface (`AdrDetail::body_html` stays `None`).
 
-**Repo validation is shared here too.** `query::check` runs the five `adroit
-check` rules (status/dir mismatch, duplicate identifiers, unparseable files,
-broken supersession, broken/stale links) and returns a structured
-`view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). Both the
+**The CLI emits the same JSON too (`-o`/`--output json`).** A global
+`cli::OutputFormat` (`human` default, `json`) is honored by the read verbs —
+`list`, `show`, `search`, `stats`, `graph`, `check` — which serialize the `view`
+types via `serde_json` (a core dep) through the `print_json` helper in `main.rs`.
+So an AI agent / script drives the CLI for the same shapes the web API returns
+(`docs/src/usage/automation.md`). `check -o json` still exits non-zero on an
+Error-severity problem (the CI gate). The destination flags on `publish` and
+`review` are **`--out`** (long-only) so the short `-o` belongs to `--output`.
+`stats` + `graph` are thin CLI verbs over `query::stats`/`query::graph` (added to
+both `help_template`s — the `commands_are_all_grouped` guard). Note the five
+on-disk *shape* globals (`--format/--layout/--naming/--date-source/--relink-scope`)
+are **top-level-only** (env still binds); only `--dir` stays `global`.
+
+**Help model.** `-h` and `--help` show the **same concise** help (command list +
+`--dir`/`--output`); `--help-all` shows everything. Done with the canonical clap
+recipe: `disable_help_flag = true` on the root, then custom **global** `help`
+(`-h`/`--help`, `ArgAction::HelpShort`) + `help_all` (`--help-all`,
+`ArgAction::HelpLong`) flags — `disable_help_flag` propagates to subcommands, so
+the help flags are `global = true` to re-provide `-h`/`--help`/`--help-all`
+everywhere. The repo-shape + command-default options carry `hide_short_help = true`
+so they surface only under `--help-all`. (Do not re-add a built-in help flag.)
+
+**Human output.** Colored via the `colored` crate (`status_color` /
+`status_bar_color` / `edge_label` in `main.rs`); `main` calls
+`colored::control::set_override(false)` when stdout isn't a terminal, so pipes /
+`-o json` / `NO_COLOR` get plain text (the assert_cmd tests therefore see plain
+output). `graph`'s human view is a **tree** (edges grouped under each source node,
+`├─`/`└─` connectors, isolated ADRs as an `unconnected:` footnote); `stats` renders
+the by-status breakdown + created-per-month as `print_bars` horizontal bar charts
+(rnought/talaria `█`/`░` style). `-o json` output is never colored or charted.
+
+**Repo validation is shared here too.** `query::check` runs the `adroit check`
+rules (status/dir mismatch, duplicate identifiers, unparseable files, broken
+supersession, broken/stale links, and a **duplicate-title** `Warning`) and returns
+a structured `view::CheckReport` (`Problem` + `Severity` + `ProblemKind`). Both the
 supersession and the cross-ADR-link checks are **scheme-aware** — they resolve a
 link/ref to an ADR via the naming seam (`ref_in_link_from`), so date/uuid/
 per_category links classify *stale* (ADR moved → warning) vs *broken* (no such ADR
@@ -524,6 +561,88 @@ live-reload tick).
 env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
 `get_str`/`set_str`/`CONFIG_KEYS`. `just lint-forge`/`test-forge` (folded into
 `just ci`) cover the feature build.
+
+## AI authoring (`ai` feature)
+
+Opt-in AI-assisted authoring (RFC: issue 5; built on the `rig` framework). Same
+shape as `forge`: a **synchronous** `AiProvider`
+trait so verb handlers stay sync, with the async work bridged by a single
+`block_on` at the CLI boundary — so `--no-default-features`/`tui`/`forge` never
+pull in tokio.
+
+**Always compiled** (`src/ai/mod.rs`, `src/ai_hook.rs`): the `AiProvider` trait,
+`CompletionRequest`/`AiError` value types, the Socratic `Interview` +
+`build_request`/`draft_body` logic, the `AI_MARKER`, and the `FakeProvider`
+stand-in. So the interview flow is unit-testable with **no network and no `ai`
+feature**. `ai_hook::open_provider(cfg)` is the facade (mirrors `forge_hook`):
+it returns a `Box<dyn AiProvider>` or `None`, resolving in order — the
+`ADROIT_AI_FAKE` test seam (offline echo) → the configured rig provider (the `ai`
+feature is on by default; a provider is only built when `ai.enabled`, and never in
+a `--no-default-features` core build) → `None`.
+
+**`ai`-gated** (`src/ai/rig_provider.rs`): `RigProvider` wraps rig (aliased from
+`rig-core` so `use rig::…` works) — Anthropic (`Client::builder().api_key(k)`) and
+Ollama (`Client::new(Nothing)`, local) — holding a current-thread tokio runtime
+and `block_on`-ing rig's async `agent(model).preamble(system).prompt(...)`.
+
+**`new --interview`** (`run_interview` in `main.rs`): asks the fixed
+`INTERVIEW_QUESTIONS` over **plain stdin** (robust on a non-TTY / piped test
+input; prompts go to stderr), builds a corpus summary from `query::summaries`,
+drafts via the provider, then **splices**: it keeps every line before the first
+`## Context…` (the mechanical heading / `## Status` / stakeholders) and replaces
+the prose with the marked draft, written through `Store::set_body_ref`. AI only
+ever writes prose — identity/status/dates/links stay mechanical. Degrades to the
+plain template when no provider is available, so the ADR is always created.
+
+**`draft <ID>`** (`cmd_draft`): the **after-the-fact `new --interview`** — runs the
+*same* interview on an existing ADR (you created it with a plain `new`), then opens
+the editor. `new --interview` and `draft` share `interview_and_draft` (the Q&A →
+`ai::draft_body` → `splice_ai_draft`); `run_interview` is just the `new`-side
+provider-resolution that degrades to the template, whereas `draft` uses
+`require_provider` (errors — the ADR already exists, no fallback). Iterative flow:
+`new` → `draft` → `edit` → PR.
+
+**`plan <ID>`** (`cmd_plan`, `ai::build_plan_request`/`draft_plan`): the
+**read-only** companion — reads an ADR (`query::detail_at`) + corpus, asks the
+provider for an ordered implementation checklist, prints it (or `--out`). Never
+modifies the ADR; bails (not degrades) when no provider is available, since a
+plan is inherently AI.
+
+**`summarize <ID>`** (`cmd_summarize`, `ai::build_summary_request`/`draft_summary`):
+a one-paragraph read-only TL;DR of an ADR (PR body / notify / decision log); prints
+to stdout or `--out`; bails with no provider.
+
+**`lint <ID>`** (`cmd_lint`, `src/lint.rs`): authoring-quality checks on one ADR,
+**distinct from `check`** (structural repo validity). `lint::lint(body)` is the
+deterministic core — leftover MADR placeholders, missing/empty
+`### Negative Consequences`, `## Considered Options` with <2 items — returning
+`Vec<LintFinding>` (`LintSource::Mechanical`/`Ai`, serde). It needs **no AI**, so
+it's CI-usable; `--ai` appends one advisory finding from `ai::draft_lint`. Exits
+non-zero on **mechanical** findings only (AI is advisory); `-o json` emits the
+findings.
+
+**`related <ID>` / `dedupe <ID>`** (`cmd_related`, `src/similar.rs`) are
+retrieval verbs but **mechanical — NO AI/provider**: TF-IDF cosine over the corpus
+(title + body). `related` excludes ADRs already linked to the target (link
+candidates); `dedupe` includes them (duplicate-catching). Read-only; `-o json`.
+
+**`ask "<q>"`** (`cmd_ask`, `ai::build_ask_request`/`draft_ask`) combines the two
+halves: **mechanical retrieval** (reuse `similar::rank` with the question as a
+transient target doc, via the shared `corpus_docs` helper) feeds the top ADR
+excerpts to the **provider**, which answers with citations. Human output = answer
+on stdout + `(sources: …)` on stderr; `-o json` = `{answer, sources}`. Bails with
+no provider. The **embeddings** upgrade to similarity/retrieval is future work —
+Anthropic has no embeddings API, so it needs a separate embedding-capable provider
++ a cache.
+
+**Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
+`model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by
+default). `config::resolve_ai(cfg.ai)` overlays `ADROIT_AI_*` env overrides
+(`ENABLED`/`PROVIDER`/`MODEL`/`HOST`) on the config section, so AI is enablable via
+env / `.env` with no `config.yaml` edit (what `ai_hook::open_provider` calls). The
+key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY` / the
+credential store). `serde_json` is a core dep; `rig`+`tokio` are `ai`-only.
+`just lint-ai`/`test-ai` (folded into `just ci`) cover the feature build.
 
 ## Conventions
 

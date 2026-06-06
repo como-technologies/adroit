@@ -13,6 +13,8 @@ Architecture Decision Records are short documents that capture important archite
 adroit gives you a terminal-native interface for the full ADR lifecycle:
 
 - **Create** new ADRs from templates with guided prompts
+- **Draft with AI** (opt-in) — an interview-driven first draft, `lint` for
+  authoring gaps, and corpus Q&A — see [The ADR Workflow](./usage/workflow.md)
 - **Browse** and search your decision log in a rich, interactive TUI
 - **Update** status as decisions are superseded, deprecated, or accepted
 - **Link** related decisions together to build a navigable decision graph
