@@ -207,13 +207,39 @@ thin `driver` submodule that wires crossterm + ratatui and runs the headless
 GitHub-Flavored Markdown via `the-other-tui-markdown` (a `tui`-gated optional dep
 on `ratatui-core` 0.1, so no duplicate ratatui in the tree). In the `driver`
 module, `render_markdown_body(body, theme)` returns a ratatui `Text` (`into_text`
-for the default ANSI theme, `into_text_with_theme` + `gruvbox_theme()` for
-gruvbox); `render_preview` prepends the metadata header and `m` toggles
-`TuiState::preview_raw` (rendered ↔ raw source). Themes are
-`config::MarkdownTheme { Default, Gruvbox }`, resolved from `--theme` /
-`ADROIT_THEME` / `tui_theme` config (flag > env > config) and applied via
-`TuiState::set_md_theme` in `tui::run`. Code-block syntax highlighting is
-deferred. The editor (`i`) always shows raw source.
+for the default ANSI theme, `into_text_with_theme` + `gruvbox_theme()`/
+`warm_theme()` for the true-color themes); `render_preview` prepends the metadata
+header and `m` toggles `TuiState::preview_raw` (rendered ↔ raw source). Themes are
+`config::MarkdownTheme { Gruvbox (#[default]), Warm, Default }`, resolved from
+`--theme` / `ADROIT_THEME` / `tui_theme` config (flag > env > config) and applied
+via `TuiState::set_md_theme` (wired in `driver::run` after `TuiState::new`).
+Code-block syntax highlighting is deferred. The editor (`i`) always shows raw
+source.
+
+**Whole-UI chrome.** The selected theme drives the entire interface, not just the
+markdown body. `driver::chrome(theme) -> Chrome` centralizes the palette (accent,
+muted, border, selection_bg, title) per theme; every render fn routes it — rounded
+borders (`BorderType::Rounded`) that brighten to the accent on focus, a `▶ `
+selection marker, themed titles. The layout is three rows: a top **breadcrumb**
+status bar (`render_breadcrumb`: `adroit › <filter> › "<search>" · N ADRs · sort:…
+· <theme>`), the list+preview body, and a two-line **footer** (`render_footer`) —
+line 1 is the active input prompt (accent) or a transient status message colored
+by severity (`toast_color`: failures red, else accent), line 2 the muted
+context-aware key hints. `?` toggles a centered keybinding **help overlay**
+(`render_help`, grouped by task; any key dismisses it — intercepted at the top of
+`handle_key`).
+
+**Preview scrolling & mouse.** The preview is scrollable with a gutter scrollbar
+(`Scrollbar`/`ScrollbarState`, shown only when content overflows). Because
+`Paragraph::line_count` is private in ratatui 0.30, `render_preview` estimates the
+wrapped height with `wrapped_line_count(text, width)` and reports it via
+`TuiState::set_preview_metrics(lines, viewport)`, which clamps the offset (and
+re-clamps when switching to a shorter ADR). Scroll keys (`handle_preview_key`):
+`j`/`k` by line, `PageUp`/`PageDown` and `Ctrl-U`/`Ctrl-D` by viewport, `g`/`Home`
+to top, `G`/`End` to bottom. The terminal enables mouse capture
+(`EnableMouseCapture` in `setup`, `DisableMouseCapture` in `teardown`); the event
+loop matches `Event::Mouse`, and `handle_mouse` wheel-scrolls the focused preview
+or otherwise moves the list selection.
 
 **In-TUI body editor.** Pressing `i` on the selected ADR enters `Mode::Edit`,
 loading the body into an `EditorBuffer` — a pure multi-line plain-text editor

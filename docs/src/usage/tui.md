@@ -6,12 +6,17 @@ Run `adroit` with no subcommand to launch the interactive terminal interface:
 adroit
 ```
 
-The TUI is a keyboard-driven, two-pane interface for browsing and managing your
-decision log: the left pane lists ADRs (filter by status, search, sort) and the
-right pane shows a preview — rendered as GitHub-Flavored Markdown (press `m` to
-toggle raw source), or an in-terminal editor when you press `i`. Every read goes
+The TUI is a keyboard-driven (and mouse-aware), two-pane interface for browsing
+and managing your decision log: a top status bar breadcrumbs the current view
+(`adroit › <filter> › "<search>" · N ADRs · sort:… · <theme>`), the left pane
+lists ADRs (filter by status, search, sort) and the right pane shows a preview —
+rendered as GitHub-Flavored Markdown (press `m` to toggle raw source), or an
+in-terminal editor when you press `i`. A two-line footer shows the active prompt
+or a status message (errors in red) over context-aware key hints. Every read goes
 through the shared query layer and every write goes through the same `Store` path
 the CLI uses, so the two surfaces never diverge.
+
+Press `?` at any time for an in-app keybinding cheat-sheet; any key dismisses it.
 
 ## List & preview
 
@@ -29,11 +34,26 @@ the CLI uses, so the two surfaces never diverge.
 | `i`            | **Edit the selected ADR's body in the TUI**       |
 | `e`            | Open the selected ADR in `$EDITOR`                |
 | `m`            | Toggle the preview between rendered and raw markdown |
+| `?`            | Toggle the keybinding help overlay                |
 | `r`            | Refresh from disk                                 |
 | `q` / `Esc`    | Quit                                              |
 
-In the preview pane, `j` / `k` scroll, `m` toggles rendered/raw, and
-`Enter` / `Esc` return to the list.
+The mouse wheel moves the list selection while the list is focused.
+
+### Scrolling the preview
+
+Press `Enter` to focus the preview pane; a scrollbar appears in the right gutter
+whenever the body overflows. The mouse wheel scrolls the focused preview.
+
+| Key                  | Action                              |
+| -------------------- | ----------------------------------- |
+| `j` / `k` (`↓` / `↑`) | Scroll one line down / up           |
+| `PageDown` / `PageUp` | Scroll one viewport down / up       |
+| `Ctrl-D` / `Ctrl-U`   | Scroll one viewport down / up (vim) |
+| `g` / `Home`          | Jump to the top                     |
+| `G` / `End`           | Jump to the bottom                  |
+| `m`                   | Toggle rendered / raw markdown      |
+| `Enter` / `Esc`       | Return to the list                  |
 
 ## Markdown rendering & themes
 
@@ -44,18 +64,21 @@ toggle between the rendered view and the raw markdown source (the in-TUI editor,
 `i`, always shows raw source — you need it to edit). Code blocks are styled but
 not yet syntax-highlighted.
 
-Two themes are available, selected with `--theme`, the `ADROIT_THEME`
-environment variable, or the `tui_theme` config key:
+The theme drives the **whole** interface — markdown body, border accents,
+selection marker, breadcrumb, and footer — not just the preview. Three themes are
+available, selected with `--theme`, the `ADROIT_THEME` environment variable, or
+the `tui_theme` config key:
 
 | Theme | Description |
 | ----- | ----------- |
-| `default` | 16-color ANSI palette — respects your terminal's colors. The default. |
-| `gruvbox` | True-color gruvbox, matching the house mdBook/doxygen theme. |
+| `gruvbox` | True-color gruvbox, matching the house mdBook/doxygen theme. **The default.** |
+| `warm` | A single warm-orange accent over warm neutrals (Claude-Code-inspired). |
+| `default` | 16-color ANSI palette — respects your terminal's own colors. |
 
 ```sh
-adroit --theme gruvbox            # this session
-# or in ~/.config/adroit/config.yaml:  tui_theme: gruvbox
-# or in a .env file:                   ADROIT_THEME=gruvbox
+adroit --theme warm               # this session
+# or in ~/.config/adroit/config.yaml:  tui_theme: warm
+# or in a .env file:                   ADROIT_THEME=warm
 ```
 
 ## Editing a body in the TUI

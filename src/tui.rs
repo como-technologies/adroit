@@ -301,6 +301,11 @@ pub struct TuiState {
     mode: Mode,
     preview: Option<AdrDetail>,
     preview_scroll: u16,
+    /// Total rendered (wrapped) lines of the current preview, set each frame by
+    /// the renderer — drives scroll clamping + the scrollbar.
+    preview_lines: usize,
+    /// Visible height of the preview pane, set each frame by the renderer.
+    preview_viewport: usize,
     message: Option<String>,
     /// The in-TUI body editor buffer, present only while in [`Mode::Edit`].
     editor: Option<EditorBuffer>,
@@ -507,14 +512,61 @@ impl TuiState {
 
     // --- preview scroll -----------------------------------------------------
 
-    /// Scroll the preview down one line.
+    /// Record the preview's rendered line count + viewport height (set by the
+    /// renderer each frame) so scrolling can clamp and the scrollbar can size.
+    pub fn set_preview_metrics(&mut self, lines: usize, viewport: usize) {
+        self.preview_lines = lines;
+        self.preview_viewport = viewport;
+        // Re-clamp in case the content shrank under the current offset.
+        let max = self.preview_max_scroll();
+        if self.preview_scroll > max {
+            self.preview_scroll = max;
+        }
+    }
+
+    /// Total preview lines (rendered, wrapped).
+    pub fn preview_lines(&self) -> usize {
+        self.preview_lines
+    }
+
+    /// The maximum scroll offset (last line scrolled to the top of the viewport).
+    fn preview_max_scroll(&self) -> u16 {
+        self.preview_lines.saturating_sub(self.preview_viewport) as u16
+    }
+
+    /// Scroll the preview down one line (clamped to the content end).
     pub fn preview_scroll_down(&mut self) {
-        self.preview_scroll = self.preview_scroll.saturating_add(1);
+        self.preview_scroll = (self.preview_scroll + 1).min(self.preview_max_scroll());
     }
 
     /// Scroll the preview up one line.
     pub fn preview_scroll_up(&mut self) {
         self.preview_scroll = self.preview_scroll.saturating_sub(1);
+    }
+
+    /// Jump to the top of the preview.
+    pub fn preview_scroll_top(&mut self) {
+        self.preview_scroll = 0;
+    }
+
+    /// Jump to the bottom of the preview.
+    pub fn preview_scroll_bottom(&mut self) {
+        self.preview_scroll = self.preview_max_scroll();
+    }
+
+    /// Scroll down one viewport (Page Down / Ctrl-D).
+    pub fn preview_page_down(&mut self) {
+        let step = self.preview_viewport.max(1) as u16;
+        self.preview_scroll = self
+            .preview_scroll
+            .saturating_add(step)
+            .min(self.preview_max_scroll());
+    }
+
+    /// Scroll up one viewport (Page Up / Ctrl-U).
+    pub fn preview_page_up(&mut self) {
+        let step = self.preview_viewport.max(1) as u16;
+        self.preview_scroll = self.preview_scroll.saturating_sub(step);
     }
 
     // --- mode transitions ---------------------------------------------------
@@ -1027,13 +1079,19 @@ fn apply_action(state: &mut TuiState, store: &Store, cfg: &Config, action: Actio
 mod driver {
     use super::*;
     use crossterm::{
-        event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+            KeyModifiers, MouseEvent, MouseEventKind,
+        },
         execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     };
     use ratatui::{
         prelude::*,
-        widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+        widgets::{
+            Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+            ScrollbarOrientation, ScrollbarState, Wrap,
+        },
     };
     use std::io::{Stdout, stdout};
     use std::time::Duration;
@@ -1056,13 +1114,17 @@ mod driver {
     fn setup() -> Result<Term> {
         enable_raw_mode()?;
         let mut out = stdout();
-        execute!(out, EnterAlternateScreen)?;
+        execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
         Ok(Terminal::new(CrosstermBackend::new(out))?)
     }
 
     fn teardown(terminal: &mut Term) -> Result<()> {
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
         terminal.show_cursor()?;
         Ok(())
     }
@@ -1079,23 +1141,59 @@ mod driver {
             if !event::poll(Duration::from_millis(200))? {
                 continue;
             }
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    let action = handle_key(state, key);
+                    // The editor needs the terminal suspended; everything else
+                    // goes through the shared, headless `apply_action`.
+                    if let Action::Edit(addr) = action {
+                        run_editor(terminal, state, store, config, &addr)?;
+                        continue;
+                    }
+                    if apply_action(state, store, config, action)? {
+                        break;
+                    }
                 }
-                let action = handle_key(state, key);
-                // The editor needs the terminal suspended; everything else goes
-                // through the shared, headless `apply_action`.
-                if let Action::Edit(addr) = action {
-                    run_editor(terminal, state, store, config, &addr)?;
-                    continue;
+                Event::Mouse(m) => {
+                    let action = handle_mouse(state, m);
+                    if apply_action(state, store, config, action)? {
+                        break;
+                    }
                 }
-                if apply_action(state, store, config, action)? {
-                    break;
-                }
+                _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Map a mouse event to an action: the wheel scrolls the preview when it's
+    /// focused, otherwise moves the list selection (and dismisses the help overlay).
+    fn handle_mouse(state: &mut TuiState, m: MouseEvent) -> Action {
+        if state.show_help() {
+            state.close_help();
+            return Action::None;
+        }
+        match m.kind {
+            MouseEventKind::ScrollDown => {
+                if matches!(state.mode(), Mode::Preview) {
+                    state.preview_scroll_down();
+                    Action::None
+                } else {
+                    state.select_next();
+                    Action::Refresh
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if matches!(state.mode(), Mode::Preview) {
+                    state.preview_scroll_up();
+                    Action::None
+                } else {
+                    state.select_prev();
+                    Action::Refresh
+                }
+            }
+            _ => Action::None,
+        }
     }
 
     /// Suspend the TUI, run `$EDITOR` on the ADR, then resume and reload.
@@ -1257,6 +1355,31 @@ mod driver {
                 state.preview_scroll_up();
                 Action::None
             }
+            KeyCode::Char('g') | KeyCode::Home => {
+                state.preview_scroll_top();
+                Action::None
+            }
+            KeyCode::Char('G') | KeyCode::End => {
+                state.preview_scroll_bottom();
+                Action::None
+            }
+            KeyCode::PageDown => {
+                state.preview_page_down();
+                Action::None
+            }
+            KeyCode::PageUp => {
+                state.preview_page_up();
+                Action::None
+            }
+            // Ctrl-D / Ctrl-U: half-ish page (a full viewport here) — vim muscle memory.
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.preview_page_down();
+                Action::None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.preview_page_up();
+                Action::None
+            }
             KeyCode::Char('m') => {
                 state.toggle_preview_raw();
                 Action::None
@@ -1390,13 +1513,19 @@ mod driver {
     fn ui(f: &mut Frame, state: &mut TuiState) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(2)])
+            .constraints([
+                Constraint::Length(1), // breadcrumb / status bar
+                Constraint::Min(1),    // body (list + preview)
+                Constraint::Length(2), // footer (message + key hints)
+            ])
             .split(f.area());
+
+        render_breadcrumb(f, state, chunks[0]);
 
         let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(chunks[0]);
+            .split(chunks[1]);
 
         render_list(f, state, panes[0]);
         if matches!(state.mode(), Mode::Edit { .. }) {
@@ -1404,10 +1533,10 @@ mod driver {
         } else {
             render_preview(f, state, panes[1]);
         }
-        render_footer(f, state, chunks[1]);
+        render_footer(f, state, chunks[2]);
 
         if let Mode::PickStatus { .. } = state.mode() {
-            render_status_picker(f, state, chunks[0]);
+            render_status_picker(f, state, chunks[1]);
         }
         if state.show_help() {
             render_help(f, state, f.area());
@@ -1475,6 +1604,44 @@ mod driver {
         f.render_widget(Paragraph::new(lines).block(block), popup);
     }
 
+    /// Top status/breadcrumb bar: `adroit › <filter> › "<search>" · N ADRs · sort · theme`.
+    fn render_breadcrumb(f: &mut Frame, state: &TuiState, area: Rect) {
+        let c = chrome(state.md_theme());
+        let crumb = || Span::styled(" › ", Style::default().fg(c.muted));
+        let dot = || Span::styled("  ·  ", Style::default().fg(c.muted));
+        let filter = state
+            .status_filter()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "all".to_string());
+        let mut spans = vec![
+            Span::styled(
+                " adroit",
+                Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+            ),
+            crumb(),
+            Span::styled(filter, Style::default().fg(c.title)),
+        ];
+        if let Some(q) = state.search() {
+            spans.push(crumb());
+            spans.push(Span::styled(
+                format!("\"{q}\""),
+                Style::default().fg(c.accent),
+            ));
+        }
+        for (label, val) in [
+            ("", format!("{} ADRs", state.visible_rows().len())),
+            ("sort:", sort_label(state.sort()).to_string()),
+            ("", state.md_theme().to_string()),
+        ] {
+            spans.push(dot());
+            spans.push(Span::styled(
+                format!("{label}{val}"),
+                Style::default().fg(c.muted),
+            ));
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
     /// Render the in-TUI body editor in the right pane and place the terminal
     /// cursor. Reports the inner height back to `state` for scroll-follow.
     fn render_editor(f: &mut Frame, state: &mut TuiState, area: Rect) {
@@ -1525,16 +1692,10 @@ mod driver {
     }
 
     fn render_list(f: &mut Frame, state: &TuiState, area: Rect) {
-        let filter_label = match state.status_filter() {
-            Some(s) => s.to_string(),
-            None => "All".to_string(),
-        };
         let title = format!(
-            " ADRs [{}/{}]  filter:{}  sort:{} ",
+            " ADRs [{}/{}] ",
             state.selected_index().map(|i| i + 1).unwrap_or(0),
             state.visible_rows().len(),
-            filter_label,
-            sort_label(state.sort()),
         );
         let c = chrome(state.md_theme());
         let items: Vec<ListItem> = state
@@ -1712,7 +1873,22 @@ mod driver {
         iso.get(..10).unwrap_or(iso)
     }
 
-    fn render_preview(f: &mut Frame, state: &TuiState, area: Rect) {
+    /// Estimate how many rows a `Text` occupies wrapped to `width` columns.
+    /// (`Paragraph::line_count` is private in ratatui 0.30.) Char-based ceil is a
+    /// close upper bound on word-wrap — good enough to clamp scrolling + size the
+    /// scrollbar; over-estimating only adds a little slack at the bottom.
+    fn wrapped_line_count(text: &Text, width: u16) -> usize {
+        let w = width.max(1) as usize;
+        text.lines
+            .iter()
+            .map(|line| {
+                let cols = line.width();
+                if cols == 0 { 1 } else { cols.div_ceil(w) }
+            })
+            .sum()
+    }
+
+    fn render_preview(f: &mut Frame, state: &mut TuiState, area: Rect) {
         let header = match state.preview() {
             Some(d) => {
                 let s = &d.summary;
@@ -1740,18 +1916,16 @@ mod driver {
             }
             None => None,
         };
-        let para = match header {
-            Some((header, d)) if state.preview_raw() => {
-                Paragraph::new(format!("{header}{}", d.body))
-            }
+        let content: Text = match header {
+            Some((header, d)) if state.preview_raw() => Text::raw(format!("{header}{}", d.body)),
             Some((header, d)) => {
                 // Styled metadata header, then the themed Markdown body.
                 let mut text = Text::raw(header);
                 let rendered = render_markdown_body(&d.body, state.md_theme());
                 text.lines.extend(rendered.lines);
-                Paragraph::new(text)
+                text
             }
-            None => Paragraph::new("No ADR selected."),
+            None => Text::raw("No ADR selected."),
         };
         let c = chrome(state.md_theme());
         let focused = matches!(state.mode(), Mode::Preview);
@@ -1761,17 +1935,38 @@ mod driver {
         } else {
             " Preview "
         };
-        let para = para
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(border))
-                    .title(Span::styled(title, Style::default().fg(c.title))),
-            )
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border))
+            .title(Span::styled(title, Style::default().fg(c.title)));
+        let inner = block.inner(area);
+        // Measure the wrapped content so scrolling clamps and the scrollbar sizes
+        // (`Paragraph::line_count` is private, so estimate from line widths).
+        let total = wrapped_line_count(&content, inner.width);
+        state.set_preview_metrics(total, inner.height as usize);
+        let scroll = state.preview_scroll();
+        let para = Paragraph::new(content)
             .wrap(Wrap { trim: false })
-            .scroll((state.preview_scroll(), 0));
+            .block(block)
+            .scroll((scroll, 0));
         f.render_widget(para, area);
+
+        // Scrollbar in the right border gutter, only when the content overflows.
+        if total > inner.height as usize {
+            let mut sb = ScrollbarState::new(total)
+                .viewport_content_length(inner.height as usize)
+                .position(scroll as usize);
+            f.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .thumb_style(Style::default().fg(c.accent))
+                    .track_style(Style::default().fg(c.border))
+                    .begin_symbol(None)
+                    .end_symbol(None),
+                area,
+                &mut sb,
+            );
+        }
     }
 
     fn render_footer(f: &mut Frame, state: &TuiState, area: Rect) {
@@ -1794,27 +1989,38 @@ mod driver {
                  Ctrl-S save  Esc cancel"
             }
         };
-        let prompt = match state.mode() {
-            Mode::Search { input } => Some(format!("search: {input}")),
-            Mode::NewTitle { input } => Some(format!("new title: {input}")),
-            Mode::Supersede { input } => Some(format!("this supersedes {input}")),
+        // Line 1: the active input prompt (accent) or a transient message colored
+        // by severity (errors red, otherwise accent). Line 2: muted key hints.
+        let c = chrome(state.md_theme());
+        let (line1, color) = match state.mode() {
+            Mode::Search { input } => (format!("search: {input}"), c.accent),
+            Mode::NewTitle { input } => (format!("new title: {input}"), c.accent),
+            Mode::Supersede { input } => (format!("this supersedes {input}"), c.accent),
             Mode::Edit {
                 confirm_discard: true,
                 ..
-            } => Some("Unsaved changes — discard? (y/n)".to_string()),
-            _ => state.message().map(|m| m.to_string()),
+            } => ("Unsaved changes — discard? (y/n)".to_string(), Color::Red),
+            _ => match state.message() {
+                Some(m) => (m.to_string(), toast_color(m, c.accent)),
+                None => (String::new(), c.accent),
+            },
         };
-        // Line 1: the active prompt or a transient message, in the accent color;
-        // line 2: the context-aware key hints, muted.
-        let c = chrome(state.md_theme());
         let lines = vec![
-            Line::from(Span::styled(
-                prompt.unwrap_or_default(),
-                Style::default().fg(c.accent),
-            )),
+            Line::from(Span::styled(line1, Style::default().fg(color))),
             Line::from(Span::styled(help, Style::default().fg(c.muted))),
         ];
         f.render_widget(Paragraph::new(lines), area);
+    }
+
+    /// Severity color for a transient status message: red for failures, else the
+    /// theme accent (a lightweight "toast" without a separate overlay/clock).
+    pub(super) fn toast_color(msg: &str, accent: Color) -> Color {
+        let m = msg.to_ascii_lowercase();
+        if m.contains("fail") || m.contains("invalid") || m.contains("error") {
+            Color::Red
+        } else {
+            accent
+        }
     }
 
     fn render_status_picker(f: &mut Frame, state: &TuiState, area: Rect) {
@@ -2125,6 +2331,9 @@ mod tests {
     #[test]
     fn preview_scroll_saturates() {
         let mut s = TuiState::new();
+        // The render path measures content vs. viewport; emulate a 15-line body
+        // in a 10-row pane, so the last scrollable offset is 5.
+        s.set_preview_metrics(15, 10);
         assert_eq!(s.preview_scroll(), 0);
         s.preview_scroll_up(); // can't go negative
         assert_eq!(s.preview_scroll(), 0);
@@ -2133,6 +2342,15 @@ mod tests {
         assert_eq!(s.preview_scroll(), 2);
         s.preview_scroll_up();
         assert_eq!(s.preview_scroll(), 1);
+        // Can't scroll past the content end (max offset = 15 - 10).
+        for _ in 0..20 {
+            s.preview_scroll_down();
+        }
+        assert_eq!(s.preview_scroll(), 5);
+        s.preview_scroll_top();
+        assert_eq!(s.preview_scroll(), 0);
+        s.preview_scroll_bottom();
+        assert_eq!(s.preview_scroll(), 5);
     }
 
     #[test]
@@ -2148,11 +2366,56 @@ mod tests {
     #[test]
     fn toggling_raw_resets_preview_scroll() {
         let mut s = TuiState::new();
+        s.set_preview_metrics(15, 10);
         s.preview_scroll_down();
         s.preview_scroll_down();
         assert_eq!(s.preview_scroll(), 2);
         s.toggle_preview_raw();
         assert_eq!(s.preview_scroll(), 0);
+    }
+
+    #[test]
+    fn preview_paging_steps_by_viewport_and_clamps() {
+        let mut s = TuiState::new();
+        s.set_preview_metrics(100, 20); // max offset = 80, page = 20
+        s.preview_page_down();
+        assert_eq!(s.preview_scroll(), 20);
+        s.preview_page_down();
+        assert_eq!(s.preview_scroll(), 40);
+        s.preview_page_up();
+        assert_eq!(s.preview_scroll(), 20);
+        // Paging never overshoots the content end or the top.
+        for _ in 0..10 {
+            s.preview_page_down();
+        }
+        assert_eq!(s.preview_scroll(), 80);
+        for _ in 0..10 {
+            s.preview_page_up();
+        }
+        assert_eq!(s.preview_scroll(), 0);
+    }
+
+    #[test]
+    fn shrinking_content_reclamps_scroll_offset() {
+        let mut s = TuiState::new();
+        s.set_preview_metrics(50, 10);
+        s.preview_scroll_bottom();
+        assert_eq!(s.preview_scroll(), 40);
+        // Switching to a shorter ADR must pull the offset back in range.
+        s.set_preview_metrics(12, 10);
+        assert_eq!(s.preview_scroll(), 2);
+    }
+
+    #[test]
+    fn toast_color_flags_failures_red_else_accent() {
+        use super::driver::toast_color;
+        use ratatui::style::Color;
+        let accent = Color::Yellow;
+        assert_eq!(toast_color("save failed: disk full", accent), Color::Red);
+        assert_eq!(toast_color("invalid status", accent), Color::Red);
+        assert_eq!(toast_color("Error: no such ADR", accent), Color::Red);
+        assert_eq!(toast_color("saved ADR-0007", accent), accent);
+        assert_eq!(toast_color("status → accepted", accent), accent);
     }
 
     #[test]
