@@ -44,6 +44,16 @@ build-ai:
 run-ai *ARGS:
     cargo run --features ai -- {{ARGS}}
 
+# Build the full-featured dogfooding binary: default tui + ai + forge in one.
+# (`web` stays separate — it needs the SPA bundle; use `just serve`.) This is
+# the build to use while we work toward ai+forge being on by default.
+build-all:
+    cargo build --features ai,forge
+
+# Run the full-featured (ai+forge) binary, e.g. `just run-all ask "..." --dir adr`.
+run-all *ARGS:
+    cargo run --features ai,forge -- {{ARGS}}
+
 # Run all tests
 test *ARGS:
     cargo test {{ARGS}}
