@@ -330,6 +330,25 @@ pub const STATUSES: [Status; 5] = [
     Status::Superseded,
 ];
 
+/// The `(message, hint)` for an empty list pane, chosen by what is hiding the
+/// rows: an active search, an active status filter, or a genuinely empty repo.
+/// Pure (terminal-free) so the message logic is unit-tested headlessly.
+fn empty_list_message(search: Option<&str>, status: Option<Status>) -> (String, &'static str) {
+    if let Some(q) = search {
+        (
+            format!("No ADRs match \"{q}\""),
+            "Esc clears the search · f changes the filter",
+        )
+    } else if let Some(s) = status {
+        (format!("No {s} ADRs"), "f cycles the status filter")
+    } else {
+        (
+            "No ADRs yet".to_string(),
+            "Press n to create your first decision record",
+        )
+    }
+}
+
 /// A command exposed in the `:` fuzzy command palette. Each maps to the same
 /// effect as its keybinding — the palette is the discoverable, searchable index
 /// of everything the TUI can do (Claude-Code-style). Adding a verb here is the
@@ -2146,6 +2165,22 @@ mod driver {
             state.visible_rows().len(),
         );
         let c = chrome(state.md_theme());
+        let focused = matches!(state.mode(), Mode::List);
+        let border = if focused { c.accent } else { c.border };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border))
+            .title(Span::styled(title, Style::default().fg(c.title)));
+
+        // Empty list: show a context-aware hint instead of a blank pane.
+        if state.visible_rows().is_empty() {
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            render_empty_list(f, state, inner, &c);
+            return;
+        }
+
         let items: Vec<ListItem> = state
             .visible_rows()
             .iter()
@@ -2167,17 +2202,9 @@ mod driver {
         list_state.select(state.selected_index());
 
         // The list is the primary pane: accent border unless the preview/editor
-        // has focus.
-        let focused = matches!(state.mode(), Mode::List);
-        let border = if focused { c.accent } else { c.border };
+        // has focus (computed above for the empty-state path).
         let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(border))
-                    .title(Span::styled(title, Style::default().fg(c.title))),
-            )
+            .block(block)
             .highlight_style(
                 Style::default()
                     .bg(c.selection_bg)
@@ -2186,6 +2213,22 @@ mod driver {
             )
             .highlight_symbol("▶ ");
         f.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// A friendly, context-aware empty state for the list pane: distinguishes an
+    /// empty repo from a search/filter that currently hides everything.
+    fn render_empty_list(f: &mut Frame, state: &TuiState, area: Rect, c: &Chrome) {
+        let (msg, hint) = empty_list_message(state.search(), state.status_filter());
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                msg,
+                Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+            ))
+            .centered(),
+            Line::from(Span::styled(hint, Style::default().fg(c.muted))).centered(),
+        ];
+        f.render_widget(Paragraph::new(lines), area);
     }
 
     /// The gruvbox (true-color) markdown theme. Starts from the crate default
@@ -2452,7 +2495,11 @@ mod driver {
                 text.lines.extend(rendered.lines);
                 text
             }
-            None => Text::raw("No ADR selected."),
+            None => Text::from(vec![
+                Line::from(""),
+                Line::from("No ADR selected").centered(),
+                Line::from("create one with n, or pick one on the left").centered(),
+            ]),
         };
         let c = chrome(state.md_theme());
         let focused = matches!(state.mode(), Mode::Preview);
@@ -3181,6 +3228,19 @@ mod tests {
         assert!(s.show_help());
         s.close_help();
         assert!(!s.show_help());
+    }
+
+    #[test]
+    fn empty_list_message_is_context_aware() {
+        // Empty repo (no search, no filter).
+        let (m, _) = empty_list_message(None, None);
+        assert_eq!(m, "No ADRs yet");
+        // Active search wins over a filter.
+        let (m, _) = empty_list_message(Some("ratatui"), Some(Status::Accepted));
+        assert_eq!(m, "No ADRs match \"ratatui\"");
+        // Filter-only.
+        let (m, _) = empty_list_message(None, Some(Status::Proposed));
+        assert_eq!(m, "No Proposed ADRs");
     }
 
     #[test]

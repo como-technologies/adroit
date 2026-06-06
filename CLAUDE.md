@@ -233,7 +233,10 @@ line 1 is the active input prompt (accent) or a transient status message colored
 by severity (`toast_color`: failures red, else accent), line 2 the muted
 context-aware key hints. `?` toggles a centered keybinding **help overlay**
 (`render_help`, grouped by task; any key dismisses it — intercepted at the top of
-`handle_key`).
+`handle_key`). Empty panes show a friendly, context-aware hint rather than a blank
+box: `empty_list_message(search, status)` (pure) distinguishes an empty repo
+("No ADRs yet — press n") from a search/filter hiding everything, and the preview
+shows a centered "No ADR selected" hint.
 
 **Command palette (`:`).** A fuzzy command palette (`Mode::Palette { input,
 index }`, opened with `:`) is the discoverable index of every TUI verb. The
