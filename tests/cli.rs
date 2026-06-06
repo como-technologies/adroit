@@ -2885,3 +2885,25 @@ fn new_unique_title_has_no_dup_warning() {
         .success()
         .stderr(predicate::str::contains("already use this title").not());
 }
+
+#[test]
+fn new_interview_keeps_template_when_the_ai_call_fails() {
+    let dir = TempDir::new().unwrap();
+    // `__ERROR__` makes the fake provider fail (simulating an API credit/network error).
+    adroit(&dir)
+        .args(["new", "Adopt feature flags", "--interview", "--no-edit"])
+        .env("ADROIT_AI_FAKE", "__ERROR__")
+        .write_stdin("ctx\ndrivers\noptions\nrisks\n")
+        .assert()
+        .success() // NOT an error exit — the ADR is created from the template
+        .stderr(predicate::str::contains("AI draft failed"));
+    // The ADR exists, is valid, and kept the template (no AI marker).
+    adroit(&dir).arg("check").assert().success();
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    assert!(body.contains("# ADR-0001: Adopt feature flags"));
+    assert!(
+        !body.contains("adroit:ai-suggested"),
+        "no AI draft on failure"
+    );
+}

@@ -275,6 +275,11 @@ impl AiProvider for FakeProvider {
         "fake".to_string()
     }
     fn complete(&self, _req: &CompletionRequest) -> Result<String, AiError> {
+        // Test hook: a canned value of `__ERROR__` simulates a provider failure
+        // (e.g. an API credit/network error) so the degrade paths are testable.
+        if self.canned == "__ERROR__" {
+            return Err(AiError::Api("simulated provider failure".into()));
+        }
         Ok(self.canned.clone())
     }
 }

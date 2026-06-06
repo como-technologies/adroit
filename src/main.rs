@@ -656,8 +656,23 @@ fn run_interview(store: &Store, cfg: &Config, title: &str, r: &AdrRef) -> Result
         .collect();
 
     eprintln!("\nDrafting with {} …", provider.id());
-    let draft =
-        ai::draft_body(provider.as_ref(), &iv, &corpus).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let draft = match ai::draft_body(provider.as_ref(), &iv, &corpus) {
+        Ok(d) => d,
+        // The ADR was already created from the template — a provider failure
+        // (credits, network, …) shouldn't error it out. Keep the template, warn,
+        // and degrade (so the editor isn't auto-opened over the message).
+        Err(e) => {
+            eprintln!(
+                "{}",
+                format!(
+                    "warning: AI draft failed ({e}). Kept the plain template (your answers \
+                     weren't saved) — fix the provider and re-run, or edit by hand."
+                )
+                .yellow()
+            );
+            return Ok(false);
+        }
+    };
 
     // Splice the draft in: keep the mechanical header (identity / status /
     // stakeholders) — every line before the first `## Context…` prose section —
