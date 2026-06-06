@@ -126,13 +126,52 @@ impl Profile {
 /// gated by the active `Profile` (e.g. `Renumber` is a no-op off `sequential`).
 #[derive(Debug, Clone)]
 enum Op {
-    New { title: String, cat_idx: usize },
-    SetStatus { which: usize, status: Status },
-    Supersede { newer: usize, older: usize },
-    SetReview { which: usize, clear: bool },
-    Renumber { which: usize },
+    New {
+        title: String,
+        cat_idx: usize,
+    },
+    SetStatus {
+        which: usize,
+        status: Status,
+    },
+    Supersede {
+        newer: usize,
+        older: usize,
+    },
+    SetReview {
+        which: usize,
+        clear: bool,
+    },
+    Renumber {
+        which: usize,
+    },
     Relink,
+    /// `link <src> <--relates-to|--depends-on|--refines> <dst>` — a typed
+    /// cross-ADR link. Not modeled in the oracle (the link target/relation
+    /// aren't tracked); the invariants (`check` clean + relink-canonical) verify
+    /// the link is valid and heals when its target later moves.
+    Link {
+        src: usize,
+        dst: usize,
+        rel: usize,
+    },
+    /// `draft <which>` with the AI fake seam — exercises the AI body-splice write
+    /// path across the matrix. Only the *prose* is rewritten; identity, status,
+    /// title, supersession, and review stay mechanical, so the oracle's model is
+    /// unchanged and its invariants verify the splice keeps the repo valid.
+    Draft {
+        which: usize,
+    },
 }
+
+/// The three typed-link relations `link` accepts.
+const LINK_RELS: [&str; 3] = ["--relates-to", "--depends-on", "--refines"];
+
+/// Canned AI body for the `Draft` op's `ADROIT_AI_FAKE` seam. The splice keeps
+/// everything before the first `## Context …` and replaces the rest with this.
+const FAKE_DRAFT: &str = "## Context and Problem Statement\n\nA fake-drafted context.\n\n\
+## Considered Options\n\n1. One\n2. Two\n\n## Decision Outcome\n\nChosen: one, because reasons.\n\n\
+### Negative Consequences\n\n- A genuine trade-off.";
 
 // ---------------------------------------------------------------------------
 // Oracle
@@ -334,6 +373,55 @@ impl Harness {
             Op::Relink => {
                 self.run(&["relink"])?;
             }
+            Op::Link { src, dst, rel } => {
+                // Typed relational links live in YAML frontmatter, so `link` is
+                // frontmatter-only (the CLI refuses it under markdown). Skip
+                // elsewhere — emitting it would be a false failure.
+                if self.profile.format != Format::Frontmatter {
+                    return Ok(());
+                }
+                // Needs two distinct ADRs.
+                if self.model.len() < 2 {
+                    return Ok(());
+                }
+                let a = src % self.model.len();
+                let b = dst % self.model.len();
+                if a == b {
+                    return Ok(());
+                }
+                let src_addr = self.model[a].addr.clone();
+                let dst_addr = self.model[b].addr.clone();
+                let flag = LINK_RELS[rel % LINK_RELS.len()];
+                self.run(&["link", &src_addr, flag, &dst_addr])?;
+                // No model update: the typed link isn't tracked. Correctness is
+                // covered by the post-command invariants — `check` stays clean and
+                // (under relink_scope=all) the repo stays link-canonical, so a link
+                // whose target later moves must be healed like any other.
+            }
+            Op::Draft { which } => {
+                let Some(i) = self.find(*which) else {
+                    return Ok(());
+                };
+                let addr = self.model[i].addr.clone();
+                // `ADROIT_AI_FAKE` drives the splice offline; null stdin so the
+                // interview reads EOF (empty answers). The fake provider is always
+                // compiled, independent of the `ai` feature.
+                let out = self
+                    .cmd()
+                    .args(["draft", &addr, "--no-edit"])
+                    .env("ADROIT_AI_FAKE", FAKE_DRAFT)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .expect("spawn adroit");
+                prop_assert!(
+                    out.status.success(),
+                    "`adroit draft {}` failed in {:?}: {}",
+                    addr,
+                    self.profile,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                // No model change — draft rewrites only the prose body.
+            }
         }
         Ok(())
     }
@@ -451,6 +539,120 @@ impl Harness {
 
         Ok(())
     }
+
+    /// Run the read-only verbs against the current (arbitrary) repo state and
+    /// assert they don't crash — and that the `-o json` emitters produce
+    /// parseable JSON. The verbs are individually tested in `cli.rs`; here they're
+    /// stressed on the random states a matrix sequence produces (empty repo,
+    /// all-superseded, cyclic links, every scheme/layout/format).
+    fn probe_reads(&self) -> Result<(), TestCaseError> {
+        // Whole-repo JSON emitters: must succeed and parse. `check` exits non-zero
+        // only on an Error-severity problem, which invariant (D) already rules out.
+        for args in [
+            ["list", "-o", "json"],
+            ["stats", "-o", "json"],
+            ["graph", "-o", "json"],
+            ["check", "-o", "json"],
+        ] {
+            let out = self.cmd().args(args).output().expect("spawn adroit");
+            prop_assert!(
+                out.status.success(),
+                "`adroit {}` failed in {:?}: {}",
+                args.join(" "),
+                self.profile,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).map_err(|e| {
+                TestCaseError::fail(format!(
+                    "`adroit {}` emitted invalid JSON: {e}",
+                    args.join(" ")
+                ))
+            })?;
+        }
+        // `publish` (accepted-set export) in dry-run — previews, writes nothing.
+        let preview = self.dir.path().join("__publish_preview__");
+        let out = self
+            .cmd()
+            .arg("publish")
+            .arg("--out")
+            .arg(&preview)
+            .arg("--dry-run")
+            .output()
+            .expect("spawn adroit");
+        prop_assert!(
+            out.status.success(),
+            "`adroit publish --dry-run` failed in {:?}: {}",
+            self.profile,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Per-ADR read verbs on the first ADR, when there is one.
+        if let Some(first) = self.model.first() {
+            let id = first.addr.clone();
+            for args in [
+                vec!["show", id.as_str(), "-o", "json"],
+                vec!["status", id.as_str()],
+                vec!["related", id.as_str()],
+                vec!["dedupe", id.as_str()],
+                vec!["search", "a"],
+            ] {
+                let out = self.cmd().args(&args).output().expect("spawn adroit");
+                prop_assert!(
+                    out.status.success(),
+                    "`adroit {}` failed in {:?}: {}",
+                    args.join(" "),
+                    self.profile,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            // AI read verbs via the fake seam (offline) — stressed across the matrix.
+            for verb in ["summarize", "plan"] {
+                let out = self
+                    .cmd()
+                    .args([verb, id.as_str()])
+                    .env("ADROIT_AI_FAKE", "A fake result paragraph.")
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .expect("spawn adroit");
+                prop_assert!(
+                    out.status.success(),
+                    "`adroit {} {}` failed in {:?}: {}",
+                    verb,
+                    id,
+                    self.profile,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            // `ask` (corpus Q&A) needs a non-empty corpus — it errors with "no ADRs
+            // to answer from" otherwise, so only probe it once an ADR exists.
+            let out = self
+                .cmd()
+                .args(["ask", "what was decided"])
+                .env("ADROIT_AI_FAKE", "A fake answer.")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("spawn adroit");
+            prop_assert!(
+                out.status.success(),
+                "`adroit ask` failed in {:?}: {}",
+                self.profile,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // `lint` exits non-zero on findings (a fresh template has plenty), so
+            // don't assert the exit code — just require parseable JSON, i.e. no panic.
+            let out = self
+                .cmd()
+                .args(["lint", id.as_str(), "-o", "json"])
+                .output()
+                .expect("spawn adroit");
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).map_err(|e| {
+                TestCaseError::fail(format!(
+                    "`adroit lint -o json` not JSON in {:?}: {e}",
+                    self.profile
+                ))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 fn status_dir_name(s: Status) -> String {
@@ -480,6 +682,9 @@ fn arb_op() -> impl Strategy<Value = Op> {
             .prop_map(|(which, clear)| Op::SetReview { which, clear }),
         1 => any::<usize>().prop_map(|which| Op::Renumber { which }),
         1 => Just(Op::Relink),
+        2 => (any::<usize>(), any::<usize>(), any::<usize>())
+            .prop_map(|(src, dst, rel)| Op::Link { src, dst, rel }),
+        2 => any::<usize>().prop_map(|which| Op::Draft { which }),
     ]
 }
 
@@ -551,6 +756,8 @@ fn run_cell(profile: Profile, ops: &[Op]) -> Result<(), TestCaseError> {
         );
         h.check_invariants()?;
     }
+    // The read verbs must survive the arbitrary final state without crashing.
+    h.probe_reads()?;
     Ok(())
 }
 

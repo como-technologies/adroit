@@ -30,10 +30,18 @@ the bug-finding campaign that built these suites, see
 The centerpiece is the **oracle** (`tests/model.rs`): it generates a random matrix
 cell (format × layout × naming × relink_scope) and a random sequence of mutating
 CLI commands (`new`, `set-status`, `supersede`, `set-review`, `renumber`,
-`relink`), runs each against the **real binary** on a throwaway `TempDir`, and
-asserts a battery of invariants after **every** command — on-disk state agrees
-with an in-memory oracle, `adroit check` is clean, the repo stays link-canonical
-(scope-aware), and each ADR sits where its status implies.
+`relink`, `link`, `draft`), runs each against the **real binary** on a throwaway
+`TempDir`, and asserts a battery of invariants after **every** command — on-disk
+state agrees with an in-memory oracle, `adroit check` is clean, the repo stays
+link-canonical (scope-aware), and each ADR sits where its status implies. `link`
+(frontmatter-only typed links) and `draft` (the AI body-splice, driven offline by
+the `ADROIT_AI_FAKE` seam) aren't modeled — they're held to the same invariants,
+so a typed link must heal when its target moves and a draft must keep identity /
+status / links intact. After each sequence a **read-verb sweep** runs `list` /
+`show` / `status` / `search` / `stats` / `graph` / `check` / `lint` / `related` /
+`dedupe` / `summarize` / `plan` / `ask` / `publish --dry-run` against the
+arbitrary final state, asserting they never crash and the `-o json` emitters stay
+parseable.
 
 ## Running
 
