@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::adr::{Adr, Number, Status};
-use crate::config::{DateSource, Layout, RelinkScope};
+use crate::config::{Config, DateSource, Layout, RelinkScope};
 use crate::format::{self, Format};
 use crate::naming::{AdrRef, NamingScheme};
 
@@ -115,6 +115,27 @@ impl StoreOptions {
             date_source: DateSource::Auto,
             naming: NamingScheme::Sequential,
             relink_scope: RelinkScope::All,
+        }
+    }
+
+    /// Build options from resolved [`Config`] — the single place every surface
+    /// (CLI, TUI, web) maps config to store options, so they open the store
+    /// identically. Callers honoring CLI `--format`/`--layout` overrides apply
+    /// them to the returned value.
+    #[must_use]
+    pub fn from_config(cfg: &Config) -> Self {
+        let mut status_dir = std::collections::BTreeMap::new();
+        for status in Status::ALL {
+            status_dir.insert(status, cfg.dir_for(status));
+        }
+        Self {
+            format: cfg.format,
+            layout: cfg.layout,
+            status_dir,
+            review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
+            date_source: cfg.date_source,
+            naming: cfg.naming,
+            relink_scope: cfg.relink_scope,
         }
     }
 
@@ -304,7 +325,12 @@ impl Store {
     }
 
     /// Return the next available ADR number: max across all dirs + 1.
-    pub fn next_number(&self) -> Result<Number, StoreError> {
+    ///
+    /// Test-only: production allocates identity through the naming seam
+    /// (`next_ref`/`next_ref_in_category`); this numeric helper backs unit tests,
+    /// so it's `#[cfg(test)]` and never compiled into the binary.
+    #[cfg(test)]
+    fn next_number(&self) -> Result<Number, StoreError> {
         let files = self.list_files()?;
         let max = files
             .iter()

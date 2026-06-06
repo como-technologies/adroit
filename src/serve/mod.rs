@@ -21,7 +21,6 @@
 
 mod watch;
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::future::IntoFuture;
 use std::net::SocketAddr;
@@ -89,7 +88,7 @@ impl AppState {
     fn new(dir: PathBuf, cfg: &Config) -> Self {
         Self {
             dir: Arc::new(RwLock::new(dir)),
-            options: Arc::new(store_options(cfg)),
+            options: Arc::new(StoreOptions::from_config(cfg)),
             watcher: None,
             forge: cfg.forge.clone(),
             review_quorum: cfg.review_quorum,
@@ -101,7 +100,7 @@ impl AppState {
         let watcher = watch::spawn(&dir)?;
         Ok(Self {
             dir: Arc::new(RwLock::new(dir)),
-            options: Arc::new(store_options(cfg)),
+            options: Arc::new(StoreOptions::from_config(cfg)),
             watcher: Some(Arc::new(watcher)),
             forge: cfg.forge.clone(),
             review_quorum: cfg.review_quorum,
@@ -116,24 +115,6 @@ impl AppState {
     /// Open the store read-only, mirroring the binary's wiring (`main.rs`).
     fn store(&self) -> Result<Store, ApiError> {
         open_store(&self.active_dir(), (*self.options).clone()).map_err(ApiError::internal)
-    }
-}
-
-/// Build [`StoreOptions`] from a [`Config`], mirroring `main.rs`/`tui.rs` so the
-/// dashboard opens the store identically to the other surfaces.
-fn store_options(cfg: &Config) -> StoreOptions {
-    let mut status_dir = BTreeMap::new();
-    for status in Status::ALL {
-        status_dir.insert(status, cfg.dir_for(status));
-    }
-    StoreOptions {
-        format: cfg.format,
-        layout: cfg.layout,
-        status_dir,
-        review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
-        date_source: cfg.date_source,
-        naming: cfg.naming,
-        relink_scope: cfg.relink_scope,
     }
 }
 
@@ -200,7 +181,7 @@ fn router(dir: PathBuf, cfg: &Config) -> Router {
 /// Run the web dashboard against the resolved ADR `dir`, blocking until shutdown
 /// (Ctrl-C). `dir` is resolved by `main.rs` (honoring `--dir`/config).
 pub fn run(config: &Config, dir: &FsPath, host: &str, port: u16) -> anyhow::Result<()> {
-    let options = store_options(config);
+    let options = StoreOptions::from_config(config);
     // Validate the store up front so a bad `--dir` fails fast with a clear error
     // rather than 500ing on the first request.
     open_store(dir, options)?;

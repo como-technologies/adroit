@@ -13,9 +13,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{
-    Forge, ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport,
-};
+use super::{ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport};
 
 /// A Jira REST client scoped to one project (Cloud or Server/Data Center).
 #[derive(Clone)]
@@ -209,31 +207,10 @@ impl Tracker for Jira {
     }
 }
 
-// Jira (unlike GitHub/GitLab) is tracker-only; provide a Forge impl that is never
-// constructed (the factory never boxes Jira as a Forge) so the type is complete.
-impl Forge for Jira {
-    fn open_pr(&self, _: &super::PrDraft) -> Result<super::PrRef, ForgeError> {
-        unreachable!("Jira is a tracker, not a code-review host")
-    }
-    fn pr_state(&self, _: &str) -> Result<super::PrState, ForgeError> {
-        unreachable!("Jira is a tracker, not a code-review host")
-    }
-    fn merge_pr(&self, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn close_pr(&self, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn comment_pr(&self, _: &str, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn set_pr_body(&self, _: &str, _: &str) -> Result<(), ForgeError> {
-        unreachable!()
-    }
-    fn describe(&self) -> String {
-        format!("jira:{}", self.project)
-    }
-}
+// Jira is tracker-only: it implements `Tracker`, not `Forge` (the factory only
+// ever boxes it as `Box<dyn Tracker>`). The `(Option<dyn Forge>, Option<dyn
+// Tracker>)` adapter pair keeps the two roles independent, so there's no need —
+// and it would be a Liskov violation — to give Jira a `Forge` impl that panics.
 
 /// Standard base64 (RFC 4648) — tiny, to avoid a dep for the one Basic-auth header.
 fn base64(input: &[u8]) -> String {

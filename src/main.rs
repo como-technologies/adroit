@@ -464,21 +464,16 @@ fn run_tui(_cfg: &Config, _dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Build store options from config, applying CLI overrides.
+/// Build store options from config, applying CLI `--format`/`--layout` overrides.
 fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -> StoreOptions {
-    let mut status_dir = std::collections::BTreeMap::new();
-    for status in Status::ALL {
-        status_dir.insert(status, cfg.dir_for(status));
+    let mut options = StoreOptions::from_config(cfg);
+    if let Some(format) = format {
+        options.format = format;
     }
-    StoreOptions {
-        format: format.unwrap_or(cfg.format),
-        layout: layout.unwrap_or(cfg.layout),
-        status_dir,
-        review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
-        date_source: cfg.date_source,
-        naming: cfg.naming,
-        relink_scope: cfg.relink_scope,
+    if let Some(layout) = layout {
+        options.layout = layout;
     }
+    options
 }
 
 /// Guard against accidentally creating a duplicate ADR. On an exact
@@ -1041,21 +1036,13 @@ fn add_supersedes_note(store: &Store, cfg: &Config, new: &AdrRef, old: &AdrRef) 
     Ok(())
 }
 
-/// Relative markdown link from one file to another (sibling-style).
+/// Sibling-style relative markdown link from one file to another. A thin adapter
+/// over the canonical [`adroit::links::rel_link`] that drops its leading `./` —
+/// the sole caller, `link_prefix_for`, manages the `./`/`..`/`.` prefix itself.
 fn relative_link(from_file: &std::path::Path, to_file: &std::path::Path) -> String {
     let from_dir = from_file.parent().unwrap_or(std::path::Path::new(""));
-    let from: Vec<_> = from_dir.components().collect();
-    let to: Vec<_> = to_file.components().collect();
-    let mut i = 0;
-    while i < from.len() && i < to.len() && from[i] == to[i] {
-        i += 1;
-    }
-    let ups = from.len() - i;
-    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), ups).collect();
-    for c in &to[i..] {
-        parts.push(c.as_os_str().to_string_lossy().into_owned());
-    }
-    parts.join("/")
+    let link = adroit::links::rel_link(from_dir, to_file);
+    link.strip_prefix("./").unwrap_or(&link).to_string()
 }
 
 fn cmd_search(store: &Store, term: &str, output: OutputFormat) -> Result<()> {
@@ -2080,10 +2067,11 @@ fn cmd_init(store: &Store, print_only: bool, yes: bool) -> Result<()> {
         }
     };
 
-    // 3. Write forge.* to config (preserving other keys).
+    // 3. Write forge.* to config (preserving other keys). Match every provider
+    // explicitly so a future one can't silently inherit GitHub's token env var.
     let token_env = match provider {
         config::Provider::Gitlab => "ADROIT_GITLAB_TOKEN",
-        _ => "ADROIT_GITHUB_TOKEN",
+        config::Provider::Github | config::Provider::None => "ADROIT_GITHUB_TOKEN",
     };
     let mut cfg = config::Config::load()?;
     let f = cfg.forge.get_or_insert_with(Default::default);

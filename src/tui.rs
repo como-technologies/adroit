@@ -847,32 +847,15 @@ impl TuiState {
     }
 }
 
-/// Build [`StoreOptions`] from a [`Config`], mirroring the binary's wiring so
-/// the TUI opens the store identically to the CLI.
-fn store_options(cfg: &Config) -> StoreOptions {
-    let mut status_dir = std::collections::BTreeMap::new();
-    for status in Status::ALL {
-        status_dir.insert(status, cfg.dir_for(status));
-    }
-    StoreOptions {
-        format: cfg.format,
-        layout: cfg.layout,
-        status_dir,
-        review_overdue_days: (cfg.review_overdue_days > 0).then_some(cfg.review_overdue_days),
-        date_source: cfg.date_source,
-        naming: cfg.naming,
-        relink_scope: cfg.relink_scope,
-    }
-}
-
 /// Open the store the TUI operates on, at the already-resolved ADR `dir`.
 ///
 /// This is the seam the binary and the tests share: `main.rs` resolves the dir
 /// from `--dir`/config exactly once and hands it here, so the TUI never
 /// re-resolves with `None` (which previously ignored `--dir`). The store options
-/// (format/layout/status dirs) still come from `config`.
+/// (format/layout/status dirs) still come from `config`, via the one shared
+/// [`StoreOptions::from_config`] mapping.
 pub fn open_store(config: &Config, dir: &std::path::Path) -> Result<Store, StoreError> {
-    Store::open_or_create_with(dir, store_options(config))
+    Store::open_or_create_with(dir, StoreOptions::from_config(config))
 }
 
 /// Launch the interactive TUI against the resolved ADR `dir`.
