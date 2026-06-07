@@ -123,7 +123,7 @@ fn classified(name: &str) -> Option<Meta> {
         "new"        => m!("author",  false, true,  false, "local",   None,                 &[],            None),
         "draft"      => m!("author",  false, true,  false, PROVIDER,  None,                 AI,             None),
         "compose"    => m!("author",  false, true,  false, PROVIDER,  None,                 AI,             None),
-        "plan"       => m!("author",  true,  false, true,  PROVIDER,  None,                 AI,             None),
+        "plan"       => m!("author",  true,  false, true,  PROVIDER,  Some("Plan"),         AI,             None),
         "edit"       => m!("author",  false, true,  false, "local",   None,                 &[],            None),
         "lint"       => m!("author",  true,  false, true,  "local",   Some("LintFinding[]"), &[],           Some("non-zero on mechanical findings (--ai is advisory)")),
         "dedupe"     => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
@@ -261,6 +261,10 @@ fn type_schemas() -> serde_json::Map<String, Value> {
     m.insert(
         "AskAnswer".into(),
         to_val(schemars::schema_for!(crate::view::AskAnswer)),
+    );
+    m.insert(
+        "Plan".into(),
+        to_val(schemars::schema_for!(crate::view::Plan)),
     );
     m
 }

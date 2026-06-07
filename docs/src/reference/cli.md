@@ -199,12 +199,16 @@ adroit compose 2 "add a rejected option about Redis" --no-edit
 Draft an **AI implementation plan** for an (accepted) ADR: reads the ADR + the
 existing corpus and asks the configured AI provider for an ordered, actionable
 checklist (steps, components touched, testing, rollout, risks). **Read-only** —
-it never modifies the ADR. Prints to stdout unless `--out <PATH>` is given. Needs
-an AI provider — see [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring).
+it never modifies the ADR. Prints to stdout unless `--out <PATH>` is given. With
+`-o json` it emits a `Plan` envelope (`{ reference, title, plan }`, the `plan` a
+markdown string) to stdout — the plan tagged with its ADR identity for an agent to
+consume. Needs an AI provider — see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring).
 
 ```sh
 adroit plan 21                       # print the plan
 adroit plan 21 --out plan-0021.md    # write it to a file
+adroit plan 21 -o json               # structured { reference, title, plan }
 ```
 
 | Flag | Description |

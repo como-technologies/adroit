@@ -756,9 +756,12 @@ provider-resolution that degrades to the template, whereas `draft` uses
 
 **`plan <ID>`** (`cmd_plan`, `ai::build_plan_request`/`draft_plan`): the
 **read-only** companion — reads an ADR (`query::detail_at`) + corpus, asks the
-provider for an ordered implementation checklist, prints it (or `--out`). Never
-modifies the ADR; bails (not degrades) when no provider is available, since a
-plan is inherently AI.
+provider for an ordered implementation checklist, prints it (or `--out`). `-o json`
+emits a `view::Plan` envelope (`reference`/`title`/`plan`) to stdout — the plan
+stays markdown (the model writes prose; adroit doesn't fake-parse it into steps),
+tagged with the ADR identity so the Adopt-stage engine can route it. Never modifies
+the ADR; bails (not degrades) when no provider is available, since a plan is
+inherently AI.
 
 **`summarize <ID>`** (`cmd_summarize`, `ai::build_summary_request`/`draft_summary`):
 a one-paragraph read-only TL;DR of an ADR (PR body / notify / decision log); prints

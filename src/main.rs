@@ -356,9 +356,13 @@ fn main() -> Result<()> {
             cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, true, output)?
         }
         Some(Command::Ask { question }) => cmd_ask(&store, &cfg, &question, output)?,
-        Some(Command::Plan { id, out }) => {
-            cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
-        }
+        Some(Command::Plan { id, out }) => cmd_plan(
+            &store,
+            &cfg,
+            &resolve_ref(&cfg, &id)?,
+            out.as_deref(),
+            output,
+        )?,
         Some(Command::Draft { id, no_edit }) => {
             cmd_draft(&store, &cfg, &resolve_ref(&cfg, &id)?, no_edit, editor)?
         }
@@ -2029,7 +2033,13 @@ fn cmd_summarize(
 /// `adroit plan <ID>`: an AI implementation plan for an (accepted) ADR. Reads the
 /// ADR + corpus, asks the provider for an ordered checklist, and prints it (or
 /// writes `--out`). Read-only — the ADR is never modified.
-fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Path>) -> Result<()> {
+fn cmd_plan(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    out: Option<&std::path::Path>,
+    output: OutputFormat,
+) -> Result<()> {
     let provider = require_provider(cfg, "plan")?;
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
@@ -2052,6 +2062,15 @@ fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Pat
         &corpus,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // `-o json` emits a structured envelope to stdout (the plan tagged with its ADR
+    // identity); `json` always goes to stdout, so `--out` is for the human file.
+    if output == OutputFormat::Json {
+        return print_json(&adroit::view::Plan {
+            reference: detail.summary.reference.clone(),
+            title: detail.summary.title.clone(),
+            plan,
+        });
+    }
     match out {
         Some(p) => {
             std::fs::write(p, &plan)?;

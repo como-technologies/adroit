@@ -670,6 +670,23 @@ impl Harness {
                     String::from_utf8_lossy(&out.stderr)
                 );
             }
+            // `plan -o json` emits a structured envelope — it must succeed and parse.
+            let out = self
+                .cmd()
+                .args(["plan", id.as_str(), "-o", "json"])
+                .env("ADROIT_AI_FAKE", "A fake plan paragraph.")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("spawn adroit");
+            prop_assert!(
+                out.status.success(),
+                "`adroit plan -o json` failed in {:?}: {}",
+                self.profile,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).map_err(|e| {
+                TestCaseError::fail(format!("`adroit plan -o json` emitted invalid JSON: {e}"))
+            })?;
             // `ask` (corpus Q&A) needs a non-empty corpus — it errors with "no ADRs
             // to answer from" otherwise, so only probe it once an ADR exists.
             let out = self

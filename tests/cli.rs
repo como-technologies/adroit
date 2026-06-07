@@ -3345,3 +3345,24 @@ fn import_works_in_the_frontmatter_profile() {
         .success()
         .stdout(predicate::str::contains("proposed"));
 }
+
+// ---- plan -o json (structured plan artifact; #18 emit seam) ----
+
+#[test]
+fn plan_emits_a_structured_json_envelope() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    // The fake provider returns canned text; -o json wraps it with the ADR identity.
+    adroit(&dir)
+        .args(["plan", "1", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "1. Create the schema.\n2. Add tests.")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"reference\": \"ADR-0001\""))
+        .stdout(predicate::str::contains("\"title\": \"Use PostgreSQL\""))
+        .stdout(predicate::str::contains("\"plan\":"))
+        .stdout(predicate::str::contains("Create the schema."));
+}

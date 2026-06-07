@@ -127,7 +127,10 @@ draft / revise body" assist, and needs a provider.
 `adroit plan <ID>` is the read-only companion: it reads an (accepted) ADR plus
 the corpus and asks the provider for an ordered implementation checklist (steps,
 components touched, testing, rollout, risks). It prints to stdout (or `--out`) and
-never modifies the ADR.
+never modifies the ADR. `adroit plan <ID> -o json` emits a `Plan` envelope
+(`{ reference, title, plan }`) instead — the markdown plan tagged with its ADR
+identity, so a downstream agent gets the decision *and* its implementation steps as
+one structured artifact.
 
 `adroit lint <ID>` checks one ADR's authoring quality. Its mechanical checks
 (sections still left as their `_…_` prompt, missing negative consequences, single
