@@ -42,6 +42,32 @@ prompt, so it doubles as a "what's left to write" checklist. The AI verbs
 (`draft` / `new --interview`) only ever write *prose* — identity, status, and
 dates stay mechanical. See [Automation & AI](./automation.md) for the AI layer.
 
+### Seed a backlog from an assessment — `adroit import`
+
+When the decisions come from a structured **assessment** rather than a blank page,
+`import` turns that export into a proposed-ADR backlog in one shot — the *ingest*
+seam of the portfolio loop (Assess → Prescribe):
+
+```sh
+adroit import --from-assessment maturity.json   # one proposed ADR per practice
+adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothing
+```
+
+It reads an [`assessments`](https://github.com/como-technologies) export (a
+`Domain → Practice → Question` maturity model, as `.json` or `.yaml`) and seeds one
+**proposed** ADR per practice: the practice's *context* becomes the problem
+statement, its *value* / *risk* / *effort* become decision drivers, and its
+questions are recorded as assessment signals. The body is marked
+`<!-- adroit:seeded-from-assessment -->` and carries a provenance note back to the
+source practice. The mapping is **mechanical** — no AI, no network — so identity,
+status, and the heading stay fixed; the seeded prose is a starting point you refine
+(`adroit draft <id>` to flesh one out, then `edit` / `lint` as above).
+
+`import` is **re-runnable**: practices whose title already has an ADR are skipped
+(report `(N skipped — already present)`), so importing an *updated* assessment only
+adds what's new. Pass `--force` to seed anyway. Under the `by_category` layout each
+domain becomes the category.
+
 ## 2. Review & decide
 
 Open the draft for review, then record the outcome.

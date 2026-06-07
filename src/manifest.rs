@@ -129,6 +129,7 @@ fn classified(name: &str) -> Option<Meta> {
         "dedupe"     => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
         "related"    => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
         "link"       => m!("author",  false, true,  true,  "local",   None,                 &[],            None),
+        "import"     => m!("author",  false, true,  false, "local",   None,                 &[],            None),
         // Review & decide
         "set-review" => m!("review",  false, true,  true,  "local",   None,                 &[],            None),
         "review"     => m!("review",  true,  false, true,  "local",   None,                 &[],            None),

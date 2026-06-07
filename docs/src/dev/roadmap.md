@@ -125,12 +125,12 @@ JSON is how adroit's decisions cross into the rest of the loop, so a downstream 
 *reads* a decision instead of scraping prose. The ADRs and guides stay **markdown**
 for humans; the *integration* contract is JSON.
 
-- **Ingest (Assess → adroit).** A structured assessment export (the `assessments`
-  app's Domain → Practice → Question model, each leaf carrying context / value /
-  risk, exported as JSON / YAML) seeds **proposed ADRs**: each decision a practice
-  implies becomes a draft ADR, so the assessment becomes the decision backlog rather
-  than dying in a doc. A natural fit for `new --interview` / `compose` with the
-  export as context.
+- **Ingest (Assess → adroit) — shipped.** `adroit import --from-assessment <file>`
+  turns an `assessments` export (the Domain → Practice → Question maturity model,
+  each leaf carrying context / value / risk, as JSON / YAML) into a **proposed-ADR
+  backlog** — one ADR per practice, mechanically — so the assessment becomes the
+  decision backlog rather than dying in a doc. Drafting richer prose from a seed
+  (feeding it to `draft` / `compose` as context) is the natural `--ai` follow-up.
 - **Emit (adroit → Adopt).** An accepted ADR plus its `plan` (the implementation
   checklist) is the decision context the **Adopt**-stage agentic engine (Conduit)
   turns into issues an agent works inside the team's own forge — read through the

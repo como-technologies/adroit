@@ -126,6 +126,33 @@ only writes the prose sections, marked `<!-- adroit:ai-suggested -->` for you to
 review and edit before committing. If no provider is configured it degrades to
 the plain template (the ADR is still created).
 
+#### `adroit import --from-assessment <FILE>`
+
+Seed a **proposed-ADR backlog** from an [`assessments`](../usage/automation.md)
+export — the *ingest* seam (Assess → Prescribe). Reads a `Domain → Practice →
+Question` maturity model (`.json` or `.yaml`/`.yml`) and creates one **proposed**
+ADR per practice: the practice's *context* → problem statement, its *value* /
+*risk* / *effort* → decision drivers, its questions → recorded signals. The body is
+marked `<!-- adroit:seeded-from-assessment -->` with a provenance note. The mapping
+is **mechanical** — no AI, no network — so identity / status / heading stay fixed;
+the seeded prose is a starting point to refine (`adroit draft <id>`, `edit`).
+
+```sh
+adroit import --from-assessment maturity.json
+adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothing
+```
+
+| Flag | Description |
+|---|---|
+| `--from-assessment <FILE>` | Path to the assessment export (`.json`, or `.yaml`/`.yml`) |
+| `--dry-run` | Parse and report what would be seeded; write nothing |
+| `--force` | Seed even practices whose title already has an ADR (skip the dedupe guard) |
+
+**Re-runnable.** Practices whose (case-insensitive) title already has an ADR are
+skipped — `(N skipped — already present)` — so importing an *updated* assessment
+only adds what's new. Under the `by_category` layout each domain becomes the
+category. See [The ADR Workflow](../usage/workflow.md#seed-a-backlog-from-an-assessment--adroit-import).
+
 #### `adroit draft <ID>`
 
 The **after-the-fact `new --interview`**: run the same AI interview on an ADR you

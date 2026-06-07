@@ -383,7 +383,7 @@ fn parent_dir_name(path: &Path) -> Option<String> {
 
 /// Kebab-case a title: lowercase, non-alphanumerics → spaces, words joined by
 /// `-`. Mirrors the original `store::filename` slug logic.
-fn slugify(title: &str) -> String {
+pub fn slugify(title: &str) -> String {
     title
         .to_lowercase()
         .chars()

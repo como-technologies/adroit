@@ -149,8 +149,8 @@ fn main() -> Result<()> {
     let store = Store::open_or_create_with(&dir, opts)?;
     if !dir_existed {
         match &cli.command {
-            // `new` legitimately scaffolds a brand-new repo — a neutral note.
-            Some(Command::New { .. }) => {
+            // `new` / `import` legitimately scaffold a brand-new repo — a neutral note.
+            Some(Command::New { .. }) | Some(Command::Import { .. }) => {
                 eprintln!("Created new ADR directory {}", dir.display());
             }
             // Any other command against a non-existent dir means we're pointed at
@@ -229,6 +229,11 @@ fn main() -> Result<()> {
                 open_in_editor(editor, &path)?;
             }
         }
+        Some(Command::Import {
+            from_assessment,
+            dry_run,
+            force,
+        }) => cmd_import(&store, &cfg, &from_assessment, dry_run, force)?,
         Some(Command::List {
             status,
             #[cfg(feature = "forge")]
@@ -617,6 +622,94 @@ fn cmd_new(
     Ok((path, r))
 }
 
+/// `adroit import --from-assessment <file>`: the ingest seam (issue #18). Parse an
+/// assessment export, turn each practice into a **proposed** ADR (mechanical — no
+/// AI), splicing the practice's context / value / risk into the MADR sections.
+/// Re-runnable: practices whose title already exists are skipped (unless `--force`),
+/// so importing an updated assessment only adds what's new. `--dry-run` reports
+/// without writing.
+fn cmd_import(
+    store: &Store,
+    cfg: &Config,
+    from_assessment: &std::path::Path,
+    dry_run: bool,
+    force: bool,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let text = std::fs::read_to_string(from_assessment)
+        .with_context(|| format!("reading assessment export {}", from_assessment.display()))?;
+    let assessment = adroit::import::parse_assessment(&text, from_assessment)?;
+    let drafts = adroit::import::seed_drafts(&assessment);
+    if drafts.is_empty() {
+        eprintln!(
+            "{}",
+            "No named practices found in the assessment — nothing to seed.".yellow()
+        );
+        return Ok(());
+    }
+
+    // Dedupe against existing ADR titles (case-insensitive) and within this run, so
+    // a re-import is safe. `--force` skips the guard.
+    let mut existing: HashSet<String> = if force {
+        HashSet::new()
+    } else {
+        store
+            .list()
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .iter()
+            .map(|a| a.title.trim().to_lowercase())
+            .collect()
+    };
+
+    let by_category = store.options().layout == Layout::ByCategory;
+    let mut created = 0usize;
+    let mut skipped = 0usize;
+
+    for d in &drafts {
+        let key = d.title.trim().to_lowercase();
+        if !existing.insert(key) {
+            skipped += 1;
+            continue;
+        }
+        if dry_run {
+            println!(
+                "would seed   {}   [{} → {}]",
+                d.title,
+                assessment.name.trim(),
+                d.domain
+            );
+            created += 1;
+            continue;
+        }
+        // Under by_category each ADR lives in a subdir — map the domain to it.
+        let category = by_category.then(|| {
+            let slug = adroit::naming::slugify(&d.domain);
+            if slug.is_empty() {
+                "uncategorized".to_string()
+            } else {
+                slug
+            }
+        });
+        let (path, r) = cmd_new(store, cfg, &d.title, None, category.as_deref())?;
+        splice_generated(store, &r, &adroit::import::seed_fragment(d))?;
+        println!("seeded   {}", path.display());
+        created += 1;
+    }
+
+    let verb = if dry_run { "Would seed" } else { "Seeded" };
+    let tail = if skipped > 0 {
+        format!(" ({skipped} skipped — already present)")
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "{verb} {created} proposed ADR(s) from assessment \"{}\"{tail}.",
+        assessment.name.trim()
+    );
+    Ok(())
+}
+
 /// `new --interview`: resolve a provider then run the shared interview. Degrades
 /// to a note (keeping the plain template) when no provider is available, so the
 /// ADR is always created. Returns `true` when the draft actually ran (so the
@@ -706,7 +799,7 @@ fn interview_and_draft(
     };
     // Journal the raw draft before splicing, so it survives a failed write/edit.
     let journal = journal_draft(store, r, &draft);
-    splice_ai_draft(store, r, &draft)?;
+    splice_generated(store, r, &draft)?;
     eprintln!(
         "AI-drafted the body (marked `{}`). Review and edit before committing.",
         ai::AI_MARKER
@@ -720,12 +813,13 @@ fn interview_and_draft(
     Ok(true)
 }
 
-/// Splice a marker-wrapped AI `draft` into the ADR at `r`: keep the mechanical
-/// header (every line before the first `## Context…` prose section) and replace
-/// the prose. In the markdown profile `adr.body` is the whole document, so this
-/// is what preserves the H1 + `## Status`; in frontmatter it's the prose after the
-/// YAML. AI never touches identity/status. Shared by `new --interview` + `draft`.
-fn splice_ai_draft(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
+/// Splice a marker-wrapped generated `body` into the ADR at `r`: keep the
+/// mechanical header (every line before the first `## Context…` prose section) and
+/// replace the prose. In the markdown profile `adr.body` is the whole document, so
+/// this is what preserves the H1 + `## Status`; in frontmatter it's the prose after
+/// the YAML. Identity/status are never touched. Shared by `new --interview` /
+/// `draft` (AI drafts) and `import` (mechanical assessment seeds).
+fn splice_generated(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
     let path = store
         .find_path_by_ref(r)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -840,7 +934,7 @@ fn cmd_compose(
         &corpus,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    splice_ai_draft(store, r, &drafted)?;
+    splice_generated(store, r, &drafted)?;
     println!(
         "Revised {} (AI-suggested; review before committing).",
         detail.summary.reference

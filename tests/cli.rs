@@ -3099,3 +3099,111 @@ fn draft_without_a_provider_errors() {
         .failure()
         .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
 }
+
+// ---- import (assessment → seed ADRs; issue #18 ingest seam) ----
+
+/// A minimal `assessments`-shaped export: one domain, two named practices.
+const ASSESSMENT_JSON: &str = r#"{
+  "name": "Cloud Maturity",
+  "domains": [
+    { "name": "Security",
+      "context": "Domain security context.",
+      "practices": [
+        { "name": "Secrets management",
+          "context": "Secrets are committed to git today.",
+          "value": "Leaked credentials are a top breach vector.",
+          "risk": "A leak forces a painful rotation.",
+          "effort": "M",
+          "questions": [ {"text": "Are secrets stored outside source control?", "polarity": "positive"} ] },
+        { "name": "Network segmentation",
+          "context": "Flat network; one breach reaches everything.",
+          "value": "Limits blast radius.",
+          "risk": "Lateral movement on compromise." } ] }
+  ]
+}"#;
+
+fn write_assessment(dir: &TempDir) -> PathBuf {
+    let p = dir.path().join("assessment.json");
+    fs::write(&p, ASSESSMENT_JSON).unwrap();
+    p
+}
+
+#[test]
+fn import_seeds_proposed_adrs_from_an_assessment() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Seeded 2 proposed ADR(s)"));
+
+    // One ADR per named practice.
+    let files = adr_files(dir.path());
+    assert_eq!(
+        files.len(),
+        2,
+        "expected 2 seeded ADRs, got {}",
+        files.len()
+    );
+
+    // The secrets ADR carries the marker, the practice context, the value driver,
+    // the recorded signal, and the provenance note.
+    let secrets = files
+        .iter()
+        .find(|p| p.to_string_lossy().contains("secrets-management"))
+        .expect("secrets ADR present");
+    let body = fs::read_to_string(secrets).unwrap();
+    assert!(body.contains("adroit:seeded-from-assessment"));
+    assert!(body.contains("Secrets are committed to git today."));
+    assert!(body.contains("**Why it matters:** Leaked credentials are a top breach vector."));
+    assert!(body.contains("**Estimated effort:** M"));
+    assert!(body.contains("- Are secrets stored outside source control?"));
+    assert!(body.contains("Seeded from assessment \"Cloud Maturity\""));
+
+    // Identity/status stay mechanical: the seed is Proposed, and the repo is valid.
+    adroit(&dir)
+        .args(["status", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("proposed"));
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn import_is_rerunnable_and_skips_existing() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .assert()
+        .success();
+    // A second import adds nothing — both practices already have an ADR.
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("2 skipped"));
+    assert_eq!(adr_files(dir.path()).len(), 2);
+}
+
+#[test]
+fn import_dry_run_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would seed"))
+        .stderr(predicate::str::contains("Would seed 2"));
+    assert!(
+        adr_files(dir.path()).is_empty(),
+        "dry-run must not write any ADRs"
+    );
+}

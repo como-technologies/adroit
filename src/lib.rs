@@ -18,6 +18,8 @@ pub mod forge_hook;
 pub mod frontmatter;
 pub mod git;
 pub mod history;
+// Seed proposed ADRs from an assessment export — the ingest seam (issue 18).
+pub mod import;
 pub mod index;
 pub mod links;
 pub mod lint;

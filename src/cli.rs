@@ -58,6 +58,7 @@ Author a decision:
   dedupe        Find existing ADRs that overlap a new one
   related       Find similar ADRs to link (mechanical)
   link          Add or remove a typed link between two ADRs
+  import        Seed proposed ADRs from an assessment export
 
 Review & decide:
   set-review    Set or clear an ADR's review deadline
@@ -116,6 +117,7 @@ Author a decision:
   dedupe        Find existing ADRs that overlap a new one
   related       Find similar ADRs to link (mechanical)
   link          Add or remove a typed link between two ADRs
+  import        Seed proposed ADRs from an assessment export
 
 Review & decide:
   set-review    Set or clear an ADR's review deadline
@@ -294,6 +296,25 @@ pub enum Command {
         #[cfg(feature = "forge")]
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Seed proposed ADRs from an assessment export (the ingest seam).
+    ///
+    /// Turns each practice in an `assessments` export into a **proposed** draft
+    /// ADR — the practice's context becomes the problem statement, its value /
+    /// risk become decision drivers, its questions become recorded signals — so
+    /// the assessment becomes a decision backlog. Mechanical (no AI/network);
+    /// re-running skips practices whose decision already exists. Refine each
+    /// seeded ADR (e.g. `adroit draft <id>`) before review.
+    Import {
+        /// Path to an `assessments` export (`.json`, or `.yaml`/`.yml`).
+        #[arg(long, value_name = "FILE")]
+        from_assessment: std::path::PathBuf,
+        /// Parse and report what would be seeded without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Seed even practices whose title already exists (skip the dedupe guard).
+        #[arg(long)]
+        force: bool,
     },
     /// List existing ADRs.
     List {
