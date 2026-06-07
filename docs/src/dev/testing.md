@@ -105,7 +105,9 @@ cargo +nightly bolero test fuzz_format_helpers -T 60sec   # coverage-guided, 60s
 ```
 
 The targets are `fuzz_format_helpers`, `fuzz_link_rewriter`, `fuzz_naming_helpers`,
-and `fuzz_parse_remote_url`. cargo-bolero builds its instrumented target with
+`fuzz_parse_remote_url`, and `fuzz_oauth_token_parse` (the OAuth device-token
+response parser — a hostile auth response must never panic). cargo-bolero builds
+its instrumented target with
 `--profile fuzz`, so the repo defines a `[profile.fuzz]` in `Cargo.toml` (inherits
 `release`, keeps debug-assertions + overflow-checks on) — without it the run fails
 with `error: profile 'fuzz' is not defined`.

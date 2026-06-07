@@ -51,6 +51,13 @@ path, the parsers, or a renderer:
   newline detection that misses a lone `\r`, and trusting external text in a
   renderer are all latent panics or injection. Operate on char boundaries,
   normalize newlines, escape raw HTML, and neutralize dangerous URL schemes.
+- **Auth, tokens & external responses.** Anything touching credentials gets extra
+  scrutiny: HTTP/forge/OAuth responses are untrusted (parsers must never panic —
+  fuzzed via `fuzz_oauth_token_parse` + property tests over arbitrary bytes); values
+  interpolated into requests must be encoded so they can't inject (the `form_encode`
+  injection-safety property); secrets must never reach stdout/logs (a token is
+  never echoed by `auth`, asserted end-to-end); and the credential store degrades
+  (keychain unavailable → file) deterministically, tested with fakes.
 
 ## Crystallize every finding
 

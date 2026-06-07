@@ -216,12 +216,13 @@ pub fn device_login(
 mod tests {
     use super::*;
     use crate::forge::HttpResponse;
+    use proptest::prelude::*;
     use std::sync::Mutex;
 
     /// Returns the scripted responses in order (one per `request`). `Mutex` (not
     /// `RefCell`) because [`HttpTransport`] is `Send + Sync`.
     struct Fake {
-        responses: Mutex<Vec<(u16, String)>>,
+        responses: Mutex<Vec<(u16, Vec<u8>)>>,
     }
     impl Fake {
         fn new(responses: Vec<(u16, &str)>) -> Self {
@@ -229,9 +230,15 @@ mod tests {
                 responses: Mutex::new(
                     responses
                         .into_iter()
-                        .map(|(s, b)| (s, b.to_string()))
+                        .map(|(s, b)| (s, b.as_bytes().to_vec()))
                         .collect(),
                 ),
+            }
+        }
+        /// One response with an arbitrary (possibly non-UTF-8 / non-JSON) body.
+        fn bytes(status: u16, body: Vec<u8>) -> Self {
+            Self {
+                responses: Mutex::new(vec![(status, body)]),
             }
         }
     }
@@ -244,14 +251,36 @@ mod tests {
             _b: Option<&[u8]>,
         ) -> Result<HttpResponse, ForgeError> {
             let (status, body) = self.responses.lock().unwrap().remove(0);
-            Ok(HttpResponse {
-                status,
-                body: body.into_bytes(),
-            })
+            Ok(HttpResponse { status, body })
         }
     }
 
     fn no_sleep(_: Duration) {}
+
+    /// Decode the `application/x-www-form-urlencoded` value encoding produced by
+    /// `form_encode` (for the injection-safety property below).
+    fn percent_decode(s: &str) -> Vec<u8> {
+        let b = s.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'+' => {
+                    out.push(b' ');
+                    i += 1;
+                }
+                b'%' if i + 2 < b.len() => {
+                    out.push(u8::from_str_radix(&s[i + 1..i + 3], 16).unwrap());
+                    i += 3;
+                }
+                c => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
 
     #[test]
     fn endpoints_default_and_self_hosted() {
@@ -350,6 +379,32 @@ mod tests {
             let _ = request_device_code(&fake, "u", "cid", "repo");
             let fake = Fake::new(vec![(500, body)]);
             let _ = poll_token(&fake, "u", "cid", "DC");
+        }
+    }
+
+    proptest! {
+        // Security property: a value with `&` / `=` / spaces / control chars / raw
+        // bytes must percent-encode so it can't inject extra form params or break
+        // the request — i.e. it round-trips and the encoded value has no raw `&`.
+        #[test]
+        fn form_encode_is_injection_safe(v in ".*") {
+            let enc = form_encode(&[("device_code", &v)]);
+            let (key, val) = enc.split_once('=').expect("one key=value pair");
+            prop_assert_eq!(key, "device_code");
+            prop_assert!(!val.contains('&'), "raw `&` leaked from the value: {val:?}");
+            prop_assert!(!val.contains('='), "raw `=` leaked from the value: {val:?}");
+            prop_assert_eq!(percent_decode(val), v.as_bytes());
+        }
+
+        // Robustness: arbitrary response bytes (invalid UTF-8 / non-JSON included)
+        // must never panic the parsers — only Ok/Err.
+        #[test]
+        fn parsers_never_panic_on_arbitrary_bytes(
+            status in any::<u16>(),
+            body in proptest::collection::vec(any::<u8>(), 0..256),
+        ) {
+            let _ = request_device_code(&Fake::bytes(status, body.clone()), "u", "cid", "repo");
+            let _ = poll_token(&Fake::bytes(status, body), "u", "cid", "DC");
         }
     }
 }

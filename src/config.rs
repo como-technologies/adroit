@@ -1215,6 +1215,31 @@ mod tests {
         assert!(store_via(&chain, "k", "v").is_err());
     }
 
+    use proptest::prelude::*;
+
+    proptest! {
+        // A stored token round-trips through the backend chain exactly, for any
+        // token value (newlines / colons / quotes / unicode / control chars).
+        #[test]
+        fn credential_round_trips_arbitrary_tokens(key in "[a-z_]{1,12}", token in ".*") {
+            let chain: Vec<Box<dyn CredentialBackend>> = vec![Box::new(MemBackend::new("kc", false))];
+            store_via(&chain, &key, &token).unwrap();
+            let got = load_via(&chain, &key);
+            prop_assert_eq!(got.as_deref(), Some(token.as_str()));
+        }
+
+        // The file store serializes a `BTreeMap` to YAML; a token with special
+        // chars must survive that on-disk round-trip (what `FileBackend` relies on).
+        #[test]
+        fn credential_yaml_round_trips_arbitrary_tokens(token in ".*") {
+            let mut m: BTreeMap<String, String> = BTreeMap::new();
+            m.insert("github".to_string(), token.clone());
+            let yaml = serde_yaml_ng::to_string(&m).unwrap();
+            let back: BTreeMap<String, String> = serde_yaml_ng::from_str(&yaml).unwrap();
+            prop_assert_eq!(back.get("github").map(String::as_str), Some(token.as_str()));
+        }
+    }
+
     #[test]
     fn default_config_has_no_dir() {
         let config = Config::default();

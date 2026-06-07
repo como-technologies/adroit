@@ -89,3 +89,34 @@ fn fuzz_parse_remote_url() {
         let _ = adroit::config::parse_remote_url(input);
     });
 }
+
+/// The OAuth device-token response parser tolerates any HTTP body bytes — a
+/// hostile/garbage auth response must never panic, only yield Ok/Err. Drives the
+/// public `oauth::poll_token` through a transport that returns the fuzzed bytes.
+#[cfg(feature = "forge")]
+#[test]
+fn fuzz_oauth_token_parse() {
+    use adroit::forge::oauth;
+    use adroit::forge::{ForgeError, HttpResponse, HttpTransport};
+
+    struct Body(Vec<u8>);
+    impl HttpTransport for Body {
+        fn request(
+            &self,
+            _m: &str,
+            _u: &str,
+            _h: &[(&str, &str)],
+            _b: Option<&[u8]>,
+        ) -> Result<HttpResponse, ForgeError> {
+            Ok(HttpResponse {
+                status: 200,
+                body: self.0.clone(),
+            })
+        }
+    }
+    check!().with_type::<Vec<u8>>().for_each(|bytes: &Vec<u8>| {
+        let t = Body(bytes.clone());
+        let _ = oauth::poll_token(&t, "https://x/token", "cid", "dc");
+        let _ = oauth::request_device_code(&t, "https://x/device", "cid", "repo");
+    });
+}

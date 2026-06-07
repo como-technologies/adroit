@@ -60,10 +60,75 @@ adroit config set forge.oauth_client_id <your-oauth-app-client-id>
 adroit auth github          # → open the printed URL, enter the code, done
 ```
 
-Register the app once (GitHub: an OAuth App with **Enable Device Flow** checked;
-GitLab: an application with the `api` scope + the device grant). There's **no
-client secret** — device flow is a public client. With no client id configured (or
-for `--token` / `jira`), `auth` falls back to a hidden manual token prompt.
+With no client id configured (or for `--token` / `jira`), `auth` falls back to a
+hidden manual token prompt. Device flow uses a **public** client id — there is no
+client secret to manage. You register the OAuth app once (steps below).
+
+### Registering an OAuth app (one-time)
+
+Device flow needs an OAuth application registered with the forge. It's a public
+client — **no secret** — so the only value adroit needs is its **client id**.
+
+#### GitHub (and GitHub Enterprise)
+
+1. Go to **Settings → Developer settings → OAuth Apps → New OAuth App**
+   (org-owned: the org's **Settings → Developer settings**). On GitHub Enterprise,
+   the same path on your GHE host.
+2. Fill in:
+   - **Application name** — e.g. `adroit (your-org)`.
+   - **Homepage URL** — anything (e.g. your repo URL).
+   - **Authorization callback URL** — required by the form but unused by device
+     flow; reuse the homepage URL.
+3. **Register application**, then on the app page tick **Enable Device Flow** and
+   **Update application**.
+4. Copy the **Client ID** and wire it up:
+   ```sh
+   adroit config set forge.oauth_client_id <client-id>
+   # GitHub Enterprise only — point at your host:
+   adroit config set forge.host ghe.example.com/api/v3
+   ```
+
+The default scope adroit requests is `repo` (create the ADR issue + PR).
+
+#### GitLab (and self-managed GitLab)
+
+> Device flow needs **GitLab ≥ 17.2** (the OAuth 2.0 Device Authorization Grant).
+> Older instances fall back to a manual token.
+
+1. Create an application — for yourself: **Preferences → Applications → Add new
+   application** (or a group/instance application for shared use).
+2. Fill in:
+   - **Name** — e.g. `adroit`.
+   - **Redirect URI** — required by the form but unused by device flow; any value
+     works (e.g. `https://localhost`).
+   - **Confidential** — **unchecked** (device flow is a public client).
+   - **Scopes** — check **`api`** (create the MR + issue).
+3. **Save application**, copy the **Application ID** (that's the client id):
+   ```sh
+   adroit config set forge.oauth_client_id <application-id>
+   # self-managed GitLab only:
+   adroit config set forge.host gitlab.example.com
+   ```
+
+### Logging in + verifying (live validation)
+
+```sh
+adroit auth github        # or: adroit auth gitlab
+```
+
+adroit prints a verification URL + a short user code; open the URL, enter the
+code, and approve. On success it stores the granted token (in your keychain) and
+prints `Saved … token to the OS keychain …`. Confirm the token actually works
+against the forge — these make a live read-only call and should not warn about
+auth:
+
+```sh
+adroit check --forge      # appends any forge drift; 401 surfaces as an auth error
+adroit list --forge       # rows are enriched with linked issue/PR state
+```
+
+If you see an authentication error, the token didn't have the needed scope
+(`repo` / `api`) — re-register with the correct scope and re-run `adroit auth`.
 
 ## The PR-is-the-decision workflow
 
