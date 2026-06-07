@@ -162,6 +162,16 @@ enum Op {
     Draft {
         which: usize,
     },
+    /// `import --from-assessment <file>` — bulk-seed proposed ADRs from a generated
+    /// assessment. Like `new` it only creates (Proposed) ADRs, so the model reads
+    /// the new identities back from disk; the invariants then verify the seeded
+    /// repo stays valid across the matrix. `nonce` keeps practice titles unique so
+    /// each import lands fresh (the title dedup is covered in `tests/cli.rs`).
+    Import {
+        nonce: u64,
+        n: usize,
+        dom_idx: usize,
+    },
 }
 
 /// The three typed-link relations `link` accepts.
@@ -421,6 +431,44 @@ impl Harness {
                     String::from_utf8_lossy(&out.stderr)
                 );
                 // No model change — draft rewrites only the prose body.
+            }
+            Op::Import { nonce, n, dom_idx } => {
+                let before: HashSet<PathBuf> =
+                    self.observe()?.into_iter().map(|(p, _)| p).collect();
+                // A tiny assessment with `n` uniquely-titled practices in one domain.
+                // The domain maps to a category under by_category (import slugifies
+                // it); using a CATEGORIES name keeps that consistent with `new`.
+                let domain = CATEGORIES[dom_idx % CATEGORIES.len()];
+                let practices: String = (0..*n)
+                    .map(|i| {
+                        format!(
+                            r#"{{"name":"imported {nonce} {i}","context":"c","value":"v","risk":"r"}}"#
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let assessment = format!(
+                    r#"{{"name":"oracle","domains":[{{"name":"{domain}","practices":[{practices}]}}]}}"#
+                );
+                let path = self.dir.path().join("__assessment.json");
+                std::fs::write(&path, assessment).expect("write assessment file");
+                let path_str = path.to_string_lossy().into_owned();
+                self.run(&["import", "--from-assessment", &path_str])?;
+                // Read every newly-created ADR back from disk (robust to the title
+                // dedup), and record each as a Proposed ADR in the oracle.
+                for (p, adr) in self.observe()? {
+                    if before.contains(&p) {
+                        continue;
+                    }
+                    self.model.push(ModelAdr {
+                        addr: adr.reference().addr(),
+                        title: adr.title.clone(),
+                        status: Status::Proposed,
+                        superseded_by: None,
+                        review_by: None,
+                        category: adr.category.clone(),
+                    });
+                }
             }
         }
         Ok(())
@@ -685,6 +733,8 @@ fn arb_op() -> impl Strategy<Value = Op> {
         2 => (any::<usize>(), any::<usize>(), any::<usize>())
             .prop_map(|(src, dst, rel)| Op::Link { src, dst, rel }),
         2 => any::<usize>().prop_map(|which| Op::Draft { which }),
+        1 => (any::<u64>(), 1usize..4, any::<usize>())
+            .prop_map(|(nonce, n, dom_idx)| Op::Import { nonce, n, dom_idx }),
     ]
 }
 

@@ -90,6 +90,23 @@ fn fuzz_parse_remote_url() {
     });
 }
 
+/// The assessment parser + seed mapping tolerate any input — a hostile/garbage
+/// assessment export (driven through both the JSON and YAML paths) must never
+/// panic, only yield Ok/Err, and whatever parses must map to seed ADRs cleanly.
+#[test]
+fn fuzz_parse_assessment() {
+    use adroit::import::{parse_assessment, seed_drafts, seed_fragment};
+    check!().with_type::<String>().for_each(|input: &String| {
+        for ext in ["a.json", "a.yaml"] {
+            if let Ok(a) = parse_assessment(input, Path::new(ext)) {
+                for d in seed_drafts(&a) {
+                    let _ = seed_fragment(&d);
+                }
+            }
+        }
+    });
+}
+
 /// The OAuth device-token response parser tolerates any HTTP body bytes — a
 /// hostile/garbage auth response must never panic, only yield Ok/Err. Drives the
 /// public `oauth::poll_token` through a transport that returns the fuzzed bytes.

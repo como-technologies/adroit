@@ -50,7 +50,10 @@ path, the parsers, or a renderer:
 - **Robustness on hostile input.** Byte-slicing a string (instead of `.chars()`),
   newline detection that misses a lone `\r`, and trusting external text in a
   renderer are all latent panics or injection. Operate on char boundaries,
-  normalize newlines, escape raw HTML, and neutralize dangerous URL schemes.
+  normalize newlines, escape raw HTML, and neutralize dangerous URL schemes. The
+  same rule covers *imported files* — the assessment-import JSON/YAML parser and its
+  seed mapping take untrusted input and must only ever yield `Ok`/`Err`, never panic
+  (fuzzed via `fuzz_parse_assessment` + a structural-invariant property).
 - **Auth, tokens & external responses.** Anything touching credentials gets extra
   scrutiny: HTTP/forge/OAuth responses are untrusted (parsers must never panic —
   fuzzed via `fuzz_oauth_token_parse` + property tests over arbitrary bytes); values

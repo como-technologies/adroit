@@ -3261,3 +3261,50 @@ fn import_errors_clearly_on_a_missing_file() {
         .failure()
         .stderr(predicate::str::contains("reading assessment export"));
 }
+
+#[test]
+fn import_errors_clearly_on_malformed_input() {
+    let dir = TempDir::new().unwrap();
+    let bad = dir.path().join("bad.json");
+    fs::write(&bad, "{ this is not valid json").unwrap();
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&bad)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parsing assessment JSON"));
+    // A clean error, not a panic, and nothing written.
+    assert!(adr_files(dir.path()).is_empty());
+}
+
+#[test]
+fn import_works_in_the_frontmatter_profile() {
+    // The frontmatter format leaves `new`'s body empty, so the seed fragment is
+    // spliced into an empty body — a different write path than markdown. Exercise it.
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit_flat(&dir) // --format frontmatter --layout flat
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Seeded 2 proposed ADR(s)"));
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 2);
+    let body = fs::read_to_string(
+        files
+            .iter()
+            .find(|p| p.to_string_lossy().contains("secrets-management"))
+            .expect("secrets ADR present"),
+    )
+    .unwrap();
+    assert!(body.contains("adroit:seeded-from-assessment"));
+    assert!(body.contains("Secrets are committed to git today."));
+    // Frontmatter carries identity/status; the repo stays valid.
+    adroit_flat(&dir).arg("check").assert().success();
+    adroit_flat(&dir)
+        .args(["status", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("proposed"));
+}
