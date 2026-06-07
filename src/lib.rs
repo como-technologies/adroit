@@ -21,6 +21,10 @@ pub mod history;
 pub mod index;
 pub mod links;
 pub mod lint;
+// Machine-readable CLI manifest for agents (issue 17); gated so a
+// `--no-default-features` core drops `schemars`.
+#[cfg(feature = "manifest")]
+pub mod manifest;
 pub mod naming;
 pub mod publish;
 pub mod query;

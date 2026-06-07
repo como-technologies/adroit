@@ -122,7 +122,24 @@ deliberately deferred to the web surface (`AdrDetail::body_html` stays `None`).
 types via `serde_json` (a core dep) through the `print_json` helper in `main.rs`.
 So an AI agent / script drives the CLI for the same shapes the web API returns
 (`docs/src/usage/automation.md`). `check -o json` still exits non-zero on an
-Error-severity problem (the CI gate). The destination flags on `publish` and
+Error-severity problem (the CI gate).
+
+**Agent discovery — `adroit manifest`** (`src/manifest.rs`, gated behind the
+default-on `manifest` feature = `dep:schemars`). Emits a machine-readable JSON
+catalog of the CLI surface so agents don't scrape `--help`. Three layers, none of
+which can drift: **syntax** is walked from the clap `Command` tree (`Cli::command()`,
+the same source as `--help`/completions — feature-gated commands appear only when
+compiled); **output schemas** are `schemars::schema_for!` of the `view` types
+(`AdrSummary`/`AdrDetail`/`Stats`/`Graph`/`CheckReport`, which carry a
+`#[cfg_attr(feature = "manifest", derive(JsonSchema))]`), so the published shapes are
+the same serde structs `-o json` emits; **semantics** (`reads`/`writes`/`idempotent`/
+`stage`/`json_output`/`requires`/`exit`) are an owned `classified()` table — a
+superset is fine, and `manifest_classifies_every_command` (mirrors
+`commands_are_all_grouped`) fails CI if a compiled command lacks an entry. `requires`
+captures **runtime** gating (`["ai","ai.enabled"]`, `["forge config"]`) distinct from
+compile-time. The command is handled before the store opens (like `completions`); a
+`--no-default-features` core drops the command + `schemars`. An MCP tool catalog is
+the planned follow-up. The destination flags on `publish` and
 `review` are **`--out`** (long-only) so the short `-o` belongs to `--output`.
 `stats` + `graph` are thin CLI verbs over `query::stats`/`query::graph` (added to
 both `help_template`s — the `commands_are_all_grouped` guard). Note the five

@@ -735,6 +735,22 @@ adroit completions fish > ~/.config/fish/completions/adroit.fish
 Completion covers subcommands, flags, and enum values (e.g. `--format
 markdown|frontmatter`, `set-status <TAB>` → the status names).
 
+#### `adroit manifest`
+
+Print a **machine-readable JSON catalog** of the CLI surface — every command (only
+those compiled into this build), its args / flags / enums / defaults, plus
+semantics `--help` only implies: `reads` / `writes`, `idempotent`, lifecycle
+`stage`, the `-o json` output shape, any runtime `requires` (e.g. `ai.enabled`), and
+the `exit`-code meaning — alongside JSON Schemas of the `view` types the read verbs
+emit. For agents and tooling that discover and drive adroit without scraping
+`--help`. Offline; reflects exactly this build. See
+[Automation & AI](../usage/automation.md#discovering-commands--adroit-manifest).
+
+```sh
+adroit manifest | jq '.commands[] | select(.reads) | .name'   # the read verbs
+adroit manifest | jq '.types.AdrSummary'                       # the list/search shape
+```
+
 ## Configuration
 
 adroit stores configuration in `~/.config/adroit/config.yaml` (XDG on Linux, platform-appropriate elsewhere). The file is created automatically on first run with your detected editor.

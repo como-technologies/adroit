@@ -14,6 +14,7 @@ use crate::adr::Status;
 /// One row in a list / table of ADRs. Enough to render a list line without
 /// reading the full body.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct AdrSummary {
     /// Numeric ADR number (e.g. `6`). `None` for non-numeric naming schemes
     /// (date/uuid) or an ADR with no number yet.
@@ -57,6 +58,7 @@ pub struct AdrSummary {
 /// compiled (feature-independent view contract); populated from the `forge`
 /// adapters when the feature is built in and enrichment is requested.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct ForgeData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_url: Option<String>,
@@ -73,6 +75,7 @@ pub struct ForgeData {
 /// Full detail for a single ADR: the summary fields plus the raw markdown body
 /// and resolved related links.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct AdrDetail {
     /// The list-row summary for this ADR (flattened so JSON callers get the
     /// summary fields at the top level alongside the body).
@@ -98,6 +101,7 @@ pub struct AdrDetail {
 /// One milestone in an ADR's git-derived lifecycle: the ADR reached `status`
 /// on `date` in the commit `commit`.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct TimelineEvent {
     /// Commit date as an RFC 3339 string.
     pub date: String,
@@ -113,6 +117,7 @@ pub struct TimelineEvent {
 
 /// A resolved link from one ADR to another.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct RelatedLink {
     /// The target ADR's display reference (e.g. `"ADR-0006"` or a slug).
     pub reference: String,
@@ -124,6 +129,7 @@ pub struct RelatedLink {
 
 /// Aggregate statistics across all ADRs, for a stats dashboard.
 #[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct Stats {
     /// Total number of ADRs.
     pub total: usize,
@@ -141,6 +147,7 @@ pub struct Stats {
 
 /// Count of ADRs in a single status.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct StatusCount {
     pub status: Status,
     pub count: usize,
@@ -148,6 +155,7 @@ pub struct StatusCount {
 
 /// How long a `Proposed` ADR has been waiting.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct ProposedAge {
     pub number: Option<u32>,
     /// Display id and routing token (so the surface can link it under any scheme).
@@ -166,6 +174,7 @@ pub struct ProposedAge {
 
 /// ADRs created in a given calendar month.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct CreatedBucket {
     /// Calendar month as `YYYY-MM`.
     pub month: String,
@@ -174,6 +183,7 @@ pub struct CreatedBucket {
 
 /// The supersession / relationship graph across all ADRs.
 #[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct Graph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -182,6 +192,7 @@ pub struct Graph {
 /// A node in the [`Graph`]: one ADR. Keyed by `reference` (its display id);
 /// `address` is the routing token (`None` for an unassigned ADR).
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct GraphNode {
     pub reference: String,
     pub address: Option<String>,
@@ -191,6 +202,7 @@ pub struct GraphNode {
 
 /// A directed edge in the [`Graph`], connecting nodes by their `reference`.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct GraphEdge {
     /// Source ADR reference.
     pub from: String,
@@ -203,6 +215,7 @@ pub struct GraphEdge {
 /// surfaced through the shared query layer so every surface (CLI, web, future
 /// TUI) reports identical problems.
 #[derive(Debug, Clone, Default, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct CheckReport {
     /// Number of ADR files inspected.
     pub checked: usize,
@@ -218,6 +231,7 @@ pub struct CheckReport {
 /// `summary` / `paths`) so a richer surface, like the web repo-health panel, can
 /// lay it out instead of printing one line.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct Problem {
     /// How serious the problem is.
     pub severity: Severity,
@@ -242,6 +256,7 @@ pub struct Problem {
 /// One file implicated in a [`Problem`], with its size so a surface can hint at
 /// what's worth diffing — e.g. a few-line header-only stub vs. a full ADR.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct ProblemFile {
     /// Path relative to the repo root.
     pub path: String,
@@ -253,6 +268,7 @@ pub struct ProblemFile {
 
 /// Severity of a [`Problem`]. `Error` sorts before `Warning`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// A real defect (duplicate id, status/dir mismatch, unparseable file, a
@@ -267,6 +283,7 @@ pub enum Severity {
 
 /// The category of a validation [`Problem`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProblemKind {
     /// Two ADR files share one identity (number / slug / uuid).
@@ -296,6 +313,7 @@ pub enum ProblemKind {
 
 /// The kind of relationship an edge / link represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
     /// `from` supersedes `to` (`from` is the newer decision). Directed.

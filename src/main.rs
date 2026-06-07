@@ -90,6 +90,13 @@ fn main() -> Result<()> {
         clap_complete::generate(*shell, &mut cmd, bin, &mut std::io::stdout());
         return Ok(());
     }
+    // `manifest` likewise prints a document built from the command tree — no
+    // ADR dir/store needed, and it reflects exactly this build.
+    #[cfg(feature = "manifest")]
+    if let Some(Command::Manifest) = &cli.command {
+        println!("{}", adroit::manifest::json());
+        return Ok(());
+    }
     // `auth` only writes the credential store — no ADR dir/store needed.
     // Forge-only: the command exists solely in `--features forge` builds.
     #[cfg(feature = "forge")]
@@ -435,6 +442,8 @@ fn main() -> Result<()> {
         Some(Command::Completions { .. }) => {
             unreachable!("completions handled before store open")
         }
+        #[cfg(feature = "manifest")]
+        Some(Command::Manifest) => unreachable!("manifest handled before store open"),
         #[cfg(feature = "forge")]
         Some(Command::Auth { .. }) => unreachable!("auth handled before store open"),
         None => run_tui(&cfg, &dir)?,

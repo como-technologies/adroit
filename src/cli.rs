@@ -94,6 +94,7 @@ Forge integration:
 Configuration:
   config        Inspect or change configuration
   completions   Print a shell completion script (bash/zsh/fish/…)
+  manifest      Print a machine-readable CLI manifest (JSON, for agents)
   help          Print help for a command
 
 Options:
@@ -144,6 +145,7 @@ Maintain the repo:
 Configuration:
   config        Inspect or change configuration
   completions   Print a shell completion script (bash/zsh/fish/…)
+  manifest      Print a machine-readable CLI manifest (JSON, for agents)
   help          Print help for a command
 
 Options:
@@ -733,6 +735,15 @@ pub enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Print a machine-readable manifest of the CLI surface (JSON) for agents.
+    ///
+    /// Lists every command (only the ones compiled into this build), its args /
+    /// flags / enums, whether it reads or writes, the `-o json` output shape, any
+    /// runtime requirement (e.g. `ai.enabled`), and the JSON Schemas of the
+    /// `view` types — so an agent can discover and drive adroit without scraping
+    /// `--help`.
+    #[cfg(feature = "manifest")]
+    Manifest,
 }
 
 /// Subcommands for `adroit config`.

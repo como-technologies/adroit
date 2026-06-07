@@ -172,6 +172,7 @@ mod review_by_format {
     Serialize,
     Deserialize,
 )]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 #[strum(ascii_case_insensitive)]
 pub enum Status {
     #[default]

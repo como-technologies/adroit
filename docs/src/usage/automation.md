@@ -48,15 +48,39 @@ script or agent can branch on the exit code:
 - A bad identifier, an invalid flag combination, or a profile mismatch exits
   non-zero with a message on stderr.
 
-## Discovering commands
+## Discovering commands — `adroit manifest`
 
-Until a structured command manifest lands, agents can introspect adroit the same
-way a human does:
+`adroit manifest` prints a **machine-readable JSON catalog** of the whole CLI
+surface, so an agent can discover and drive adroit without scraping `--help`:
+
+```sh
+adroit manifest          # one JSON document; always available, offline
+```
+
+Three parts, none of which can drift from the binary:
+
+- **`commands`** — every command compiled into this build, with its args / flags /
+  enums / defaults, plus the semantics `--help` only implies: `reads` / `writes`,
+  `idempotent`, the lifecycle `stage`, the `-o json` output shape (`json_output`),
+  any runtime `requires` (e.g. `["ai", "ai.enabled"]` or `["forge config"]` — the
+  command is compiled but still needs an opt-in), and the `exit`-code meaning. A
+  boolean switch is marked `"flag": true`.
+- **`types`** — JSON Schemas for the `view` types the read verbs emit
+  (`AdrSummary` / `AdrDetail` / `Stats` / `Graph` / `CheckReport`), so a consumer
+  knows the exact shape of `list -o json`, `show -o json`, `check -o json`, etc.
+- **`global_options`** + `tool` / `version` / `manifest_schema` (the version of the
+  manifest's own shape — bumped on a breaking change).
+
+The syntax is derived from the clap command tree and the type schemas from the
+same serde structs that produce `-o json`, so the manifest **always matches the
+build**: feature-gated commands appear only when compiled in, and `requires` flags
+the ones that exist but need a runtime opt-in. It's the natural backing for an MCP
+tool catalog (each command → a tool with its args as a JSON Schema). The
+human-facing introspection still works too:
 
 - `adroit --help` lists every verb grouped by workflow; `adroit <verb> --help`
-  details one verb (terse with `-h`).
-- `adroit completions <bash|zsh|fish|…>` prints a shell-completion script that
-  enumerates subcommands, flags, and enum values.
+  details one (terse with `-h`).
+- `adroit completions <bash|zsh|fish|…>` prints a shell-completion script.
 
 ## AI-assisted authoring
 

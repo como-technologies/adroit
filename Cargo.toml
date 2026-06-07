@@ -12,7 +12,11 @@ description = "A snappy tool for managing Architecture Decision Records"
 # (`query`/`view`) and write (`store`) layers never depend on the TUI, AI, or a
 # forge; `just lint-core` guards that layering in CI. `web` stays opt-in (it needs
 # the Vue SPA bundle — `just serve`).
-default = ["tui", "ai", "forge"]
+default = ["tui", "ai", "forge", "manifest"]
+# `adroit manifest` — a machine-readable catalog of the CLI surface (commands,
+# args, the `view`-type JSON schemas, and per-command semantics) for agents.
+# Behind a default-on feature so a `--no-default-features` core drops `schemars`.
+manifest = ["dep:schemars"]
 tui = [
     "dep:ratatui",
     "dep:crossterm",
@@ -69,6 +73,9 @@ ratatui = { version = "0.30", optional = true }
 serde = { version = "1", features = ["derive"] }
 # Core: `-o json` output for the read verbs serializes the `view` types directly.
 serde_json = "1"
+# manifest feature only: derive JSON Schema for the `view` types so `adroit
+# manifest` can publish the exact `-o json` shapes. No runtime cost when off.
+schemars = { version = "0.8", optional = true }
 shellexpand = "3"
 serde_yaml_ng = "0.10"
 strum = { version = "0.28", features = ["derive"] }
