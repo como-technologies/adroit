@@ -74,15 +74,18 @@ Providers grouped by seam — shipped, plus candidates (each a contained add):
 |---|---|---|
 | **Repo / PR host** (`Forge`) | GitHub, GitLab | Gitea / Forgejo, Bitbucket |
 | **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, native (files-only) | Linear ([#12](https://github.com/como-technologies/adroit/issues/12)) |
-| **Publish target** (`Publisher`) | static dir (mdBook / plain) | Confluence, Notion, Hugo-dir, Docusaurus-dir ([#8](https://github.com/como-technologies/adroit/issues/8)) |
+| **Publish target** (`Publisher`) | static dir (mdBook / plain) | hugo-dir, docusaurus-dir ([#8](https://github.com/como-technologies/adroit/issues/8)) |
 
 Per-provider capability deepens behind the same traits — reviewer @-mentions, review
 deadlines, Jira due / Linear target dates
 ([#11](https://github.com/como-technologies/adroit/issues/11)). The boundary that
 keeps this in adroit's lane: its forge integration governs the **ADR lifecycle**
-(propose-on-main, accept-via-MR, status sync, reviewer assignment) and `publish`
-*produces* the artifact — it does not host, distribute, or orchestrate code across
-forges. Those are other nodes' jobs (see the portfolio loop below).
+(propose-on-main, accept-via-MR, status sync, reviewer assignment), and `publish`
+**produces** the accepted-set artifact (a static / `hugo-dir` / `docusaurus-dir`
+tree) — it does not *host* it. The networked **Confluence / Notion push is the
+consuming repo's CI** (e.g. the playbook repo's mdBook → Confluence pipeline), not
+adroit; and code orchestration across forges is the Adopt engine's. Those are other
+nodes' jobs (see the portfolio loop below).
 
 ## Web dashboard
 
