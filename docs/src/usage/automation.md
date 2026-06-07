@@ -85,6 +85,15 @@ template), drafts the body, splices it in (heading/status stay mechanical), mark
 it `<!-- adroit:ai-suggested -->`, and opens your editor. The iterative flow:
 `new` → `draft` (AI fill, whenever) → `edit` → PR.
 
+`adroit compose <ID> "<instruction>"` is the **targeted** revision verb. Where
+`draft` re-runs the fixed interview and redrafts the whole body, `compose` takes a
+free-form instruction (e.g. `"expand the negative consequences"`,
+`"add a rejected option about Redis"`) plus the ADR's *current* body and returns a
+revised body — for iterative edits to an ADR that already has content. It writes the
+revision (marked `<!-- adroit:ai-suggested -->`, heading/status stay mechanical) and
+opens your editor (`--no-edit` to skip). It's the same engine as the TUI's "AI:
+draft / revise body" assist, and needs a provider.
+
 `adroit plan <ID>` is the read-only companion: it reads an (accepted) ADR plus
 the corpus and asks the provider for an ordered implementation checklist (steps,
 components touched, testing, rollout, risks). It prints to stdout (or `--out`) and

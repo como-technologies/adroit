@@ -51,6 +51,7 @@ pub enum OutputFormat {
 Author a decision:
   new           Create a new ADR (--interview for an AI Q&A draft)
   draft         Fill in an existing ADR via the AI interview
+  compose       Revise an ADR's body from a free-form instruction (AI)
   plan          Draft an AI implementation plan for an ADR
   edit          Open an ADR in your editor ($EDITOR / $VISUAL)
   lint          Check one ADR's authoring quality (--ai for a model review)
@@ -107,6 +108,7 @@ Options:
 Author a decision:
   new           Create a new ADR (--interview for an AI Q&A draft)
   draft         Fill in an existing ADR via the AI interview
+  compose       Revise an ADR's body from a free-form instruction (AI)
   plan          Draft an AI implementation plan for an ADR
   edit          Open an ADR in your editor ($EDITOR / $VISUAL)
   lint          Check one ADR's authoring quality (--ai for a model review)
@@ -649,6 +651,23 @@ pub enum Command {
         /// ADR identifier (number, slug, or uuid prefix — see `show`).
         id: String,
         /// Do not open the editor after drafting.
+        #[arg(long)]
+        no_edit: bool,
+    },
+    /// Revise an existing ADR's body from a free-form instruction (AI).
+    ///
+    /// Unlike `draft` (which re-runs the fixed Socratic interview and redrafts the
+    /// body wholesale), `compose` takes a free-form instruction (e.g. "expand the
+    /// negative consequences", "add a rejected option about X") plus the ADR's
+    /// *current* body, and returns a revised body — targeted, iterative editing.
+    /// Prose only (identity / status / heading stay mechanical, marked
+    /// `<!-- adroit:ai-suggested -->`), then opens your editor. Needs an AI provider.
+    Compose {
+        /// ADR identifier (number, slug, or uuid prefix — see `show`).
+        id: String,
+        /// What to change, in plain words (e.g. "tighten the context section").
+        instruction: String,
+        /// Do not open the editor after composing.
         #[arg(long)]
         no_edit: bool,
     },

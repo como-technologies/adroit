@@ -7,9 +7,6 @@ so they're "add a variant," not a rewrite.
 
 ## Authoring & AI
 
-- **`compose` as a CLI verb.** Instruction-driven body (re)drafting already exists
-  as a TUI assist (*AI: draft / revise body*); exposing it as
-  `adroit compose <ID> "<instruction>"` would give the CLI symmetry.
 - **Granular AI-draft review in the TUI.** Today an AI draft loads into the editor
   to keep / trim as a whole; a per-hunk diff with accept / reject is the richer next
   step.

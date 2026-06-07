@@ -125,6 +125,7 @@ fn main() -> Result<()> {
         Some(Command::Edit { .. }) => true,
         Some(Command::New { no_edit, .. }) => !no_edit && cfg.open_on_new,
         Some(Command::Draft { no_edit, .. }) => !no_edit,
+        Some(Command::Compose { no_edit, .. }) => !no_edit,
         _ => false,
     };
     let editor = if needs_editor {
@@ -349,6 +350,18 @@ fn main() -> Result<()> {
         Some(Command::Draft { id, no_edit }) => {
             cmd_draft(&store, &cfg, &resolve_ref(&cfg, &id)?, no_edit, editor)?
         }
+        Some(Command::Compose {
+            id,
+            instruction,
+            no_edit,
+        }) => cmd_compose(
+            &store,
+            &cfg,
+            &resolve_ref(&cfg, &id)?,
+            &instruction,
+            no_edit,
+            editor,
+        )?,
         Some(Command::Relink {
             dry_run,
             #[cfg(feature = "forge")]
@@ -768,6 +781,62 @@ fn cmd_draft(
     let adr = store.read(&path)?;
     let drafted = interview_and_draft(store, &adr.title, r, provider.as_ref())?;
     if drafted && !no_edit {
+        open_in_editor(editor, &path)?;
+    }
+    Ok(())
+}
+
+/// `adroit compose <ID> "<instruction>"`: instruction-driven revision of an
+/// existing ADR's body — the targeted, iterative cousin of `draft` (which re-runs
+/// the fixed interview and redrafts wholesale). Reads the current body + corpus,
+/// asks the provider for a revised body, splices it over the prose (heading /
+/// status stay mechanical, marked `AI_MARKER`), then opens the editor. Same
+/// engine as the TUI's "AI: draft / revise body" assist. Requires a provider.
+fn cmd_compose(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    instruction: &str,
+    no_edit: bool,
+    editor: Option<Option<String>>,
+) -> Result<()> {
+    if instruction.trim().is_empty() {
+        anyhow::bail!(
+            "compose needs an instruction, e.g. adroit compose 9 \"expand the consequences\""
+        );
+    }
+    let provider = require_provider(cfg, "compose")?;
+    let path = store.find_path_by_ref(r)?;
+    let detail = query::detail_at(store, &path)?;
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+    let req = adroit::ai::build_compose_request(
+        &detail.summary.title,
+        instruction,
+        &detail.body,
+        &corpus,
+    );
+    announce_estimate(
+        provider.as_ref(),
+        &req,
+        &format!("Composing {}", detail.summary.reference),
+    );
+    let drafted = adroit::ai::draft_compose(
+        provider.as_ref(),
+        &detail.summary.title,
+        instruction,
+        &detail.body,
+        &corpus,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    splice_ai_draft(store, r, &drafted)?;
+    println!(
+        "Revised {} (AI-suggested; review before committing).",
+        detail.summary.reference
+    );
+    if !no_edit {
         open_in_editor(editor, &path)?;
     }
     Ok(())

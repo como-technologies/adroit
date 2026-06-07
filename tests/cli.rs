@@ -2691,6 +2691,65 @@ fn summarize_without_a_provider_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// `adroit compose` (instruction-driven AI body revision; writes the body)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_revises_the_body_via_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["compose", "1", "expand the context", "--no-edit"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "## Context and Problem Statement\n\nRevised by compose.\n\n## Decision Outcome\n\nUse PostgreSQL.",
+        )
+        .assert()
+        .success();
+    // The revised, AI-marked prose landed; the mechanical heading is intact.
+    adroit(&dir)
+        .args(["show", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Revised by compose"))
+        .stdout(predicate::str::contains("ADR-0001"));
+    // The revision marks itself AI-suggested, and the repo still validates.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn compose_requires_an_instruction() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    // Whitespace-only instruction is rejected before any provider call.
+    adroit(&dir)
+        .args(["compose", "1", "   "])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("instruction"));
+}
+
+#[test]
+fn compose_without_a_provider_errors() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "X", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["compose", "1", "tighten it"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+// ---------------------------------------------------------------------------
 // `adroit related` / `dedupe` (mechanical TF-IDF similarity; read-only)
 // ---------------------------------------------------------------------------
 

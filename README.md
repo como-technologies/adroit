@@ -39,7 +39,7 @@ synchronous (no tui, no rig/tokio, no http client).
 | Feature | Default? | Adds |
 |---|---|---|
 | `tui` | ✅ | the interactive TUI (bare `adroit`) |
-| `ai` | ✅ | AI authoring: `new --interview`, `draft`, `plan`, `lint --ai`, `summarize`, `ask` (Anthropic or local Ollama). Calls are still gated at runtime by `ai.enabled` |
+| `ai` | ✅ | AI authoring: `new --interview`, `draft`, `compose`, `plan`, `lint --ai`, `summarize`, `ask` (Anthropic or local Ollama). Calls are still gated at runtime by `ai.enabled` |
 | `forge` | ✅ | GitHub/GitLab issue + PR/MR sync: `init`, `auth`, `sync`, `reconcile`, `notify` |
 | `web` | — | the read-only web dashboard. Opt-in (it needs the Vue SPA bundle); build + run with `just serve` |
 
@@ -108,6 +108,7 @@ for an air-gapped, no-key setup):
 ```sh
 adroit new "Adopt event sourcing" --interview   # Socratic Q&A → AI drafts the body
 adroit draft 9                                  # run that interview on an existing ADR
+adroit compose 9 "expand the consequences"      # targeted AI revision of the current body
 adroit lint 9                                   # flag unfilled sections / missing trade-offs
 adroit summarize 9                              # one-paragraph TL;DR
 adroit plan 9                                   # AI implementation checklist

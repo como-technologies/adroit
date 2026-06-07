@@ -15,7 +15,7 @@ Author a decision ─▶ Review & decide ─▶ (Implement)
 
 | Stage | You're here when… | Verbs |
 |---|---|---|
-| **Author a decision** | a question is open and you're drafting the record | `new` · `draft` · `plan` · `edit` · `lint` · `dedupe` · `related` · `link` |
+| **Author a decision** | a question is open and you're drafting the record | `new` · `draft` · `compose` · `plan` · `edit` · `lint` · `dedupe` · `related` · `link` |
 | **Review & decide** | the draft is circulating and the team is converging | `set-review` · `review` · `summarize` · `set-status` · `supersede` |
 | **Explore the corpus** | *(anytime)* reading, searching, or asking | `list` · `show` · `status` · `search` · `stats` · `graph` · `ask` · `serve` |
 | **Maintain the repo** | keeping the set valid, linked, and published | `check` · `relink` · `renumber` · `migrate` · `index` · `publish` |
@@ -115,6 +115,7 @@ Needs a provider configured ([Automation & AI](./automation.md)):
 adroit new "Adopt event sourcing" --interview    # Socratic Q&A → AI drafts the body
 # (or author plainly, then fill it in later: adroit new "…"  →  adroit draft 1)
 adroit edit 1                                    # review / trim the AI draft in $EDITOR
+adroit compose 1 "expand the negative consequences"   # targeted AI revision (vs draft's full redraft)
 adroit lint 1                                    # mechanical gate (add --ai for advisory review)
 adroit summarize 1                               # one-paragraph TL;DR for the PR description
 adroit set-status 1 accepted

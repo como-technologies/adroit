@@ -148,6 +148,25 @@ adroit draft 2 --no-edit  # draft it without opening the editor
 |---|---|
 | `--no-edit` | Do not open the editor after drafting |
 
+#### `adroit compose <ID> "<instruction>"`
+
+The **targeted, instruction-driven** revision verb. Where `draft` re-runs the
+fixed interview and redrafts the whole body, `compose` takes a **free-form
+instruction** plus the ADR's *current* body and returns a revised body — for
+iterative edits to an ADR that already has content. It splices the result over the
+prose (the `# ADR-NNNN` heading and `## Status` stay mechanical), marks it
+`<!-- adroit:ai-suggested -->`, then opens your editor. Same engine as the TUI's
+"AI: draft / revise body" assist. Needs an AI provider (no template fallback).
+
+```sh
+adroit compose 2 "expand the negative consequences"
+adroit compose 2 "add a rejected option about Redis" --no-edit
+```
+
+| Flag | Description |
+|---|---|
+| `--no-edit` | Do not open the editor after composing |
+
 #### `adroit plan <ID>`
 
 Draft an **AI implementation plan** for an (accepted) ADR: reads the ADR + the

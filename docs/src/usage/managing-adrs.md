@@ -168,4 +168,7 @@ itself is untouched. Without `--out` it prints to stdout.
 adroit edit 1
 ```
 
-Opens the ADR in your configured editor.
+Opens the ADR in your configured editor. For an AI-assisted revision of the body,
+`adroit compose 1 "<instruction>"` applies a free-form instruction (e.g. "expand
+the consequences") to the current content and opens the editor on the result —
+see [Automation & AI](./automation.md#ai-assisted-authoring).
