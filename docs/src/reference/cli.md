@@ -130,7 +130,7 @@ the plain template (the ADR is still created).
 
 Seed a **proposed-ADR backlog** from an [`assessments`](../usage/automation.md)
 export — the *ingest* seam (Assess → Prescribe). Reads a `Domain → Practice →
-Question` maturity model (`.json` or `.yaml`/`.yml`) and creates one **proposed**
+Question` maturity model (`.json`, `.yaml`/`.yml`, or `.toml`) and creates one **proposed**
 ADR per practice: the practice's *context* → problem statement, its *value* /
 *risk* / *effort* → decision drivers, its questions → recorded signals. The body is
 marked `<!-- adroit:seeded-from-assessment -->` with a provenance note. The mapping
@@ -144,7 +144,7 @@ adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothi
 
 | Flag | Description |
 |---|---|
-| `--from-assessment <FILE>` | Path to the assessment export (`.json`, or `.yaml`/`.yml`) |
+| `--from-assessment <FILE>` | Path to the assessment export (`.json`, `.yaml`/`.yml`, or `.toml`) |
 | `--dry-run` | Parse and report what would be seeded; write nothing |
 | `--force` | Seed even practices whose title already has an ADR (skip the dedupe guard) |
 

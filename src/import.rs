@@ -99,20 +99,22 @@ pub struct SeedDraft {
     pub signals: Vec<String>,
 }
 
-/// Parse an assessment export. `.json` is parsed as JSON; anything else as YAML
-/// (a JSON superset, so it accepts JSON too). TOML exports should be re-exported
-/// as JSON or YAML.
+/// Parse an assessment export, dispatching on the file extension: `.json` → JSON,
+/// `.toml` → TOML, anything else → YAML (a JSON superset, so it accepts JSON too).
+/// All three are `assessments` export formats and deserialize the same structs.
 pub fn parse_assessment(text: &str, path: &Path) -> anyhow::Result<Assessment> {
-    let is_json = path
+    let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("json"));
-    if is_json {
-        serde_json::from_str(text)
-            .map_err(|e| anyhow::anyhow!("parsing assessment JSON ({}): {e}", path.display()))
-    } else {
-        serde_yaml_ng::from_str(text)
-            .map_err(|e| anyhow::anyhow!("parsing assessment YAML ({}): {e}", path.display()))
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "json" => serde_json::from_str(text)
+            .map_err(|e| anyhow::anyhow!("parsing assessment JSON ({}): {e}", path.display())),
+        "toml" => toml::from_str(text)
+            .map_err(|e| anyhow::anyhow!("parsing assessment TOML ({}): {e}", path.display())),
+        _ => serde_yaml_ng::from_str(text)
+            .map_err(|e| anyhow::anyhow!("parsing assessment YAML ({}): {e}", path.display())),
     }
 }
 
@@ -292,6 +294,25 @@ mod tests {
     fn yaml_parses_too() {
         let yaml = "name: Y\ndomains:\n  - name: D\n    context: dc\n    practices:\n      - name: P\n        context: pc\n        value: v\n        risk: r\n";
         let a = parse_assessment(yaml, Path::new("x.yaml")).unwrap();
+        let drafts = seed_drafts(&a);
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].title, "P");
+    }
+
+    #[test]
+    fn toml_parses_too() {
+        let toml = r#"
+name = "Y"
+[[domains]]
+name = "D"
+context = "dc"
+[[domains.practices]]
+name = "P"
+context = "pc"
+value = "v"
+risk = "r"
+"#;
+        let a = parse_assessment(toml, Path::new("x.toml")).unwrap();
         let drafts = seed_drafts(&a);
         assert_eq!(drafts.len(), 1);
         assert_eq!(drafts[0].title, "P");

@@ -7,8 +7,8 @@ Sample inputs for trying adroit's features without wiring up the real portfolio 
 A small, **generic** maturity assessment shaped like an
 [`assessments`](https://github.com/como-technologies) export — a
 `Domain → Practice → Question` model where each leaf carries *context*, *value*, and
-*risk*. The two files are equivalent; they just show that `import` accepts either
-format.
+*risk*. The three files are equivalent; they show that `import` accepts JSON, YAML,
+or TOML.
 
 Use them to try the **ingest seam** — seeding a proposed-ADR backlog from an
 assessment ([issue #18](https://github.com/como-technologies/adroit/issues/18)):

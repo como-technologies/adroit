@@ -306,7 +306,7 @@ pub enum Command {
     /// re-running skips practices whose decision already exists. Refine each
     /// seeded ADR (e.g. `adroit draft <id>`) before review.
     Import {
-        /// Path to an `assessments` export (`.json`, or `.yaml`/`.yml`).
+        /// Path to an `assessments` export (`.json`, `.yaml`/`.yml`, or `.toml`).
         #[arg(long, value_name = "FILE")]
         from_assessment: std::path::PathBuf,
         /// Parse and report what would be seeded without writing anything.

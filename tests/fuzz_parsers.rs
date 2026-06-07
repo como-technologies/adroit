@@ -97,7 +97,7 @@ fn fuzz_parse_remote_url() {
 fn fuzz_parse_assessment() {
     use adroit::import::{parse_assessment, seed_drafts, seed_fragment};
     check!().with_type::<String>().for_each(|input: &String| {
-        for ext in ["a.json", "a.yaml"] {
+        for ext in ["a.json", "a.yaml", "a.toml"] {
             if let Ok(a) = parse_assessment(input, Path::new(ext)) {
                 for d in seed_drafts(&a) {
                     let _ = seed_fragment(&d);

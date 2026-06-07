@@ -226,7 +226,7 @@ proptest! {
     /// and the seed mapping never panics on whatever parses.
     #[test]
     fn import_parser_and_mapping_never_panic(text in arb_text()) {
-        for ext in ["a.json", "a.yaml"] {
+        for ext in ["a.json", "a.yaml", "a.toml"] {
             if let Ok(a) = parse_assessment(&text, Path::new(ext)) {
                 for d in seed_drafts(&a) {
                     let _ = seed_fragment(&d);

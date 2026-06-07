@@ -3210,8 +3210,12 @@ fn import_dry_run_writes_nothing() {
 
 #[test]
 fn import_accepts_the_bundled_example_assessments() {
-    // Guard the `examples/` files against rot: both formats parse and seed 4 ADRs.
-    for file in ["examples/assessment.json", "examples/assessment.yaml"] {
+    // Guard the `examples/` files against rot: every format parses and seeds 4 ADRs.
+    for file in [
+        "examples/assessment.json",
+        "examples/assessment.yaml",
+        "examples/assessment.toml",
+    ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
         let dir = TempDir::new().unwrap();
         adroit(&dir)
@@ -3260,6 +3264,39 @@ fn import_errors_clearly_on_a_missing_file() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("reading assessment export"));
+}
+
+#[test]
+fn import_reads_a_toml_export() {
+    let dir = TempDir::new().unwrap();
+    let export = dir.path().join("assessment.toml");
+    fs::write(
+        &export,
+        r#"
+name = "Cloud Maturity"
+[[domains]]
+name = "Security"
+  [[domains.practices]]
+  name = "Secrets management"
+  context = "Secrets are committed to git today."
+  value = "breach vector"
+  risk = "painful rotation"
+"#,
+    )
+    .unwrap();
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Seeded 1 proposed ADR(s)"));
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 1);
+    assert!(
+        fs::read_to_string(&files[0])
+            .unwrap()
+            .contains("Secrets are committed to git today.")
+    );
 }
 
 #[test]
