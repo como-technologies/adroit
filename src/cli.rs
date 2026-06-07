@@ -555,10 +555,11 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Save a forge token to the local credential store (used after env vars).
+    /// Save a forge token to the credential store (env vars still take precedence).
     ///
-    /// A dependency-free `0600` file next to the config — no env-var copy-paste.
-    /// (OAuth device-flow + OS keychain are future enhancements.)
+    /// Stored in the **OS keychain** when available (macOS Keychain / Windows
+    /// Credential Manager / Linux keyutils), else a `0600` file next to the config.
+    /// `ADROIT_CREDENTIAL_STORE=file|keychain` forces a specific backend.
     #[cfg(feature = "forge")]
     Auth {
         /// Which token to store: `github`, `gitlab`, or `jira`.

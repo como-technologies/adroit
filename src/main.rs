@@ -2020,16 +2020,17 @@ fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Res
             .interact()
             .context("reading token")?,
     };
-    config::store_credential(provider, &token)?;
+    // `store_credential` reports where it landed (OS keychain or the file store);
+    // the token value itself is never echoed.
+    let where_stored = config::store_credential(provider, &token)?;
     if provider == "jira"
         && let Some(e) = email
     {
         config::store_credential("jira_email", &e)?;
     }
-    let path = config::credentials_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    println!("Saved {provider} token to {path} (environment variables still take precedence).");
+    println!(
+        "Saved {provider} token to the {where_stored} (environment variables still take precedence)."
+    );
     Ok(())
 }
 

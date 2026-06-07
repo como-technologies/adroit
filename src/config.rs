@@ -733,6 +733,12 @@ pub enum ConfigError {
 
     #[error("no editor found — install an editor or set the EDITOR environment variable")]
     NoEditor,
+
+    /// The OS keychain backend was unavailable or rejected the operation; the
+    /// credential chain falls through to the file store.
+    #[cfg(feature = "keychain")]
+    #[error("keychain unavailable: {0}")]
+    Keychain(String),
 }
 
 /// Return the path to the config file, or `None` if the home directory
@@ -776,38 +782,135 @@ pub fn credentials_path() -> Option<PathBuf> {
     )
 }
 
-/// Load the saved token for `key` (e.g. `"github"`), if any.
-pub fn load_credential(key: &str) -> Option<String> {
-    let map: BTreeMap<String, String> =
-        serde_yaml_ng::from_str(&std::fs::read_to_string(credentials_path()?).ok()?).ok()?;
-    map.get(key).cloned()
+/// A place tokens can be read from / written to. The OS keychain (when compiled
+/// in) is tried first; the `0600` file store is the universal fallback. Behind
+/// this trait so the chain logic is unit-tested with in-memory fakes.
+pub(crate) trait CredentialBackend {
+    /// Read the token for `key`, or `None` if absent / this backend is unavailable.
+    fn get(&self, key: &str) -> Option<String>;
+    /// Store `token` for `key`; `Err` if this backend is unavailable, so the
+    /// chain falls through to the next.
+    fn set(&self, key: &str, token: &str) -> Result<(), ConfigError>;
+    /// Human-readable name for the auth confirmation message.
+    fn kind(&self) -> &'static str;
 }
 
-/// Save `token` for `key`, preserving other entries; the file is created `0600`.
-pub fn store_credential(key: &str, token: &str) -> Result<(), ConfigError> {
-    let path = credentials_path().ok_or(ConfigError::NoConfigDir)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+/// The dependency-free `0600` YAML file next to the config — always available.
+struct FileBackend;
+
+impl CredentialBackend for FileBackend {
+    fn get(&self, key: &str) -> Option<String> {
+        let map: BTreeMap<String, String> =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(credentials_path()?).ok()?).ok()?;
+        map.get(key).cloned()
+    }
+
+    fn set(&self, key: &str, token: &str) -> Result<(), ConfigError> {
+        let path = credentials_path().ok_or(ConfigError::NoConfigDir)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+                path: path.clone(),
+                source,
+            })?;
+        }
+        let mut map: BTreeMap<String, String> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_yaml_ng::from_str(&c).ok())
+            .unwrap_or_default();
+        map.insert(key.to_string(), token.to_string());
+        let yaml = serde_yaml_ng::to_string(&map).expect("serialize credentials");
+        std::fs::write(&path, yaml).map_err(|source| ConfigError::Write {
             path: path.clone(),
             source,
         })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
-    let mut map: BTreeMap<String, String> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_yaml_ng::from_str(&c).ok())
-        .unwrap_or_default();
-    map.insert(key.to_string(), token.to_string());
-    let yaml = serde_yaml_ng::to_string(&map).expect("serialize credentials");
-    std::fs::write(&path, yaml).map_err(|source| ConfigError::Write {
-        path: path.clone(),
-        source,
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+
+    fn kind(&self) -> &'static str {
+        "file store (~/.config/adroit/credentials.yaml)"
     }
-    Ok(())
+}
+
+/// The OS keychain — macOS Keychain / Windows Credential Manager / Linux kernel
+/// keyutils, via the `keyring` crate. An unavailable service (e.g. headless, no
+/// session keyring) yields `None` / `Err`, so the chain falls through to the file.
+#[cfg(feature = "keychain")]
+struct KeyringBackend;
+
+#[cfg(feature = "keychain")]
+impl CredentialBackend for KeyringBackend {
+    fn get(&self, key: &str) -> Option<String> {
+        keyring::Entry::new("adroit", key).ok()?.get_password().ok()
+    }
+
+    fn set(&self, key: &str, token: &str) -> Result<(), ConfigError> {
+        keyring::Entry::new("adroit", key)
+            .and_then(|e| e.set_password(token))
+            .map_err(|e| ConfigError::Keychain(e.to_string()))
+    }
+
+    fn kind(&self) -> &'static str {
+        "OS keychain"
+    }
+}
+
+/// The backend chain in priority order: the OS keychain first (when compiled in),
+/// then the file store. `ADROIT_CREDENTIAL_STORE` overrides the chain — `auto`
+/// (default) = keychain then file; `file` = file only (skip the keychain); `keychain`
+/// = keychain only (no file fallback). The override lets a user opt out of a broken
+/// keychain (and pins the file store for deterministic tests).
+// The keychain push is `#[cfg]`-gated, so a single `vec!` literal won't do.
+#[allow(clippy::vec_init_then_push)]
+fn default_backends() -> Vec<Box<dyn CredentialBackend>> {
+    let mode = std::env::var("ADROIT_CREDENTIAL_STORE").unwrap_or_default();
+    let mut chain: Vec<Box<dyn CredentialBackend>> = Vec::new();
+    #[cfg(feature = "keychain")]
+    if mode != "file" {
+        chain.push(Box::new(KeyringBackend));
+    }
+    if mode != "keychain" {
+        chain.push(Box::new(FileBackend));
+    }
+    chain
+}
+
+/// Read `key` from the first backend that has it. Pure over the backend list so
+/// the chain is unit-tested with in-memory fakes.
+pub(crate) fn load_via(backends: &[Box<dyn CredentialBackend>], key: &str) -> Option<String> {
+    backends.iter().find_map(|b| b.get(key))
+}
+
+/// Store `key` in the first backend whose `set` succeeds, returning that
+/// backend's `kind()`. Falls through on failure (keychain unavailable → file).
+pub(crate) fn store_via(
+    backends: &[Box<dyn CredentialBackend>],
+    key: &str,
+    token: &str,
+) -> Result<&'static str, ConfigError> {
+    let mut last = ConfigError::NoConfigDir;
+    for b in backends {
+        match b.set(key, token) {
+            Ok(()) => return Ok(b.kind()),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// Load the saved token for `key` (e.g. `"github"`), if any — keychain then file.
+pub fn load_credential(key: &str) -> Option<String> {
+    load_via(&default_backends(), key)
+}
+
+/// Save `token` for `key` (keychain first, file fallback). Returns a label for
+/// **where** it landed, for the auth confirmation message.
+pub fn store_credential(key: &str, token: &str) -> Result<&'static str, ConfigError> {
+    store_via(&default_backends(), key, token)
 }
 
 impl Config {
@@ -1016,6 +1119,84 @@ pub fn resolve_dir(cli_dir: Option<PathBuf>, config: &Config) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In-memory credential backend for testing the fallback chain without a real
+    /// keychain or touching the filesystem. `fail_set` simulates an unavailable
+    /// backend (e.g. no keychain service), so the chain falls through.
+    struct MemBackend {
+        name: &'static str,
+        fail_set: bool,
+        map: std::cell::RefCell<std::collections::HashMap<String, String>>,
+    }
+    impl MemBackend {
+        fn new(name: &'static str, fail_set: bool) -> Self {
+            Self {
+                name,
+                fail_set,
+                map: std::cell::RefCell::new(std::collections::HashMap::new()),
+            }
+        }
+        fn seeded(name: &'static str, key: &str, val: &str) -> Self {
+            let b = Self::new(name, false);
+            b.map.borrow_mut().insert(key.into(), val.into());
+            b
+        }
+    }
+    impl CredentialBackend for MemBackend {
+        fn get(&self, key: &str) -> Option<String> {
+            self.map.borrow().get(key).cloned()
+        }
+        fn set(&self, key: &str, token: &str) -> Result<(), ConfigError> {
+            if self.fail_set {
+                return Err(ConfigError::NoConfigDir);
+            }
+            self.map.borrow_mut().insert(key.into(), token.into());
+            Ok(())
+        }
+        fn kind(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    #[test]
+    fn store_via_falls_through_when_the_first_backend_is_unavailable() {
+        // Keychain unavailable (set fails) → token lands in the file store.
+        let chain: Vec<Box<dyn CredentialBackend>> = vec![
+            Box::new(MemBackend::new("keychain", true)),
+            Box::new(MemBackend::new("file", false)),
+        ];
+        assert_eq!(store_via(&chain, "github", "tok").unwrap(), "file");
+        assert_eq!(load_via(&chain, "github").as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn store_via_prefers_the_first_working_backend() {
+        let chain: Vec<Box<dyn CredentialBackend>> = vec![
+            Box::new(MemBackend::new("keychain", false)),
+            Box::new(MemBackend::new("file", false)),
+        ];
+        assert_eq!(store_via(&chain, "github", "tok").unwrap(), "keychain");
+    }
+
+    #[test]
+    fn load_via_reads_the_first_backend_that_has_the_key() {
+        // Keychain empty → fall through to the file store, which has it.
+        let chain: Vec<Box<dyn CredentialBackend>> = vec![
+            Box::new(MemBackend::new("keychain", false)),
+            Box::new(MemBackend::seeded("file", "github", "from-file")),
+        ];
+        assert_eq!(load_via(&chain, "github").as_deref(), Some("from-file"));
+        assert_eq!(load_via(&chain, "absent"), None);
+    }
+
+    #[test]
+    fn store_via_errors_when_every_backend_fails() {
+        let chain: Vec<Box<dyn CredentialBackend>> = vec![
+            Box::new(MemBackend::new("a", true)),
+            Box::new(MemBackend::new("b", true)),
+        ];
+        assert!(store_via(&chain, "k", "v").is_err());
+    }
 
     #[test]
     fn default_config_has_no_dir() {

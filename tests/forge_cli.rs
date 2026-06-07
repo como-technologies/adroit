@@ -45,6 +45,9 @@ fn run(s: &Setup, token: Option<&str>, args: &[&str]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_adroit"));
     c.current_dir(s.tmp.path())
         .env("XDG_CONFIG_HOME", &s.cfg_home)
+        // Pin the file store so credential ops stay in the isolated XDG home and
+        // never touch the developer's real OS keychain.
+        .env("ADROIT_CREDENTIAL_STORE", "file")
         .env("EDITOR", "true")
         .env("VISUAL", "true")
         .env_remove("ADROIT_GITHUB_TOKEN");
@@ -142,4 +145,36 @@ fn set_status_forge_offline_keeps_local_move() {
         "the ADR must have moved to accepted/ locally"
     );
     assert_eq!(adr_count(&s.adr_dir), 1);
+}
+
+// ---------------------------------------------------------------------------
+// `adroit auth` — credential storage + secret hygiene (#9, Part A)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auth_stores_to_the_file_store_and_never_echoes_the_token() {
+    let s = setup("forge:\n  provider: github\n  repo: owner/repo\n");
+    let out = run(&s, None, &["auth", "github", "--token", "SUPER-SECRET-XYZ"]);
+    assert!(
+        out.status.success(),
+        "auth failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Reports where it landed (file store, since ADROIT_CREDENTIAL_STORE=file)…
+    assert!(stdout.contains("file store"), "stdout: {stdout}");
+    // …and NEVER echoes the token value (secret hygiene).
+    assert!(
+        !stdout.contains("SUPER-SECRET-XYZ"),
+        "token leaked to stdout"
+    );
+    assert!(
+        !stderr.contains("SUPER-SECRET-XYZ"),
+        "token leaked to stderr"
+    );
+    // It persisted to the isolated 0600 credentials.yaml.
+    let creds = fs::read_to_string(s.cfg_home.join("adroit/credentials.yaml")).unwrap();
+    assert!(creds.contains("github"));
+    assert!(creds.contains("SUPER-SECRET-XYZ"));
 }

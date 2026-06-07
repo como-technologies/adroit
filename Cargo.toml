@@ -39,14 +39,19 @@ the-other-tui-markdown = ["dep:the-other-tui-markdown"]
 # `forge` is on by default. It adds a small *blocking* HTTP client (ureq) for
 # the GitHub/GitLab issue + PR adapters; the core CLI stays synchronous and
 # never pulls in tokio/async. A `--no-default-features` build drops it cleanly.
-forge = ["dep:ureq"]
+forge = ["dep:ureq", "keychain"]
+# Store forge/AI tokens in the OS keychain (macOS Keychain / Windows Credential
+# Manager / Linux kernel keyutils), with the 0600 file store as the universal
+# fallback. Enabled by `ai` + `forge` (both keep secrets); the bare core stays
+# file-only. Pure-Rust backends only — no C/system build deps.
+keychain = ["dep:keyring"]
 # `ai` is on by default. It brings rig (async LLM framework) + tokio for the
 # Anthropic/Ollama adapters; the AI verbs bridge to async with a single
 # `block_on` at the CLI boundary, so a `--no-default-features` build stays
 # tokio-free. The `AiProvider` trait, `FakeProvider`, and interview logic are
 # always compiled (the rig-backed adapter is the only `ai`-gated part). AI calls
 # are still gated at runtime by the `ai.enabled` kill-switch (default off).
-ai = ["dep:rig", "dep:tokio"]
+ai = ["dep:rig", "dep:tokio", "keychain"]
 
 [dependencies]
 anyhow = "1"
@@ -91,6 +96,15 @@ ureq = { version = "2", features = ["json"], optional = true }
 # ai feature only: rig is the async LLM framework (Anthropic + Ollama providers,
 # plus embeddings/RAG for future verbs). Bridged via block_on at the CLI edge.
 rig = { package = "rig-core", version = "0.38", optional = true }
+# keychain feature only: cross-platform OS keychain for stored tokens. Pure-Rust
+# backends (security-framework on macOS, windows-sys on Windows, linux-keyutils on
+# Linux) — no C / system build deps. Secret Service (libdbus) is an opt-in swap if
+# persistent Linux storage across logout is needed.
+keyring = { version = "3.6", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "linux-native",
+], optional = true }
 # tui feature only: renders GitHub-Flavored Markdown into a ratatui Text for the
 # preview pane. Targets ratatui-core 0.1 (the 0.30-era core) — no duplicate ratatui.
 the-other-tui-markdown = { version = "0.1.0", optional = true }
