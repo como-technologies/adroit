@@ -1,7 +1,10 @@
 pub mod adr;
-// AI authoring: the trait, value types, FakeProvider, and interview logic are
-// always compiled; the rig-backed adapter is gated behind the `ai` feature (the
-// facade falls back to None/the ADROIT_AI_FAKE seam when ai is off).
+// AI authoring. UNLIKE `forge`/`tui`/`web` (whose whole module is feature-gated
+// below), `ai` is intentionally NOT gated: the trait, value types, FakeProvider,
+// and interview/compose logic are always compiled — `ai_hook` (always on) and the
+// `new --interview` path depend on them, and they're unit-testable with no `ai`
+// feature and no network. Only the rig-backed adapter inside is gated (see
+// `#[cfg(feature = "ai")] pub mod rig_provider;` in `ai/mod.rs`).
 pub mod ai;
 pub mod ai_hook;
 pub mod cli;

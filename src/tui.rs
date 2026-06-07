@@ -366,6 +366,10 @@ pub enum Mode {
     /// The fuzzy command palette (`:`). `input` is the filter text; `index`
     /// selects among the currently matching commands.
     Palette { input: String, index: usize },
+    /// Typing a free-form AI brief (a compose instruction or a corpus question).
+    AiPrompt { input: String, kind: AiPromptKind },
+    /// Viewing a read-only AI result in a scrollable popup (text in `ai_result`).
+    AiResult,
     /// Scrolling / focused on the preview pane.
     Preview,
     /// Editing the selected ADR's markdown body in the right pane.
@@ -411,6 +415,40 @@ pub enum Action {
     /// Persist the edited body of an ADR via [`Store::set_body_ref`], then reload
     /// so the preview reflects it. `address` is the ADR's scheme token.
     SaveBody { address: String, body: String },
+    /// Run an AI assist on a worker thread (the driver intercepts this, like
+    /// [`Action::Edit`]). Carries everything the call needs from the pure layer.
+    Ai(AiRequest),
+}
+
+/// A pure description of an AI assist to run, built by the state layer from the
+/// selected ADR (+ a free-form instruction for compose/ask). Framework-free — the
+/// driver turns it into the actual provider call off-thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiRequest {
+    /// (Re)draft the body from a free-form instruction → loads into the editor.
+    Compose {
+        address: String,
+        title: String,
+        body: String,
+        instruction: String,
+    },
+    /// Answer a free-form question over the corpus → result popup.
+    Ask { question: String },
+    /// One-paragraph TL;DR of the selected ADR → result popup.
+    Summarize { title: String, body: String },
+    /// AI authoring-quality advice on the selected ADR → result popup.
+    Lint { title: String, body: String },
+    /// Implementation plan for the selected ADR → result popup.
+    Plan { title: String, body: String },
+}
+
+/// Which free-form AI prompt the user is composing in [`Mode::AiPrompt`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiPromptKind {
+    /// Instruction for (re)drafting the selected ADR's body.
+    Compose,
+    /// A question to ask over the corpus.
+    Ask,
 }
 
 /// How much the driver must refresh after applying an [`Action`].
@@ -506,6 +544,11 @@ pub enum PaletteCmd {
     Last,
     ToggleRaw,
     Refresh,
+    AiDraft,
+    AiAsk,
+    AiSummarize,
+    AiLint,
+    AiPlan,
     Theme(MarkdownTheme),
     Help,
     Quit,
@@ -528,6 +571,11 @@ impl PaletteCmd {
             PaletteCmd::Last => "Go to last ADR",
             PaletteCmd::ToggleRaw => "Toggle rendered / raw preview",
             PaletteCmd::Refresh => "Refresh from disk",
+            PaletteCmd::AiDraft => "AI: draft / revise body…",
+            PaletteCmd::AiAsk => "AI: ask the corpus…",
+            PaletteCmd::AiSummarize => "AI: summarize this ADR",
+            PaletteCmd::AiLint => "AI: review this ADR (advice)",
+            PaletteCmd::AiPlan => "AI: implementation plan",
             PaletteCmd::Theme(MarkdownTheme::Gruvbox) => "Theme: gruvbox",
             PaletteCmd::Theme(MarkdownTheme::Warm) => "Theme: warm",
             PaletteCmd::Theme(MarkdownTheme::Default) => "Theme: default (ANSI)",
@@ -554,13 +602,18 @@ impl PaletteCmd {
             PaletteCmd::Refresh => "r",
             PaletteCmd::Help => "?",
             PaletteCmd::Quit => "q",
-            PaletteCmd::Theme(_) => "",
+            PaletteCmd::AiDraft
+            | PaletteCmd::AiAsk
+            | PaletteCmd::AiSummarize
+            | PaletteCmd::AiLint
+            | PaletteCmd::AiPlan
+            | PaletteCmd::Theme(_) => "",
         }
     }
 }
 
 /// Every command the palette offers, in display order (then fuzzy-filtered).
-pub const PALETTE: [PaletteCmd; 18] = [
+pub const PALETTE: [PaletteCmd; 23] = [
     PaletteCmd::Search,
     PaletteCmd::GoToAdr,
     PaletteCmd::NewAdr,
@@ -568,6 +621,11 @@ pub const PALETTE: [PaletteCmd; 18] = [
     PaletteCmd::Supersede,
     PaletteCmd::EditBody,
     PaletteCmd::EditExternal,
+    PaletteCmd::AiDraft,
+    PaletteCmd::AiAsk,
+    PaletteCmd::AiSummarize,
+    PaletteCmd::AiLint,
+    PaletteCmd::AiPlan,
     PaletteCmd::CycleFilter,
     PaletteCmd::CycleSort,
     PaletteCmd::First,
@@ -623,6 +681,13 @@ pub struct TuiState {
     /// When true, a list reload is running on a worker thread (drives the
     /// spinner). Set by the driver; pure flag so rendering stays headless.
     loading: bool,
+    /// When true, an AI assist is running on a worker thread (spinner = thinking).
+    ai_busy: bool,
+    /// The last read-only AI result `(title, text)` for the [`Mode::AiResult`]
+    /// popup. `None` when no result is being shown.
+    ai_result: Option<(String, String)>,
+    /// Vertical scroll offset of the AI result popup.
+    ai_scroll: u16,
 }
 
 impl TuiState {
@@ -722,6 +787,125 @@ impl TuiState {
     /// Mark a background reload as started/finished (driver-only).
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
+    }
+
+    /// Whether an AI assist is running on a worker thread (drives the spinner).
+    pub fn ai_busy(&self) -> bool {
+        self.ai_busy
+    }
+
+    /// Mark an AI assist as started/finished (driver-only).
+    pub fn set_ai_busy(&mut self, busy: bool) {
+        self.ai_busy = busy;
+    }
+
+    /// The read-only AI result `(title, text)` currently shown, if any.
+    pub fn ai_result(&self) -> Option<&(String, String)> {
+        self.ai_result.as_ref()
+    }
+
+    /// Show a read-only AI result in the popup (driver-only).
+    pub fn show_ai_result(&mut self, title: String, text: String) {
+        self.ai_result = Some((title, text));
+        self.ai_scroll = 0;
+        self.mode = Mode::AiResult;
+    }
+
+    /// The AI result popup's scroll offset.
+    pub fn ai_scroll(&self) -> u16 {
+        self.ai_scroll
+    }
+
+    /// Scroll the AI result popup down / up one line (clamped at the top).
+    pub fn ai_scroll_down(&mut self) {
+        self.ai_scroll = self.ai_scroll.saturating_add(1);
+    }
+    pub fn ai_scroll_up(&mut self) {
+        self.ai_scroll = self.ai_scroll.saturating_sub(1);
+    }
+
+    /// Open the free-form AI prompt for `kind`. Compose needs a selected ADR.
+    pub fn begin_ai_prompt(&mut self, kind: AiPromptKind) {
+        if kind == AiPromptKind::Compose && self.preview.is_none() {
+            self.set_message("select an ADR first".to_string());
+            return;
+        }
+        self.mode = Mode::AiPrompt {
+            input: String::new(),
+            kind,
+        };
+    }
+
+    /// Append / delete a character in the active AI prompt.
+    pub fn ai_prompt_push(&mut self, c: char) {
+        if let Mode::AiPrompt { input, .. } = &mut self.mode {
+            input.push(c);
+        }
+    }
+    pub fn ai_prompt_pop(&mut self) {
+        if let Mode::AiPrompt { input, .. } = &mut self.mode {
+            input.pop();
+        }
+    }
+
+    /// Build the [`Action::Ai`] for the current AI prompt and return to list mode.
+    /// Empty input is a no-op (just closes the prompt).
+    pub fn ai_prompt_confirm(&mut self) -> Action {
+        let (instruction, kind) = match &self.mode {
+            Mode::AiPrompt { input, kind } => (input.trim().to_string(), *kind),
+            _ => return Action::None,
+        };
+        self.mode = Mode::List;
+        if instruction.is_empty() {
+            return Action::None;
+        }
+        match kind {
+            AiPromptKind::Ask => Action::Ai(AiRequest::Ask {
+                question: instruction,
+            }),
+            AiPromptKind::Compose => match self.selected_detail_parts() {
+                Some((address, title, body)) => Action::Ai(AiRequest::Compose {
+                    address,
+                    title,
+                    body,
+                    instruction,
+                }),
+                None => Action::None,
+            },
+        }
+    }
+
+    /// `(address, title, body)` of the selected ADR from the loaded preview —
+    /// the inputs an AI assist needs. `None` with no selection/preview.
+    fn selected_detail_parts(&self) -> Option<(String, String, String)> {
+        let d = self.preview.as_ref()?;
+        Some((
+            d.summary.address.clone(),
+            d.summary.title.clone(),
+            d.body.clone(),
+        ))
+    }
+
+    /// Build a no-prompt AI request (summarize/lint/plan) for the selected ADR.
+    fn ai_request_for_selected(&self, make: impl FnOnce(String, String) -> AiRequest) -> Action {
+        match self.selected_detail_parts() {
+            Some((_addr, title, body)) => Action::Ai(make(title, body)),
+            None => Action::None,
+        }
+    }
+
+    /// Seed the editor with an AI-drafted body for `address` and enter edit mode
+    /// in **Normal** (review) sub-mode, flagged dirty so Ctrl-S saves / Esc warns.
+    pub fn begin_edit_with(&mut self, address: String, body: String) {
+        self.editor = Some(EditorBuffer::from_str(&body));
+        self.edit_scroll = 0;
+        self.edit_insert = false; // review in Normal mode
+        self.edit_pending = None;
+        self.mode = Mode::Edit {
+            address,
+            dirty: true,
+            confirm_discard: false,
+        };
     }
 
     /// Whether the preview currently shows raw markdown source.
@@ -1135,6 +1319,23 @@ impl TuiState {
                 Action::None
             }
             PaletteCmd::Refresh => Action::Refresh,
+            PaletteCmd::AiDraft => {
+                self.begin_ai_prompt(AiPromptKind::Compose);
+                Action::None
+            }
+            PaletteCmd::AiAsk => {
+                self.begin_ai_prompt(AiPromptKind::Ask);
+                Action::None
+            }
+            PaletteCmd::AiSummarize => {
+                self.ai_request_for_selected(|title, body| AiRequest::Summarize { title, body })
+            }
+            PaletteCmd::AiLint => {
+                self.ai_request_for_selected(|title, body| AiRequest::Lint { title, body })
+            }
+            PaletteCmd::AiPlan => {
+                self.ai_request_for_selected(|title, body| AiRequest::Plan { title, body })
+            }
             PaletteCmd::Theme(t) => {
                 self.set_md_theme(t);
                 Action::None
@@ -1655,7 +1856,9 @@ fn apply_action(
     // the refresh (a `Full` reload runs on a worker thread behind a spinner); a
     // failed mutation reports `None` so we don't spin for nothing.
     let outcome = match action {
-        Action::None | Action::Edit(_) => Outcome::default(),
+        // Edit + Ai are intercepted by the driver (terminal suspend / worker
+        // thread) before reaching here, so they're no-ops in the headless core.
+        Action::None | Action::Edit(_) | Action::Ai(_) => Outcome::default(),
         Action::Quit => Outcome::quit(),
         Action::Refresh => Outcome::reload(ReloadKind::Full),
         Action::RefreshPreview => Outcome::reload(ReloadKind::Preview),
@@ -1808,6 +2011,153 @@ mod driver {
         rx
     }
 
+    /// What a finished AI assist tells the driver to do.
+    enum AiReply {
+        /// An AI-drafted body to load into the editor for review.
+        Draft { address: String, body: String },
+        /// Read-only text to show in the result popup.
+        Popup { title: String, text: String },
+    }
+
+    type AiResult = Result<AiReply, String>;
+
+    /// Run an AI assist on a worker thread. adroit is stateless, so the worker
+    /// re-opens the store + provider from `(config, dir)` — `dyn AiProvider`
+    /// needn't be `Send` because it's built and used entirely inside the thread.
+    fn spawn_ai(config: &Config, dir: &Path, request: AiRequest) -> Receiver<AiResult> {
+        let (tx, rx) = mpsc::channel();
+        let config = config.clone();
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_ai(&config, &dir, request));
+        });
+        rx
+    }
+
+    fn run_ai(config: &Config, dir: &Path, request: AiRequest) -> AiResult {
+        let provider = crate::ai_hook::open_provider(config).ok_or_else(|| {
+            "no AI provider configured (set ai.enabled + a key, or ADROIT_AI_FAKE)".to_string()
+        })?;
+        let store = open_store(config, dir).map_err(|e| e.to_string())?;
+        let p = provider.as_ref();
+        match request {
+            AiRequest::Summarize { title, body } => {
+                let text = crate::ai::draft_summary(p, &title, &body).map_err(|e| e.to_string())?;
+                Ok(AiReply::Popup {
+                    title: format!("Summary — {title}"),
+                    text: text.trim().to_string(),
+                })
+            }
+            AiRequest::Lint { title, body } => {
+                let corpus = corpus_lines(&store);
+                let text =
+                    crate::ai::draft_lint(p, &title, &body, &corpus).map_err(|e| e.to_string())?;
+                Ok(AiReply::Popup {
+                    title: format!("Review — {title}"),
+                    text: text.trim().to_string(),
+                })
+            }
+            AiRequest::Plan { title, body } => {
+                let corpus = corpus_lines(&store);
+                let text =
+                    crate::ai::draft_plan(p, &title, &body, &corpus).map_err(|e| e.to_string())?;
+                Ok(AiReply::Popup {
+                    title: format!("Plan — {title}"),
+                    text: text.trim().to_string(),
+                })
+            }
+            AiRequest::Compose {
+                address,
+                title,
+                body,
+                instruction,
+            } => {
+                let corpus = corpus_lines(&store);
+                let drafted = crate::ai::draft_compose(p, &title, &instruction, &body, &corpus)
+                    .map_err(|e| e.to_string())?;
+                Ok(AiReply::Draft {
+                    address,
+                    body: drafted,
+                })
+            }
+            AiRequest::Ask { question } => {
+                let (answer, sources) = run_ask(config, &store, p, &question)?;
+                let suffix = if sources.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n— sources: {}", sources.join(", "))
+                };
+                Ok(AiReply::Popup {
+                    title: "Answer".to_string(),
+                    text: format!("{answer}{suffix}"),
+                })
+            }
+        }
+    }
+
+    /// The `<reference> — <title>` corpus lines (voice + prior decisions) the
+    /// compose/lint/plan prompts use. Best-effort: a query error yields no lines.
+    fn corpus_lines(store: &Store) -> Vec<String> {
+        query::summaries(store, &Filter::default())
+            .unwrap_or_default()
+            .iter()
+            .map(|s| format!("{} — {}", s.reference, s.title))
+            .collect()
+    }
+
+    /// Mechanical retrieval + AI synthesis for `ask` (mirrors the CLI's `cmd_ask`):
+    /// TF-IDF-rank the corpus against the question, feed the top excerpts to the
+    /// provider, return `(answer, source refs)`.
+    fn run_ask(
+        config: &Config,
+        store: &Store,
+        provider: &dyn crate::ai::AiProvider,
+        question: &str,
+    ) -> Result<(String, Vec<String>), String> {
+        use crate::similar::{Doc, rank};
+        let summaries = query::summaries(store, &Filter::default()).map_err(|e| e.to_string())?;
+        if summaries.is_empty() {
+            return Err("no ADRs to answer from".to_string());
+        }
+        let mut docs: Vec<Doc> = summaries
+            .iter()
+            .map(|s| {
+                let body = resolve_addr(config, &s.address)
+                    .and_then(|rr| store.find_path_by_ref(&rr).ok())
+                    .and_then(|p| store.read(&p).ok())
+                    .map(|a| a.body)
+                    .unwrap_or_default();
+                Doc {
+                    id: s.address.clone(),
+                    reference: s.reference.clone(),
+                    title: s.title.clone(),
+                    text: format!("{} {}", s.title, body),
+                }
+            })
+            .collect();
+        docs.push(Doc {
+            id: "__query__".to_string(),
+            reference: String::new(),
+            title: String::new(),
+            text: question.to_string(),
+        });
+        let top: Vec<_> = rank(&docs, "__query__").into_iter().take(5).collect();
+        let mut context = String::new();
+        for m in &top {
+            if let Some(d) = docs.iter().find(|d| d.id == m.id) {
+                let excerpt: String = d.text.chars().take(800).collect();
+                context.push_str(&format!("### {} — {}\n{excerpt}\n\n", d.reference, d.title));
+            }
+        }
+        if context.is_empty() {
+            context.push_str("(no closely matching ADRs)");
+        }
+        let answer =
+            crate::ai::draft_ask(provider, question, &context).map_err(|e| e.to_string())?;
+        let sources = top.iter().map(|m| m.reference.clone()).collect();
+        Ok((answer.trim().to_string(), sources))
+    }
+
     fn setup() -> Result<Term> {
         enable_raw_mode()?;
         let mut out = stdout();
@@ -1842,9 +2192,37 @@ mod driver {
             state.filter(),
             state.search().map(String::from),
         ));
+        // An in-flight AI assist (compose/ask/summarize/lint/plan), if any.
+        let mut ai_pending: Option<Receiver<AiResult>> = None;
 
         loop {
             terminal.draw(|f| ui(f, state, &mut throbber))?;
+
+            // Pick up a finished AI assist, if any.
+            if let Some(rx) = &ai_pending {
+                match rx.try_recv() {
+                    Ok(reply) => {
+                        state.set_ai_busy(false);
+                        ai_pending = None;
+                        match reply {
+                            Ok(AiReply::Popup { title, text }) => state.show_ai_result(title, text),
+                            Ok(AiReply::Draft { address, body }) => {
+                                state.begin_edit_with(address, body);
+                                state.set_message(
+                                    "AI draft loaded — review, then Ctrl-S to save".to_string(),
+                                );
+                            }
+                            Err(e) => state.set_message(format!("AI failed: {e}")),
+                        }
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        state.set_ai_busy(false);
+                        ai_pending = None;
+                        state.set_message("AI worker stopped unexpectedly".to_string());
+                    }
+                }
+            }
 
             // Pick up a finished background reload, if any.
             if let Some(rx) = &pending {
@@ -1868,8 +2246,8 @@ mod driver {
                 }
             }
 
-            // Poll briefly while loading so the spinner animates smoothly.
-            let timeout = if state.loading() {
+            // Poll briefly while a spinner is up so it animates smoothly.
+            let timeout = if state.loading() || state.ai_busy() {
                 Duration::from_millis(80)
             } else {
                 Duration::from_millis(200)
@@ -1878,13 +2256,26 @@ mod driver {
                 let outcome = match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         let action = handle_key(state, key);
-                        // The editor needs the terminal suspended; everything
-                        // else goes through the shared, headless `apply_action`.
-                        if let Action::Edit(addr) = action {
-                            run_editor(terminal, state, store, config, &addr)?;
-                            continue;
+                        match action {
+                            // The editor needs the terminal suspended.
+                            Action::Edit(addr) => {
+                                run_editor(terminal, state, store, config, &addr)?;
+                                continue;
+                            }
+                            // AI runs on a worker thread (one at a time).
+                            Action::Ai(req) => {
+                                if state.ai_busy() {
+                                    state.set_message("AI is already working…".to_string());
+                                } else {
+                                    state.set_ai_busy(true);
+                                    state.set_message("AI: thinking…".to_string());
+                                    ai_pending = Some(spawn_ai(config, dir, req));
+                                }
+                                Outcome::default()
+                            }
+                            // Everything else goes through the headless core.
+                            other => apply_action(state, store, config, other)?,
                         }
-                        apply_action(state, store, config, action)?
                     }
                     Event::Mouse(m) => {
                         let action = handle_mouse(state, m);
@@ -1912,7 +2303,7 @@ mod driver {
                 }
             }
 
-            if state.loading() {
+            if state.loading() || state.ai_busy() {
                 throbber.calc_next();
             }
         }
@@ -2021,6 +2412,47 @@ mod driver {
             Mode::Search { .. } | Mode::NewTitle { .. } => handle_input_key(state, key),
             Mode::PickAdr { .. } => handle_pick_adr_key(state, key),
             Mode::Palette { .. } => handle_palette_key(state, key),
+            Mode::AiPrompt { .. } => handle_ai_prompt_key(state, key),
+            Mode::AiResult => handle_ai_result_key(state, key),
+        }
+    }
+
+    /// Free-form AI prompt keys: type the brief, Enter to run, Esc to cancel.
+    fn handle_ai_prompt_key(state: &mut TuiState, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => {
+                state.back_to_list();
+                Action::None
+            }
+            KeyCode::Enter => state.ai_prompt_confirm(),
+            KeyCode::Backspace => {
+                state.ai_prompt_pop();
+                Action::None
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.ai_prompt_push(c);
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
+    /// AI result popup keys: scroll, then any of Esc/q/Enter dismisses it.
+    fn handle_ai_result_key(state: &mut TuiState, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                state.ai_scroll_down();
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                state.ai_scroll_up();
+                Action::None
+            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                state.back_to_list();
+                Action::None
+            }
+            _ => Action::None,
         }
     }
 
@@ -2475,8 +2907,8 @@ mod driver {
             .split(f.area());
 
         render_breadcrumb(f, state, chunks[0]);
-        // A spinner at the right of the breadcrumb while a reload is in flight.
-        if state.loading() {
+        // A spinner at the right of the breadcrumb while a reload or AI call runs.
+        if state.loading() || state.ai_busy() {
             render_spinner(f, state, chunks[0], throbber);
         }
 
@@ -2501,6 +2933,12 @@ mod driver {
         }
         if let Mode::Palette { .. } = state.mode() {
             render_palette(f, state, f.area());
+        }
+        if let Mode::AiPrompt { .. } = state.mode() {
+            render_ai_prompt(f, state, f.area());
+        }
+        if let Mode::AiResult = state.mode() {
+            render_ai_result(f, state, f.area());
         }
         if state.show_help() {
             render_help(f, state, f.area());
@@ -2557,13 +2995,16 @@ mod driver {
             row("x  dd", "delete char / line"),
             row("Ctrl-S", "save"),
             Line::from(""),
+            sect("AI (via :)"),
+            row(":ai", "draft/revise · ask · summarize · lint · plan"),
+            Line::from(""),
             sect("General"),
             row(":", "command palette"),
             row("?", "toggle this help"),
             row("q", "quit"),
         ];
         let height = lines.len() as u16 + 2;
-        let popup = centered(46, height.min(area.height), area);
+        let popup = centered(52, height.min(area.height), area);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -2619,7 +3060,13 @@ mod driver {
     /// ADR, so the first paint / a refresh can take a moment).
     fn render_spinner(f: &mut Frame, state: &TuiState, area: Rect, throbber: &mut ThrobberState) {
         let c = chrome(state.md_theme());
-        let w = 11u16.min(area.width); // spinner + " loading"
+        // AI calls take longer than a reload — label it so the wait is legible.
+        let label = if state.ai_busy() {
+            " thinking"
+        } else {
+            " loading"
+        };
+        let w = (label.len() as u16 + 2).min(area.width); // spinner + label
         let spot = Rect {
             x: area.x + area.width.saturating_sub(w),
             y: area.y,
@@ -2629,12 +3076,78 @@ mod driver {
         // Clear underneath so the breadcrumb text doesn't bleed through.
         f.render_widget(Clear, spot);
         let throb = Throbber::default()
-            .label(" loading")
+            .label(label)
             .style(Style::default().fg(c.muted))
             .throbber_style(Style::default().fg(c.accent).add_modifier(Modifier::BOLD))
             .throbber_set(throbber_widgets_tui::BRAILLE_SIX)
             .use_type(throbber_widgets_tui::WhichUse::Spin);
         f.render_stateful_widget(throb, spot, throbber);
+    }
+
+    /// Centered single-line input box for a free-form AI brief (compose / ask).
+    fn render_ai_prompt(f: &mut Frame, state: &TuiState, area: Rect) {
+        let (input, kind) = match state.mode() {
+            Mode::AiPrompt { input, kind } => (input.as_str(), *kind),
+            _ => return,
+        };
+        let c = chrome(state.md_theme());
+        let (title, hint) = match kind {
+            AiPromptKind::Compose => (
+                " AI · draft / revise body ",
+                "e.g. \"draft a full MADR body\" or \"expand the negative consequences\"",
+            ),
+            AiPromptKind::Ask => (" AI · ask the corpus ", "e.g. \"which ADRs touch auth?\""),
+        };
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(
+                    "› ",
+                    Style::default().fg(c.accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(input.to_string(), Style::default().fg(c.title)),
+                Span::styled("▏", Style::default().fg(c.accent)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(hint, Style::default().fg(c.muted))),
+        ];
+        let popup = centered(64, 5, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(c.accent))
+            .title(Span::styled(
+                title,
+                Style::default().fg(c.title).add_modifier(Modifier::BOLD),
+            ));
+        f.render_widget(Clear, popup);
+        f.render_widget(Paragraph::new(lines).block(block), popup);
+    }
+
+    /// Scrollable popup showing a read-only AI result (summary / review / plan /
+    /// answer).
+    fn render_ai_result(f: &mut Frame, state: &TuiState, area: Rect) {
+        let Some((title, text)) = state.ai_result() else {
+            return;
+        };
+        let c = chrome(state.md_theme());
+        let popup = centered(72, area.height.saturating_sub(4).max(6), area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(c.accent))
+            .title(Span::styled(
+                format!(" {title} "),
+                Style::default().fg(c.title).add_modifier(Modifier::BOLD),
+            ));
+        let body = render_markdown_body(text, state.md_theme());
+        f.render_widget(Clear, popup);
+        f.render_widget(
+            Paragraph::new(body)
+                .wrap(Wrap { trim: false })
+                .scroll((state.ai_scroll(), 0))
+                .block(block),
+            popup,
+        );
     }
 
     /// Render the in-TUI body editor in the right pane and place the terminal
@@ -3084,6 +3597,8 @@ mod driver {
             }
             Mode::Preview => "j/k scroll  g/G top/bottom  Enter/Esc back  ? help  q quit",
             Mode::Palette { .. } => "type to filter  ↑/↓ move  Enter run  Esc cancel",
+            Mode::AiPrompt { .. } => "type your brief  Enter run  Esc cancel",
+            Mode::AiResult => "j/k scroll  Esc/q close",
             Mode::Search { .. } => "type to search  Enter apply  Esc cancel",
             Mode::NewTitle { .. } => "type title  Enter create  Esc cancel",
             Mode::PickStatus { .. } => "j/k pick  Enter apply  Esc cancel",
@@ -3845,6 +4360,98 @@ mod tests {
         assert!(s.palette_matches().is_empty());
         assert_eq!(s.palette_confirm(), Action::None);
         assert!(matches!(s.mode(), Mode::List));
+    }
+
+    #[test]
+    fn ai_compose_prompt_builds_compose_request_from_selection() {
+        let (_d, store, cfg) = setup_store();
+        let (mut s, _num) = state_with_one_adr(&store, &cfg, "Compose Me");
+        s.begin_ai_prompt(AiPromptKind::Compose);
+        assert!(matches!(
+            s.mode(),
+            Mode::AiPrompt {
+                kind: AiPromptKind::Compose,
+                ..
+            }
+        ));
+        for c in "tighten it".chars() {
+            s.ai_prompt_push(c);
+        }
+        match s.ai_prompt_confirm() {
+            Action::Ai(AiRequest::Compose {
+                title, instruction, ..
+            }) => {
+                assert_eq!(title, "Compose Me");
+                assert_eq!(instruction, "tighten it");
+            }
+            other => panic!("expected Compose request, got {other:?}"),
+        }
+        assert!(matches!(s.mode(), Mode::List));
+    }
+
+    #[test]
+    fn ai_ask_prompt_builds_ask_request_without_a_selection() {
+        let mut s = TuiState::new();
+        s.begin_ai_prompt(AiPromptKind::Ask); // ask needs no selection
+        for c in "why postgres?".chars() {
+            s.ai_prompt_push(c);
+        }
+        assert_eq!(
+            s.ai_prompt_confirm(),
+            Action::Ai(AiRequest::Ask {
+                question: "why postgres?".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn ai_compose_prompt_requires_a_loaded_selection() {
+        let mut s = TuiState::new();
+        s.begin_ai_prompt(AiPromptKind::Compose); // no preview loaded
+        assert!(matches!(s.mode(), Mode::List)); // refused to open
+    }
+
+    #[test]
+    fn ai_result_popup_shows_scrolls_and_dismisses() {
+        let mut s = TuiState::new();
+        s.show_ai_result("Summary".into(), "the text".into());
+        assert!(matches!(s.mode(), Mode::AiResult));
+        assert_eq!(s.ai_result().map(|(t, _)| t.as_str()), Some("Summary"));
+        s.ai_scroll_down();
+        s.ai_scroll_down();
+        assert_eq!(s.ai_scroll(), 2);
+        s.ai_scroll_up();
+        assert_eq!(s.ai_scroll(), 1);
+        s.back_to_list();
+        assert!(matches!(s.mode(), Mode::List));
+    }
+
+    #[test]
+    fn begin_edit_with_loads_ai_draft_in_normal_mode_dirty() {
+        let (_d, store, cfg) = setup_store();
+        let (mut s, num) = state_with_one_adr(&store, &cfg, "Draft Target");
+        s.begin_edit_with(
+            num.to_string(),
+            format!("{}\n\nNew body.", crate::ai::AI_MARKER),
+        );
+        assert!(matches!(s.mode(), Mode::Edit { .. }));
+        assert!(!s.edit_is_insert()); // review in Normal mode
+        assert!(s.is_dirty()); // differs from disk -> Ctrl-S saves, Esc warns
+        assert!(s.editor().unwrap().to_string().contains("New body."));
+    }
+
+    #[test]
+    fn palette_ai_summarize_builds_request_for_selection() {
+        let (_d, store, cfg) = setup_store();
+        let (mut s, _num) = state_with_one_adr(&store, &cfg, "Summ Target");
+        s.begin_palette();
+        for c in "summarize".chars() {
+            s.palette_push(c);
+        }
+        match s.palette_confirm() {
+            Action::Ai(AiRequest::Summarize { title, .. }) => assert_eq!(title, "Summ Target"),
+            other => panic!("expected Summarize request, got {other:?}"),
+        }
     }
 
     #[test]

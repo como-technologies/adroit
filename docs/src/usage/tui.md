@@ -171,3 +171,30 @@ first drops to Normal). If the buffer has **no** unsaved changes it returns to
 the list immediately. If there **are** unsaved changes, adroit asks you to
 confirm: press `y` (or `Esc` again) to discard your edits, or `n` to keep
 editing. This guards against losing work to an accidental keystroke.
+
+## AI assists in the TUI
+
+When the [`ai` feature](./automation.md) is enabled and a provider is configured
+(`ai.enabled` + a key, or the offline `ADROIT_AI_FAKE` test seam), the command
+palette (`:`) gains a set of AI assists. Each runs on a **background thread** with
+a "thinking" spinner, so the UI never blocks; without a provider configured each
+just reports that AI isn't set up.
+
+| Palette command | What it does |
+| --------------- | ------------ |
+| **AI: draft / revise body…** | Opens a free-form prompt ("draft a full MADR body", "expand the negative consequences"). The model rewrites the body using your instruction + the corpus for voice, and the result loads into the editor (tagged with the AI marker) for review. |
+| **AI: ask the corpus…** | A free-form question answered from the most relevant ADRs (mechanical TF-IDF retrieval → AI synthesis with citations), shown in a popup. |
+| **AI: summarize this ADR** | A one-paragraph TL;DR of the selected ADR, in a popup. |
+| **AI: review this ADR (advice)** | Authoring-quality suggestions for the selected ADR, in a popup. |
+| **AI: implementation plan** | An ordered implementation checklist for the selected ADR, in a popup. |
+
+**Reviewing an AI draft.** "Draft / revise body" loads the suggestion straight
+into the editor pane (opening in **Normal** mode for review), flagged
+`[modified]`. The body is yours to keep, trim, or rewrite with the normal editor
+keys — nothing is written until you press **`Ctrl-S`**, which saves through the
+same `Store::set_body` path as a manual edit (so status/frontmatter stay
+mechanical). `Esc` discards it. AI only ever proposes **prose** — identity,
+status, dates, and links are never touched.
+
+Read-only results (ask / summarize / review / plan) appear in a scrollable popup
+(`j`/`k` to scroll, `Esc`/`q` to close); they never modify the ADR.

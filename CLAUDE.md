@@ -267,6 +267,21 @@ switchers, which have no direct key. `render_palette` is the centered overlay
 (query line + matches with right-aligned hints). All of this lives in the pure,
 headlessly-tested layer.
 
+**AI assists (`Mode::AiPrompt`/`AiResult`).** The palette exposes five AI verbs
+(`PaletteCmd::Ai*`): **draft/revise body** + **ask** open a free-form prompt
+(`Mode::AiPrompt { input, kind }`), while **summarize**/**lint**/**plan** act on the
+selected ADR directly. The pure layer builds an `Action::Ai(AiRequest)` (a
+framework-free description carrying the selected ADR's address/title/body + any
+instruction); the driver intercepts it like `Action::Edit`, runs it on a **worker
+thread** (`spawn_ai`/`run_ai` re-open the provider + store from `(cfg, dir)` — `dyn
+AiProvider` needn't be `Send`), and shows the "thinking" spinner. A `Draft` reply
+loads the `AI_MARKER`-tagged body into the editor via `begin_edit_with` (opens in
+**Normal** mode, `dirty` — `Ctrl-S` saves through `Store::set_body`, `Esc` warns);
+a `Popup` reply (ask/summarize/lint/plan) shows scrollable read-only text
+(`Mode::AiResult`, rendered as markdown). Only one AI call runs at a time; with no
+provider the worker returns a clear "not configured" message. AI only ever writes
+**prose** — identity/status stay mechanical.
+
 **Fuzzy ADR pickers (`Mode::PickAdr`).** Two flows fuzzy-pick an ADR from the
 list instead of typing an identifier, sharing one mode + overlay (`render_adr_picker`)
 parameterized by `PickPurpose`: `Jump` (`Ctrl-P` / palette "Go to ADR…" → moves the
@@ -716,6 +731,20 @@ on stdout + `(sources: …)` on stderr; `-o json` = `{answer, sources}`. Bails w
 no provider. The **embeddings** upgrade to similarity/retrieval is future work —
 Anthropic has no embeddings API, so it needs a separate embedding-capable provider
 + a cache.
+
+**`compose`** (`ai::build_compose_request`/`draft_compose`, templates
+`templates/ai/compose.{system,prompt}.md`): instruction-driven (re)drafting — given
+an ADR's current body + a **free-form instruction** + corpus, the model returns a
+complete revised body (prose only, marked with `AI_MARKER`). It's the engine behind
+the **TUI's "AI: draft / revise body"** assist (the free-form prompt box). Same
+determinism guard as the interview: AI writes prose; the caller saves via
+`Store::set_body`, so identity/status stay mechanical. (Not yet a CLI verb — TUI
+only for now.)
+
+**TUI AI assists.** The TUI surfaces the AI verbs via the command palette
+(`:`) — see the "Interactive TUI" section. They reuse `ai_hook::open_provider`
+and the `ai::build_*`/`draft_*` cores, run on a worker thread (the `render_spinner`
+"thinking" state), and degrade with a clear message when no provider is configured.
 
 **Config.** `config::AiConfig` (`provider: AiProviderKind` anthropic/ollama,
 `model`, `enabled` kill-switch, `host`) under `Config.ai` (`Option`, absent by

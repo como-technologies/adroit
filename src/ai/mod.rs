@@ -39,6 +39,8 @@ const SUMMARY_SYSTEM: &str = include_str!("../../templates/ai/summary.system.md"
 const SUMMARY_PROMPT: &str = include_str!("../../templates/ai/summary.prompt.md");
 const ASK_SYSTEM: &str = include_str!("../../templates/ai/ask.system.md");
 const ASK_PROMPT: &str = include_str!("../../templates/ai/ask.prompt.md");
+const COMPOSE_SYSTEM: &str = include_str!("../../templates/ai/compose.system.md");
+const COMPOSE_PROMPT: &str = include_str!("../../templates/ai/compose.prompt.md");
 
 /// Render the empty-or-joined corpus block (the same fallback every prompt uses).
 fn corpus_block(corpus: &[String], empty_label: &str) -> String {
@@ -253,6 +255,45 @@ pub fn draft_ask(
     provider.complete(&build_ask_request(question, context))
 }
 
+/// Build the completion request for `compose`: instruction-driven (re)drafting of
+/// an ADR body. Given the current body + a free-form instruction + corpus, the
+/// model returns a complete revised body. This powers the TUI's "AI draft" assist
+/// (the free-form prompt box); like the interview it produces **prose only** — the
+/// caller writes it through `Store::set_body`, so identity/status stay mechanical.
+pub fn build_compose_request(
+    title: &str,
+    instruction: &str,
+    current_body: &str,
+    corpus: &[String],
+) -> CompletionRequest {
+    let prompt = COMPOSE_PROMPT
+        .trim()
+        .replace("{{title}}", title)
+        .replace("{{corpus_block}}", &corpus_block(corpus, "(no other ADRs)"))
+        .replace("{{body}}", current_body)
+        .replace("{{instruction}}", instruction);
+    CompletionRequest {
+        system: COMPOSE_SYSTEM.trim().to_string(),
+        prompt,
+        max_tokens: 1800,
+    }
+}
+
+/// (Re)draft an ADR body from a free-form instruction via the provider, tagged
+/// with [`AI_MARKER`]. The caller loads it into the editor for review before
+/// saving through `Store::set_body`.
+pub fn draft_compose(
+    provider: &dyn AiProvider,
+    title: &str,
+    instruction: &str,
+    current_body: &str,
+    corpus: &[String],
+) -> Result<String, AiError> {
+    let req = build_compose_request(title, instruction, current_body, corpus);
+    let body = provider.complete(&req)?;
+    Ok(format!("{AI_MARKER}\n\n{}\n", body.trim()))
+}
+
 /// An offline provider for tests and the `ADROIT_AI_FAKE` seam: echoes a canned
 /// response so the interview flow runs end-to-end with no network.
 pub struct FakeProvider {
@@ -345,6 +386,31 @@ mod tests {
         assert!(req.prompt.contains("Why Postgres?"));
         assert!(req.prompt.contains("ADR-0001"));
         assert!(req.system.to_lowercase().contains("cite"));
+    }
+
+    #[test]
+    fn compose_request_includes_instruction_body_and_corpus() {
+        let req = build_compose_request(
+            "Adopt rig",
+            "Expand the negative consequences.",
+            "## Decision Outcome\n\nUse rig.",
+            &["ADR-0001 — Use Postgres".to_string()],
+        );
+        assert!(req.prompt.contains("Adopt rig"));
+        assert!(req.prompt.contains("Expand the negative consequences."));
+        assert!(req.prompt.contains("Use rig."));
+        assert!(req.prompt.contains("ADR-0001 — Use Postgres"));
+        assert!(req.system.to_lowercase().contains("complete revised body"));
+    }
+
+    #[test]
+    fn draft_compose_wraps_provider_output_with_marker() {
+        let fake = FakeProvider {
+            canned: "## Context and Problem Statement\n\nRevised.".into(),
+        };
+        let body = draft_compose(&fake, "T", "tighten it", "old body", &[]).unwrap();
+        assert!(body.starts_with(AI_MARKER));
+        assert!(body.contains("Revised."));
     }
 
     #[test]
