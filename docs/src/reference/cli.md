@@ -634,10 +634,11 @@ config. `--print` shows the detected settings + planned steps without writing;
 
 #### `adroit auth <PROVIDER>`
 
-Store a forge token (`github` / `gitlab` / `jira`) — in the **OS keychain** when
-available (macOS Keychain / Windows Credential Manager / Linux keyutils), else a
-`0600` file next to the config. The token value is never echoed; env vars
-(`ADROIT_*_TOKEN`) still take precedence at use time.
+Store a token (`github` / `gitlab` / `jira`, or `anthropic` for the AI key) — in
+the **OS keychain** when available (macOS Keychain / Windows Credential Manager /
+Linux keyutils), else a `0600` file next to the config. The token value is never
+echoed; env vars (`ADROIT_*_TOKEN` / `ADROIT_ANTHROPIC_KEY`) still take precedence
+at use time.
 
 With no `--token`, GitHub/GitLab try an **OAuth device-flow** login when
 `forge.oauth_client_id` is set (print a URL + code, approve in the browser, store

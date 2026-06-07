@@ -2018,8 +2018,10 @@ fn cmd_auth(
     token: Option<String>,
     email: Option<String>,
 ) -> Result<()> {
-    if !matches!(provider, "github" | "gitlab" | "jira") {
-        anyhow::bail!("provider must be one of: github, gitlab, jira");
+    // `anthropic` stores the AI key in the same keychain/file store (read by
+    // `config::anthropic_key`); device flow only applies to github/gitlab.
+    if !matches!(provider, "github" | "gitlab" | "jira" | "anthropic") {
+        anyhow::bail!("provider must be one of: github, gitlab, jira, anthropic");
     }
     let token = match token {
         Some(t) => t,

@@ -120,8 +120,12 @@ You just opt in at runtime via config:
 
 ```sh
 just build                         # the default binary already includes the AI verbs
-adroit auth anthropic              # store the key (or export ADROIT_ANTHROPIC_KEY)
+adroit auth anthropic              # store the key in the OS keychain (or export ADROIT_ANTHROPIC_KEY)
 ```
+
+`adroit auth anthropic` saves the key to the **OS keychain** (falling back to a
+`0600` file), the same store as the forge tokens — so the key needn't live in a
+plaintext `.env`. `ADROIT_ANTHROPIC_KEY` still takes precedence when set.
 
 Enable it either in `config.yaml`:
 

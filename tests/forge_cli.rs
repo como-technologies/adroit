@@ -178,3 +178,22 @@ fn auth_stores_to_the_file_store_and_never_echoes_the_token() {
     assert!(creds.contains("github"));
     assert!(creds.contains("SUPER-SECRET-XYZ"));
 }
+
+#[test]
+fn auth_anthropic_stores_the_ai_key_in_the_same_store() {
+    // `adroit auth anthropic` stores the AI key via the shared credential seam
+    // (read back by config::anthropic_key), not just forge tokens.
+    let s = setup("forge:\n  provider: github\n  repo: owner/repo\n");
+    let out = run(&s, None, &["auth", "anthropic", "--token", "sk-ant-SECRET"]);
+    assert!(
+        out.status.success(),
+        "auth anthropic failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("anthropic"));
+    assert!(!stdout.contains("sk-ant-SECRET"), "key leaked to stdout");
+    let creds = fs::read_to_string(s.cfg_home.join("adroit/credentials.yaml")).unwrap();
+    assert!(creds.contains("anthropic"));
+    assert!(creds.contains("sk-ant-SECRET"));
+}

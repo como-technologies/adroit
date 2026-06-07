@@ -562,7 +562,8 @@ pub enum Command {
     /// `ADROIT_CREDENTIAL_STORE=file|keychain` forces a specific backend.
     #[cfg(feature = "forge")]
     Auth {
-        /// Which token to store: `github`, `gitlab`, or `jira`.
+        /// Which token to store: `github`, `gitlab`, `jira`, or `anthropic`
+        /// (the AI key — same keychain/file store).
         provider: String,
         /// The token value (omit to be prompted, hidden).
         #[arg(long)]

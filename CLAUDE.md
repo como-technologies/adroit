@@ -672,7 +672,9 @@ keychain` overrides the chain (and pins `file` for deterministic tests).
 (`src/forge/oauth.rs` — a pure core over the `HttpTransport` seam: `request_device_code`
 → `poll_until`, parameterized by per-provider `endpoints()`, using
 `forge.oauth_client_id`), falling back to a manual prompt when no client id is set;
-`jira` stays token-only.
+`jira` stays token-only. `cmd_auth` also accepts `anthropic` — it stores the AI key
+in the same keychain/file store (read by `config::anthropic_key`), so the key need
+not live in a plaintext `.env`.
 
 ## AI authoring (`ai` feature)
 
