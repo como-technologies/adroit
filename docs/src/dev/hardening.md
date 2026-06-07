@@ -1,85 +1,63 @@
 # Hardening & quality
 
-A record of the AI-driven hardening campaign that built adroit's
-[test suites](./testing.md) and the defects it found. The goal was *bugs found and
-fixed per unit effort*, optimizing for the highest-yield surfaces.
+adroit is hardened with an **AI-driven, property-first** approach: a deterministic
+Rust backbone encodes adroit's documented invariants, and an AI assistant acts as
+the live explorer that drives the binary, triages anomalies, and crystallizes each
+finding into a permanent regression. This page describes that approach and the
+classes of bug it targets. The suites themselves live in
+[Testing & Fuzzing](./testing.md); the repeatable procedure is the `/harden` skill
+([Project Skills](./skills.md)).
+
+The honest division of labor: **the deterministic suites are the bug _detector_;
+the assistant (or you) is the input _generator_ and _triager_.**
 
 ## Approach
 
-A deterministic Rust backbone that encodes adroit's documented invariants, with an
-AI assistant as the live explorer that drives the binary, triages anomalies, and
-crystallizes each finding into a permanent regression. Four modalities, plus
-targeted harnesses for the trickier settings:
+Several modalities, each aimed at a different high-yield surface:
 
 - **Model-based oracle** (`tests/model.rs`) — random mutating-command sequences
-  against the real binary, asserting state-agreement, status↔directory,
-  clean `check`, and link-canonicality after every command, across the full
+  against the real binary, asserting state-agreement, status↔directory, clean
+  `check`, and link-canonicality after every command, across the full
   **format × layout × scheme × relink_scope** matrix; plus migrate round-trips
-  (`by_status↔flat` byte-identical, `markdown↔frontmatter` logically lossless).
+  (`by_status ↔ flat` byte-identical, `markdown ↔ frontmatter` logically lossless).
 - **Parser properties + coverage-guided fuzz** (`tests/parsers.rs`,
-  `tests/fuzz_parsers.rs` via bolero) — no-panic + round-trip/idempotence laws on
-  arbitrary/multibyte input.
+  `tests/fuzz_parsers.rs` via bolero) — no-panic + round-trip / idempotence laws on
+  arbitrary and multibyte input.
 - **Forge fault-injection** (`tests/forge_faults.rs`) — every adapter method over a
-  `HostileTransport` returning malformed HTTP.
-- **Web security** (`src/serve/mod.rs`) — markdown-render XSS + directory-picker
+  hostile transport returning malformed HTTP.
+- **Web security** (`src/serve/`) — markdown-render XSS + directory-picker
   crash-safety.
-- **Targeted harnesses** — config precedence (`tests/config_precedence.rs`),
-  `date_source=git` (`tests/date_source_git.rs`), and forge CLI graceful
-  degradation (`tests/forge_cli.rs`).
+- **Targeted harnesses** — config precedence, `date_source = git`, and forge CLI
+  graceful degradation.
 
-A test-only `ADROIT_TODAY` env override (read by `query::today` /
-`store::today_local`) pins "today" so the date scheme is deterministic; the
-default path is unchanged.
+A test-only `ADROIT_TODAY` env override pins "today" so the `date` scheme is
+deterministic; the default path is unchanged.
 
-## Findings
+## Where bugs hide in adroit
 
-12 defects found; **all fixed**, each guarded by a regression.
+The recurring failure classes — worth a second look in any change to the write
+path, the parsers, or a renderer:
 
-| # | Defect | Surface | Status |
-|---|--------|---------|--------|
-| 1 | `supersede` reciprocal note used a non-canonical same-dir link | core | Fixed |
-| 2 | In-place `supersede` wrote a non-canonical `## Status` link | core | Fixed |
-| 3 | `NamingScheme::display` panicked on a multibyte uuid slug | parser | Fixed |
-| 4 | `upsert_reference` non-idempotent on a lone-`\r` document | parser | Fixed |
-| 5 | `uuid` supersede produced a repo that failed `check` | core | Fixed |
-| 6 | `frontmatter` + a slug scheme failed with a cryptic error | core | Fixed |
-| 7 | `by_category` supersede wrote a broken link | core | Fixed |
-| 8 | `renumber` strands a frontmatter supersession ref | core | Fixed¹ |
-| 9 | `per_category` same-category cross-ADR links didn't resolve | core | Fixed |
-| 10 | Stored XSS — dashboard rendered raw HTML / `javascript:` | web | Fixed |
-| 11 | `config show`/`get naming` ignored `--naming` / `ADROIT_NAMING` | config | Fixed |
-| 12 | `check`'s cross-ADR link validation was numeric-only | core | Fixed |
-| — | `Jira::with_transport` was `#[cfg(test)]`-gated unlike siblings | forge | Fixed |
+- **Scheme-agnostic resolution.** Numeric-only or path-only link/identity
+  resolution silently breaks for the slug schemes (`date` / `uuid` /
+  `per_category`). Route every ref→ADR resolution through the naming seam
+  (`ref_in_link` / `ref_in_link_from`), the way `relink` does — never hand-parse a
+  number out of a link.
+- **Canonical link form.** Ad-hoc relative-path helpers diverge from the canonical
+  `links::rel_link` (e.g. by dropping the same-dir `./`). All supersession and
+  cross-ADR links must go through that one engine; the oracle's "relink is always a
+  no-op" invariant catches the class that example-based tests miss.
+- **Robustness on hostile input.** Byte-slicing a string (instead of `.chars()`),
+  newline detection that misses a lone `\r`, and trusting external text in a
+  renderer are all latent panics or injection. Operate on char boundaries,
+  normalize newlines, escape raw HTML, and neutralize dangerous URL schemes.
 
-¹ Two-layer fix: `renumber` now retargets the bare-number frontmatter ref through
-the model (`frontmatter::remap_numeric_refs`), reaching what the markdown-link
-relabeler can't, and `check`'s frontmatter-supersession validation remains as a
-backstop.
+## Crystallize every finding
 
-### Notable themes
-
-- **Scheme-agnostic resolution** (#5, #9, #12) — several bugs came from numeric-only
-  or path-only link/identity resolution that broke for the slug schemes
-  (date/uuid/per_category). The fix in each case was to route through the naming
-  seam (`ref_in_link` / `ref_in_link_from`) like `relink` already did.
-- **Canonical link form** (#1, #2, #7) — ad-hoc relative-path helpers diverged from
-  the canonical `links::rel_link` by dropping the same-dir `./`; supersession links
-  now go through the one engine. A model-based invariant ("relink is always a
-  no-op") catches this class that example tests miss.
-- **Robustness on hostile input** (#3, #4, #10) — `display` byte-slicing, the
-  rewriters' newline detection (a lone `\r`), and the dashboard markdown renderer
-  all trusted their input; fixed to operate on chars, normalize a lone `\r`, and
-  escape raw HTML / neutralize dangerous URL schemes.
-
-## Coverage & remaining gaps
-
-Covered: the write-path core across all valid matrix cells (soaked to ~1500
-cases/cell), the parsers (random + coverage-guided), forge response parsing (~5000
-cases) and graceful degradation, config precedence, the git timeline path, and the
-dashboard XSS surface.
-
-Still open:
-
-- **Forge happy-path live wiring** — issue+PR creation against a mock HTTP server
-  with a git remote (the orchestration cores are unit-tested with mock adapters and
-  the adapters are fuzzed; this is the live-glue gap).
+A bug isn't done when it's fixed — it's done when it can't come back. Every defect
+becomes a focused regression in `tests/cli.rs`, fixed at root cause; and where a
+property suite surfaced it, a committed, minimized seed
+(`tests/<suite>.proptest-regressions`) replays first on every run so it can't
+silently return. See
+[Testing & Fuzzing → Triaging a failure](./testing.md#triaging-a-failure) for the
+explore → classify → crystallize loop.

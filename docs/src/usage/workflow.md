@@ -88,17 +88,90 @@ adroit publish        # export the accepted set to a directory
 
 See [CI Integration](./ci-integration.md) for wiring `check` into a pipeline.
 
-## The everyday path
+## Worked workflows
 
-Most decisions only ever touch a few verbs:
+Concrete, copy-pasteable sequences for the common ways teams run adroit. Pick the
+one that matches your setup; they share the same core verbs.
+
+### Local-only (no forge, no AI)
+
+The plain solo path — everything on disk, no network, no provider:
 
 ```sh
-adroit new "…"                 # author
-adroit draft 1                 # (or fill it in by hand over the prompts)
-adroit lint 1                  # make sure it's actually finished
-adroit set-status 1 accepted   # decide
-adroit check                   # keep the repo green
+adroit new "Use PostgreSQL for the datastore"   # scaffold proposed/0001-…, opens $EDITOR
+adroit edit 1                                    # fill in the template's prompts
+adroit lint 1                                    # finished? (mechanical, no AI)
+adroit set-status 1 accepted                     # decide → moves to accepted/, heals links
+adroit index                                     # refresh SUMMARY.md
+adroit check                                     # validate the repo (the CI gate)
 ```
+
+### AI-assisted authoring
+
+Let the model draft the prose from a short interview; you review and decide.
+Needs a provider configured ([Automation & AI](./automation.md)):
+
+```sh
+adroit new "Adopt event sourcing" --interview    # Socratic Q&A → AI drafts the body
+# (or author plainly, then fill it in later: adroit new "…"  →  adroit draft 1)
+adroit edit 1                                    # review / trim the AI draft in $EDITOR
+adroit lint 1                                    # mechanical gate (add --ai for advisory review)
+adroit summarize 1                               # one-paragraph TL;DR for the PR description
+adroit set-status 1 accepted
+adroit plan 1                                    # (optional) AI implementation checklist
+```
+
+The AI only ever writes *prose* (marked `<!-- adroit:ai-suggested -->`); identity,
+status, dates, and links stay mechanical, and you review before committing.
+
+### Forge — the PR is the decision
+
+The ADR gets a tracker issue and a review PR; merging the PR is what accepts it.
+See [Forge Integration](./forge.md):
+
+```sh
+adroit init                                      # one-time: detect + write forge.* config
+adroit auth github                               # …or export ADROIT_GITHUB_TOKEN
+adroit new "Use PostgreSQL" --forge              # ADR + linked issue + draft PR off adr/0001-…
+adroit review 1 --forge                          # post the review-kickoff as a PR/issue comment
+# … the team reviews and approves on the forge …
+adroit set-status 1 accepted --forge --yes       # verify approvals + CI, merge the PR, close the
+                                                 #   issue, and land accepted/ on main
+```
+
+Every `--forge` action is opt-in and **previews unless you pass `--yes`**. If the
+forge is unreachable, adroit warns and keeps the local ADR — it never loses your work.
+
+### Combined — AI draft on a forge PR
+
+The two layers compose: draft with AI, then run it through the PR-is-the-decision
+flow.
+
+```sh
+adroit new "Adopt event sourcing" --interview --forge   # AI-drafted body + issue + draft PR
+adroit edit 1                                           # review the draft
+adroit review 1 --forge
+adroit set-status 1 accepted --forge --yes
+```
+
+## Best practices
+
+- **Lint before you circulate.** `adroit lint` is mechanical (no provider needed)
+  and exits non-zero on unfinished sections — run it as an authoring gate locally
+  and in CI.
+- **Let `set-status` move files; don't move them by hand.** It relocates the ADR
+  and heals inbound links; a manual move strands them (and `check` will flag it).
+- **Review AI output before committing.** AI writes only prose, clearly marked;
+  identity / status / dates stay mechanical, but the words are yours to own.
+- **Keep the repo green in CI.** `adroit check` + `adroit index --check` are the
+  gate — wire them in early ([CI Integration](./ci-integration.md)).
+- **On a busy branch, set `relink_scope = self`** so a status-change PR touches
+  only its own ADR (no false merge conflicts); a post-merge `adroit relink` on
+  `main` canonicalizes the rest. See
+  [Managing ADRs](./managing-adrs.md#concurrent-contributors--branching).
+- **Avoid number collisions by construction** when many people author in parallel:
+  use the `date` / `uuid` scheme or the `by_category` layout
+  ([Naming schemes](../reference/adr-format.md#naming-schemes)).
 
 `adroit --help` lists every command in this same lifecycle order; `adroit <verb>
 --help` explains one. For the full per-verb reference, see the

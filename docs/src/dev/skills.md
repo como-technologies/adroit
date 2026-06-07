@@ -21,13 +21,13 @@ e.g. `/harden` or `/gate`.
 
 ## `/harden`
 
-The bug-hunting campaign behind every suite on the [Hardening & Quality](./hardening.md)
-page. It encodes the design rules — the oracle is an *outcome predictor, not a
-reimplementation*; drive the real binary; read identity back for non-deterministic
-schemes; keep it git-free and clock-pinned — the soak knobs (`PROPTEST_CASES`,
-bolero), the **explore → triage → crystallize** triage taxonomy, and a
-"where-bugs-hide-in-adroit" checklist. See [Testing & Fuzzing](./testing.md) for the
-underlying suites.
+The bug-hunting procedure behind the suites — see [Hardening & Quality](./hardening.md)
+for the approach. It encodes the design rules — the oracle is an *outcome predictor,
+not a reimplementation*; drive the real binary; read identity back for
+non-deterministic schemes; keep it git-free and clock-pinned — the soak knobs
+(`PROPTEST_CASES`, bolero), the **explore → triage → crystallize** triage taxonomy,
+and a "where-bugs-hide-in-adroit" checklist. See [Testing & Fuzzing](./testing.md)
+for the underlying suites.
 
 ## `/gate`
 

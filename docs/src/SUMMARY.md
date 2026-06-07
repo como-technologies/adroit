@@ -26,6 +26,8 @@
 # Development
 
 - [Design Principles](./dev/design.md)
+- [Architecture & Conventions](./dev/architecture.md)
 - [Testing & Fuzzing](./dev/testing.md)
 - [Hardening & Quality](./dev/hardening.md)
 - [Project Skills](./dev/skills.md)
+- [Roadmap](./dev/roadmap.md)

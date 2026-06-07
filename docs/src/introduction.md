@@ -24,7 +24,9 @@ adroit gives you a terminal-native interface for the full ADR lifecycle:
 
 adroit is one core library behind three surfaces: the **CLI** for fast capture
 and scripting, an interactive **TUI** (`tui` feature) for browsing, triage, and
-in-terminal editing, and a read-only **web dashboard** (`adroit serve`, `web`
-feature) that browses/searches the repo, shows stats, a relationship graph, and
-repo-health checks, and auto live-reloads when ADR files change on disk. See
+in-terminal editing — with a fuzzy command palette, a modal (vi) markdown editor,
+and in-TUI [AI assists](./usage/tui.md#ai-assists-in-the-tui) — and a read-only
+**web dashboard** (`adroit serve`, `web` feature) that browses/searches the repo,
+shows stats, a relationship graph, and repo-health checks, and auto live-reloads
+when ADR files change on disk. See [Interactive TUI](./usage/tui.md) and
 [Web Dashboard](./usage/web.md).

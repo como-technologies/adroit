@@ -61,3 +61,14 @@ triage, in-terminal editing):
 ```sh
 adroit
 ```
+
+Press `?` for the keybinding cheat-sheet, `:` for the fuzzy command palette (every
+action by name), and `Enter` to focus the preview. See
+[Interactive TUI](../usage/tui.md) for the full keymap, themes, the vi editor, and
+the in-TUI AI assists.
+
+## Next steps
+
+- Walk a decision end-to-end — local-only, AI-assisted, or forge — in
+  [The ADR Workflow](../usage/workflow.md#worked-workflows).
+- Point adroit at a real team repo: [Using adroit with Your Repo](../usage/your-repo.md).

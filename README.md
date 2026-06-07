@@ -116,7 +116,9 @@ adroit ask "why did we pick Postgres?"          # corpus Q&A with citations
 
 The AI only ever writes *prose* (marked `<!-- adroit:ai-suggested -->`) — identity,
 status, dates, and links stay mechanical, and you review before committing. The
-mechanical cousins `dedupe`/`related` need no provider at all. See
+mechanical cousins `dedupe`/`related` need no provider at all. The same assists are
+also available **inside the TUI** via the `:` command palette (draft/revise, ask,
+summarize, lint, plan). See
 [Automation & AI](docs/src/usage/automation.md) and
 [The ADR Workflow](docs/src/usage/workflow.md).
 
@@ -142,10 +144,22 @@ enum values (e.g. `set-status <TAB>`).
 adroit                                  # bare command launches the TUI
 ```
 
-Two panes: list (filter `f`, search `/`, sort `o`) + rendered-markdown preview.
-`Enter` focuses the preview, `m` toggles rendered ↔ raw, `i` edits the body
-in-terminal, `s`/`S` change status / supersede, `n` new, `e` opens `$EDITOR`,
-`q` quits. `--theme gruvbox` for a true-color theme.
+A keyboard-driven (mouse-aware) two-pane interface — list + syntax-highlighted
+markdown preview — with a Claude-Code-style feel:
+
+- **Navigate / triage:** `j`/`k` move, `/` search, `f` filter, `o` sort, `Enter`
+  focuses the preview (scrollbar, `g`/`G`, PageUp/Down, wheel), `m` toggles
+  rendered ↔ raw.
+- **Command palette:** `:` opens a fuzzy palette over every action; `Ctrl-P` is a
+  fuzzy "go to ADR" finder.
+- **Author:** `n` new, `s` set status, `S` supersede (fuzzy-pick the older ADR),
+  `i` edits the body in a **modal (vi) editor** in-terminal, `e` opens `$EDITOR`.
+- **AI assists** (via `:`, needs a provider): draft / revise the body, ask the
+  corpus, summarize, lint, plan — each on a background thread.
+- **Themes:** `gruvbox` (default), `--theme warm` (Claude-Code-style), or
+  `default` (ANSI). `?` shows the full keybinding cheat-sheet.
+
+See [Interactive TUI](docs/src/usage/tui.md) for the full keymap.
 
 ## Web dashboard
 

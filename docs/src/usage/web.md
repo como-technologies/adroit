@@ -72,6 +72,20 @@ so the dashboard isn't flooded, and the browser reconnects automatically if the
 connection drops. A small "live" indicator (and a brief "updated" flash) appear
 in the header.
 
+## Forge-aware panels (when configured)
+
+If the binary is built with the `forge` feature **and** a forge is configured for
+the active repo (see [Forge Integration](./forge.md)), the dashboard enriches a few
+views from the live forge — still entirely **read-only** (it never creates or
+merges anything):
+
+- the detail view shows the ADR's linked **issue / PR** status;
+- the dashboard surfaces process tiles — *Proposed without an MR* (local) and
+  *MR approved · waiting on author* (live).
+
+Without an active/configured forge these are simply empty, so a `web`-only build
+degrades cleanly.
+
 ## JSON API
 
 The dashboard is a thin client over a read-only JSON API, which you can also use
@@ -85,6 +99,8 @@ directly:
 | `GET /api/stats` | counts by status, ages, review-due, created-over-time |
 | `GET /api/graph` | nodes + typed edges for the relationship graph |
 | `GET /api/check` | repo-validation report (the same checks as `adroit check`) |
+| `GET /api/adrs/{id}/forge` | the ADR's forge issue/PR status (`null` without a forge) |
+| `GET /api/forge/summary` | process tiles for the dashboard (empty without a forge) |
 | `GET /api/workspace` | the active ADR directory |
 | `POST /api/workspace` | switch the active ADR directory (body `{ "path": … }`) |
 | `GET /api/browse?path=` | subdirectories of `path` + ADR count (powers the directory picker) |

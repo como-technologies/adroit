@@ -2,7 +2,7 @@
 
 How adroit is tested — what the suites are, how to run and soak them, how to
 extend them as the code changes, and how to drive an AI assistant to do it. For
-the bug-finding campaign that built these suites, see
+the approach behind these suites and where bugs tend to hide, see
 [Hardening & quality](./hardening.md).
 
 > **TL;DR**
