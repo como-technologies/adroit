@@ -3207,3 +3207,57 @@ fn import_dry_run_writes_nothing() {
         "dry-run must not write any ADRs"
     );
 }
+
+#[test]
+fn import_accepts_the_bundled_example_assessments() {
+    // Guard the `examples/` files against rot: both formats parse and seed 4 ADRs.
+    for file in ["examples/assessment.json", "examples/assessment.yaml"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let dir = TempDir::new().unwrap();
+        adroit(&dir)
+            .args(["import", "--from-assessment"])
+            .arg(&path)
+            .arg("--dry-run")
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("Would seed 4"));
+    }
+}
+
+#[test]
+fn import_maps_domains_to_categories_under_by_category() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir); // one "Security" domain, two practices
+    adroit(&dir)
+        .args([
+            "--layout",
+            "by_category",
+            "--naming",
+            "per_category",
+            "import",
+            "--from-assessment",
+        ])
+        .arg(&export)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Seeded 2"));
+    // Both practices live in the "Security" domain → a `security/` category dir.
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 2);
+    assert!(
+        files
+            .iter()
+            .all(|p| p.to_string_lossy().contains("security")),
+        "expected ADRs under a security/ category, got {files:?}"
+    );
+}
+
+#[test]
+fn import_errors_clearly_on_a_missing_file() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["import", "--from-assessment", "/no/such/assessment.json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("reading assessment export"));
+}

@@ -53,6 +53,11 @@ adroit import --from-assessment maturity.json   # one proposed ADR per practice
 adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothing
 ```
 
+A ready-to-run sample lives in the repo's
+[`examples/`](https://github.com/como-technologies/adroit/tree/main/examples)
+directory — `adroit import --from-assessment examples/assessment.json --dry-run`
+seeds four proposed ADRs from a generic platform-engineering assessment.
+
 It reads an [`assessments`](https://github.com/como-technologies) export (a
 `Domain → Practice → Question` maturity model, as `.json` or `.yaml`) and seeds one
 **proposed** ADR per practice: the practice's *context* becomes the problem
