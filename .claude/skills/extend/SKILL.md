@@ -11,6 +11,11 @@ one match arm, never the ~12 consumers. Find the seam below, follow its checklis
 and ALWAYS add the tests + docs it lists. Compose `test-driven-development`; finish
 with `gate` + `doc-sync`, then ask before pushing.
 
+**If the variant also adds a parser of untrusted input or a mutating verb, it pulls
+in `harden`** — an oracle `Op` (`tests/model.rs`) for a new verb, and a
+`tests/parsers.rs` no-panic + structural property + a `tests/fuzz_parsers.rs` bolero
+target for a new parser — soaked. Don't ship the seam without it.
+
 ## Forge provider (e.g. gitea, bitbucket, codeberg)
 "Adding a provider = one match arm + one module."
 - `src/forge/<name>.rs` — implement `Forge` + `Tracker` over the `HttpTransport`
@@ -59,6 +64,19 @@ with `gate` + `doc-sync`, then ask before pushing.
 - **Tests:** `tests/config_precedence.rs`. **Docs:** CLI reference.
 
 ## CLI subcommand
-- `src/cli.rs` — the `Command` enum + place it in a `help_template` category (the
-  `commands_are_all_grouped` test guards this) — plus a handler in `main.rs`.
-- **Tests:** `tests/cli.rs`. **Docs:** `docs/src/reference/cli.md`.
+- `src/cli.rs` — the `Command` enum + place it in **both** `help_template`
+  categories (the `commands_are_all_grouped` test guards this) — plus a handler in
+  `main.rs`.
+- `src/manifest.rs` — a `classified()` semantics entry (stage / reads / writes /
+  idempotent / cost / json_output / requires / exit). The
+  `manifest_classifies_every_command` test fails CI without it. If it emits `-o json`,
+  register the output type in `type_schemas()` so `every_json_output_shape_is_registered`
+  passes.
+- **If it reads a new input format** (a file/format parser) → also a `tests/parsers.rs`
+  no-panic + structural property AND a `tests/fuzz_parsers.rs` bolero target; **if it
+  mutates the repo** → an oracle `Op` in `tests/model.rs`. Run `harden` and soak.
+- **Tests:** `tests/cli.rs` — exercise the format×layout profiles where the write
+  path differs (e.g. the frontmatter empty-body splice), error paths, and idempotence
+  where it applies. **Docs:** `docs/src/reference/cli.md` + the relevant usage page;
+  update any **enumerated lists** in `docs/src/dev/testing.md` (the oracle verb list,
+  the fuzz-target list) so they don't go stale.
