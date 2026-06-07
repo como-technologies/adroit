@@ -16,7 +16,8 @@ the approach behind these suites and where bugs tend to hide, see
 
 | Layer | Where | What it proves | Speed |
 |---|---|---|---|
-| Unit tests | `#[cfg(test)]` in each `src/*.rs` | pure functions behave | instant |
+| Unit tests | `#[cfg(test)]` in each `src/*.rs` (incl. the pure TUI `TuiState` / `apply_action` layer and the AI interview / compose builders) | pure functions behave | instant |
+| AI authoring | `src/ai/` tests + the `ADROIT_AI_FAKE` seam | the interview / compose flow drafts *prose* only (identity / status stay mechanical) and degrades cleanly with no provider | instant |
 | CLI integration | `tests/cli.rs` | the real binary does X on a temp repo (incl. every regression) | fast |
 | Model-based oracle | `tests/model.rs` | random command sequences never violate the invariants, across the format × layout × scheme × relink_scope matrix | ~40s |
 | Parser properties | `tests/parsers.rs` | the parsers never panic + obey round-trip/idempotence laws (random) | ~1s |
@@ -46,15 +47,28 @@ parseable.
 ## Running
 
 ```sh
-just ci                   # what CI runs
-just test                 # default features (tui)
-just test-forge           # + forge adapters (tests/forge_faults.rs, forge_cli.rs)
-just test-web             # + web dashboard (serve security tests)
+just ci          # the full gate (see below)
+just test        # default features (tui + ai + forge): unit + CLI + oracle + parsers
+just test-core   # the bare core (--no-default-features): the cfg(not(feature)) paths
+just test-ai     # the `ai` feature explicitly (rig adapter compiles; interview/compose)
+just test-forge  # the `forge` adapters (tests/forge_faults.rs, forge_cli.rs)
+just test-web    # the `web` dashboard (serve security tests; builds without the SPA)
+just unit        # unit tests only (--lib)
 
 cargo test --test model            # just the oracle
 cargo test --test cli supersede    # CLI tests whose name contains "supersede"
-just fmt-check && just lint && just lint-forge && just lint-web
+
+# clippy across the feature matrix:
+just lint        # default features (tui + ai + forge)
+just lint-core   # --no-default-features — guards the core pulls in NO surface deps
+just lint-ai     # the `ai` feature; also: just lint-forge, just lint-web
 ```
+
+`just ci` runs `fmt-check → lint-core → lint → lint-web → test-core → test →
+test-web → book → crate-outdated → crate-audit`. Because **`ai` and `forge` are in
+the default build**, `lint` / `test` already exercise them — so `lint-ai` /
+`test-ai` / `lint-forge` / `test-forge` are explicit single-feature checks you run
+by hand, not separate CI steps.
 
 ### Soaking
 
@@ -89,6 +103,12 @@ cargo test --test fuzz_parsers                       # stable property test (CI)
 cargo install cargo-bolero
 cargo +nightly bolero test fuzz_format_helpers -T 60sec   # coverage-guided, 60s
 ```
+
+The targets are `fuzz_format_helpers`, `fuzz_link_rewriter`, `fuzz_naming_helpers`,
+and `fuzz_parse_remote_url`. cargo-bolero builds its instrumented target with
+`--profile fuzz`, so the repo defines a `[profile.fuzz]` in `Cargo.toml` (inherits
+`release`, keeps debug-assertions + overflow-checks on) — without it the run fails
+with `error: profile 'fuzz' is not defined`.
 
 A coverage-guided run finds crashes on its own; to catch *logic* bugs it uses the
 same assertions the property targets do. When it finds something, minimize it, add

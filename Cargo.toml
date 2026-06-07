@@ -127,3 +127,14 @@ proptest = "1"
 # runs as a stable property test under `cargo test` (CI) and coverage-guided under
 # `cargo bolero test <name>` (nightly + the cargo-bolero CLI).
 bolero = "0.11"
+
+# cargo-bolero builds its instrumented (coverage-guided) target with
+# `--profile fuzz`; without this section it fails with
+# "error: profile `fuzz` is not defined". Release-like for fuzz throughput, but
+# keep debug + assertions on so the targets' *logic* assertions (not just memory
+# crashes) fire under the fuzzer.
+[profile.fuzz]
+inherits = "release"
+debug = true
+debug-assertions = true
+overflow-checks = true
