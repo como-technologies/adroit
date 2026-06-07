@@ -30,8 +30,6 @@ so they're "add a variant," not a rewrite.
 
 ## Web dashboard
 
-- **OAuth device-flow + OS-keychain** credential storage (tokens are env / a local
-  credential file today).
 - **One-click "create MR"** from the dashboard — it stays read-only for now;
   authoring lives in the CLI / TUI.
 

@@ -620,9 +620,8 @@ non-interactively, `--print` previews), `adroit publish` (export accepted
 ADRs to a dir — `src/publish.rs`, core/offline; Confluence/Notion adapters are
 future), `adroit notify <id>` (POST to a Slack/Teams webhook via
 `forge::notify`), and `adroit auth <github|gitlab|jira> [--token] [--email]`
-(save a token to a dependency-free 0600 `credentials.yaml` next to the config —
-`config::store_credential`/`load_credential`; `{github,gitlab,jira}::open`
-resolve the token env → credential store → none). `adroit reconcile` syncs local
+(store a token; `{github,gitlab,jira}::open` resolve the token env → credential
+store → none). `adroit reconcile` syncs local
 status to the forge after out-of-band changes (a merged MR / closed issue):
 reports drift, and with `--yes` moves a merged PR's ADR to `accepted/`
 (read-only on the forge; `forge::run_reconcile` is the testable core).
@@ -653,11 +652,27 @@ recognizable remote) assume it applies — non-git ADR dirs aren't blocked.
 `DetailView.vue` re-fetches its forge panel on `workspaceChanged` (not on every
 live-reload tick).
 
-**Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `branch_prefix`,
-`base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens are
-env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
+**Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `oauth_client_id`,
+`branch_prefix`, `base_branch`, `tracker: TrackerProvider`) under `Config.forge`;
+tokens are env-only (`#[serde(skip)]`). Scalar `forge.*` keys go through the usual
 `get_str`/`set_str`/`CONFIG_KEYS`. `just lint-forge`/`test-forge` (folded into
 `just ci`) cover the feature build.
+
+**Credential storage + device-flow auth (`keychain` feature).** Tokens (forge +
+the anthropic key) go through one seam — `config::load_credential`/`store_credential`
+— over a `CredentialBackend` chain: the **OS keychain** (`KeyringBackend`, the
+`keyring` crate's pure-Rust backends — macOS security-framework / Windows
+windows-sys / Linux keyutils; no C/system deps) first, then the `0600` `FileBackend`.
+The `keychain` feature is enabled by **both** `ai` and `forge` (both keep secrets);
+the bare core stays file-only. `load_via`/`store_via` are pure over the backend
+list so the fallback is unit-tested with fakes; `ADROIT_CREDENTIAL_STORE=auto|file|
+keychain` overrides the chain (and pins `file` for deterministic tests).
+`store_credential` returns *where* it landed, and `cmd_auth` never echoes the token.
+`adroit auth github`/`gitlab` with no `--token` runs an **OAuth device-flow** login
+(`src/forge/oauth.rs` — a pure core over the `HttpTransport` seam: `request_device_code`
+→ `poll_until`, parameterized by per-provider `endpoints()`, using
+`forge.oauth_client_id`), falling back to a manual prompt when no client id is set;
+`jira` stays token-only.
 
 ## AI authoring (`ai` feature)
 

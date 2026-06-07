@@ -634,8 +634,21 @@ config. `--print` shows the detected settings + planned steps without writing;
 
 #### `adroit auth <PROVIDER>`
 
-Store a forge token (`github` / `gitlab` / `jira`) in the local credential store
-(omit `--token` to be prompted, hidden). `--email` saves the Jira account email.
+Store a forge token (`github` / `gitlab` / `jira`) — in the **OS keychain** when
+available (macOS Keychain / Windows Credential Manager / Linux keyutils), else a
+`0600` file next to the config. The token value is never echoed; env vars
+(`ADROIT_*_TOKEN`) still take precedence at use time.
+
+With no `--token`, GitHub/GitLab try an **OAuth device-flow** login when
+`forge.oauth_client_id` is set (print a URL + code, approve in the browser, store
+the granted token); otherwise you're prompted for the token, hidden. `--email`
+saves the Jira account email. `ADROIT_CREDENTIAL_STORE=file|keychain` forces a
+storage backend. See [Forge Integration → Authenticate](../usage/forge.md#2-authenticate).
+
+| Flag | Description |
+|---|---|
+| `--token <T>` | Provide the token directly (skips device flow / prompt) |
+| `--email <E>` | For `jira`: the account email saved alongside the token |
 
 #### `adroit sync <ID>`
 
@@ -751,6 +764,7 @@ editor: vim
 | `forge.provider` | `none`\|`github`\|`gitlab` | `none` | Forge integration (the `forge` feature is in the default build; `none` keeps it off). `github` drives GitHub PRs + Issues. |
 | `forge.repo` | `owner/repo` | — | The provider slug (GitHub `owner/repo`). Required when a provider is set. |
 | `forge.host` | host | provider default | API host for self-managed / enterprise. GitLab self-hosted: the host (`gitlab.example.com`); GitHub Enterprise: the host incl. base path (`ghe.example.com/api/v3`). Same token auth as the cloud version. |
+| `forge.oauth_client_id` | string | — | Public OAuth client id for `adroit auth`'s device-flow login (no secret). Unset ⇒ `auth` prompts for a token instead. |
 | `forge.branch_prefix` | string | `adr/` | Branch prefix `new --forge` generates (`adr/0021-…`). |
 | `forge.base_branch` | string | `main` | Base branch PRs target. |
 | `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. `jira` pairs a GitHub/GitLab forge with Jira. |

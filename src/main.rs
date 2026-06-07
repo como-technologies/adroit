@@ -99,7 +99,7 @@ fn main() -> Result<()> {
         email,
     }) = &cli.command
     {
-        return cmd_auth(provider, token.clone(), email.clone());
+        return cmd_auth(&cfg, provider, token.clone(), email.clone());
     }
 
     let dir = config::resolve_dir(cli.dir, &cfg);
@@ -2007,18 +2007,29 @@ fn cmd_lint(
     Ok(())
 }
 
-/// `adroit auth`: save a forge token to the local credential store.
+/// `adroit auth`: store a forge token. With no `--token`, GitHub/GitLab try an
+/// OAuth **device-flow** login (no copy-paste) when `forge.oauth_client_id` is set,
+/// else fall back to a hidden manual prompt. The token lands in the OS keychain
+/// (or the file fallback) and is never echoed.
 #[cfg(feature = "forge")]
-fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Result<()> {
+fn cmd_auth(
+    cfg: &Config,
+    provider: &str,
+    token: Option<String>,
+    email: Option<String>,
+) -> Result<()> {
     if !matches!(provider, "github" | "gitlab" | "jira") {
         anyhow::bail!("provider must be one of: github, gitlab, jira");
     }
     let token = match token {
         Some(t) => t,
-        None => dialoguer::Password::new()
-            .with_prompt(format!("{provider} API token"))
-            .interact()
-            .context("reading token")?,
+        None => match try_device_login(cfg, provider)? {
+            Some(t) => t,
+            None => dialoguer::Password::new()
+                .with_prompt(format!("{provider} API token"))
+                .interact()
+                .context("reading token")?,
+        },
     };
     // `store_credential` reports where it landed (OS keychain or the file store);
     // the token value itself is never echoed.
@@ -2032,6 +2043,51 @@ fn cmd_auth(provider: &str, token: Option<String>, email: Option<String>) -> Res
         "Saved {provider} token to the {where_stored} (environment variables still take precedence)."
     );
     Ok(())
+}
+
+/// Attempt an OAuth device-flow login for github/gitlab. Returns `Ok(None)` (so
+/// the caller falls back to a manual paste) when device flow doesn't apply —
+/// jira, or no `forge.oauth_client_id` configured.
+#[cfg(feature = "forge")]
+fn try_device_login(cfg: &Config, provider: &str) -> Result<Option<String>> {
+    use adroit::config::Provider;
+    use adroit::forge::oauth;
+
+    let p = match provider {
+        "github" => Provider::Github,
+        "gitlab" => Provider::Gitlab,
+        _ => return Ok(None), // jira: token only
+    };
+    let fcfg = cfg.forge.as_ref();
+    let client_id = match fcfg.and_then(|f| f.oauth_client_id.clone()) {
+        Some(c) if !c.trim().is_empty() => c,
+        _ => {
+            eprintln!(
+                "note: no forge.oauth_client_id set — falling back to a manual token. \
+                 Register a device-flow OAuth app and `adroit config set forge.oauth_client_id <id>` \
+                 to log in without pasting a token."
+            );
+            return Ok(None);
+        }
+    };
+    let host = fcfg.and_then(|f| f.host.as_deref());
+    let endpoints = oauth::endpoints(p, host)
+        .ok_or_else(|| anyhow::anyhow!("device flow is not supported for {provider}"))?;
+    let token = oauth::device_login(
+        &adroit::forge::UreqTransport,
+        &endpoints,
+        &client_id,
+        |dc| {
+            // Prompts to stderr; the token is never printed.
+            eprintln!(
+                "\nTo authorize adroit, open:\n  {}\nand enter the code:  {}\n\nWaiting for authorization…",
+                dc.verification_uri, dc.user_code
+            );
+        },
+        std::thread::sleep,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(Some(token))
 }
 
 /// `adroit init`: detect the forge from the git remote and write the config.

@@ -208,6 +208,12 @@ pub struct ForgeConfig {
     /// `api.github.com` / `gitlab.com`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Public OAuth client id for `adroit auth`'s device-flow login (register an
+    /// OAuth app with device flow enabled). No client secret — device flow is a
+    /// public client. Unset ⇒ device flow is unavailable; `auth` falls back to a
+    /// manual token paste.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
     /// Branch name prefix for `new`'s generated branch (default `adr/`).
     pub branch_prefix: String,
     /// Base branch PRs/MRs target (default `main`).
@@ -233,6 +239,7 @@ impl Default for ForgeConfig {
             provider: Provider::default(),
             repo: None,
             host: None,
+            oauth_client_id: None,
             branch_prefix: "adr/".to_string(),
             base_branch: "main".to_string(),
             tracker: TrackerProvider::default(),
@@ -493,6 +500,10 @@ impl Config {
             ),
             "forge.repo" => self.forge.as_ref().and_then(|f| f.repo.clone())?,
             "forge.host" => self.forge.as_ref().and_then(|f| f.host.clone())?,
+            "forge.oauth_client_id" => self
+                .forge
+                .as_ref()
+                .and_then(|f| f.oauth_client_id.clone())?,
             "forge.branch_prefix" => self.forge.as_ref().map_or_else(
                 || ForgeConfig::default().branch_prefix,
                 |f| f.branch_prefix.clone(),
@@ -571,6 +582,11 @@ impl Config {
             "forge.host" => {
                 self.forge.get_or_insert_with(ForgeConfig::default).host = Some(value.to_string())
             }
+            "forge.oauth_client_id" => {
+                self.forge
+                    .get_or_insert_with(ForgeConfig::default)
+                    .oauth_client_id = Some(value.to_string())
+            }
             "forge.branch_prefix" => {
                 self.forge
                     .get_or_insert_with(ForgeConfig::default)
@@ -621,6 +637,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "forge.provider",
     "forge.repo",
     "forge.host",
+    "forge.oauth_client_id",
     "forge.branch_prefix",
     "forge.base_branch",
     "forge.tracker",

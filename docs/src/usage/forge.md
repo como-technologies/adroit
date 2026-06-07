@@ -38,13 +38,32 @@ forge:
 ### 2. Authenticate
 
 Tokens are **never** stored in config. Provide them via the environment (best for
-CI) or the local credential store — they resolve env-first, then the `adroit auth`
-store:
+CI) or `adroit auth` — resolution is **env-first**, then the keychain / file store:
 
 ```sh
-export ADROIT_GITHUB_TOKEN=…   # or ADROIT_GITLAB_TOKEN
-adroit auth github             # …or store it locally (prompts, hidden input)
+export ADROIT_GITHUB_TOKEN=…   # or ADROIT_GITLAB_TOKEN — best for CI
+adroit auth github             # interactive login (see below)
 ```
+
+`adroit auth` stores the token in your **OS keychain** when available (macOS
+Keychain / Windows Credential Manager / Linux kernel keyutils), falling back to a
+`0600` file next to the config. `ADROIT_CREDENTIAL_STORE=file|keychain` forces a
+backend. The token value is never echoed back.
+
+**OAuth device-flow login (no copy-paste).** Set `forge.oauth_client_id` to a
+device-flow-enabled OAuth app's **public** client id and `adroit auth github` /
+`gitlab` (with no `--token`) walk you through a browser login — it prints a URL +
+short code, you approve in the browser, and adroit stores the granted token:
+
+```sh
+adroit config set forge.oauth_client_id <your-oauth-app-client-id>
+adroit auth github          # → open the printed URL, enter the code, done
+```
+
+Register the app once (GitHub: an OAuth App with **Enable Device Flow** checked;
+GitLab: an application with the `api` scope + the device grant). There's **no
+client secret** — device flow is a public client. With no client id configured (or
+for `--token` / `jira`), `auth` falls back to a hidden manual token prompt.
 
 ## The PR-is-the-decision workflow
 

@@ -24,6 +24,7 @@ pub mod github;
 pub mod gitlab;
 pub mod jira;
 pub mod noop;
+pub mod oauth;
 
 // ---------------------------------------------------------------------------
 // Value types (framework-free, serde-derived so Phase 3 can embed them in views)
