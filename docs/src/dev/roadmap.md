@@ -50,23 +50,39 @@ surfaces on the CLI or the web dashboard:
   is a possible future swap (a ratatui-0.30 text-area widget, kept to one ratatui in
   the tree).
 
-## Forge & trackers
+## Forge, trackers & publishing
 
-- **More providers.** `github` / `gitlab` (plus the `jira` tracker) ship today;
-  `gitea` / `bitbucket` are natural additions — one module + one `forge::open` arm
-  each.
-- **Live happy-path wiring.** OAuth device-flow login is now live-tested end-to-end
-  (real transport against a mock server); the remaining gap is **issue + PR
-  creation** against a mock HTTP server with a real git remote — the orchestration
-  cores are unit-tested with mock adapters and the adapters are fault-injected, so
-  this is the last live-glue piece.
+adroit reaches the outside world through narrow **Rust trait** seams, each
+dispatched from config in `forge::open`, so a new provider is *one module + one
+match arm* — no call-site changes:
 
-## Publishing & integrations
+- **`Forge`** — the PR/MR side (`open_pr` / `pr_state` / `merge_pr` / `comment_pr` …).
+- **`Tracker`** — the issue side (`create_issue` / `transition` / `issue_state` …).
+- **`Publisher`** *(planned)* — render the accepted set into a target's shape.
+  `publish` is a single static-dir function today; it factors out to a trait as the
+  first hosted target lands.
 
-- **Confluence / Notion `publish` adapters.** `adroit publish` exports the accepted
-  set to a static dir offline today; hosted targets are the next publish backends —
-  the **conduit** that lands a playbook where teams already read (see the portfolio
-  loop below).
+Every adapter takes an injectable `HttpTransport`, so each is unit-tested against a
+fault-injected mock and the lifecycle cores run on mock adapters; the remaining
+live-glue gap is issue + PR creation against a mock HTTP server with a real git
+remote, proven per provider pairing
+([#13](https://github.com/como-technologies/adroit/issues/13)–[#15](https://github.com/como-technologies/adroit/issues/15)).
+
+Providers grouped by seam — shipped, plus candidates (each a contained add):
+
+| Seam | Shipped | Candidates |
+|---|---|---|
+| **Repo / PR host** (`Forge`) | GitHub, GitLab | Gitea / Forgejo, Bitbucket |
+| **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, native (files-only) | Linear ([#12](https://github.com/como-technologies/adroit/issues/12)) |
+| **Publish target** (`Publisher`) | static dir (mdBook / plain) | Confluence, Notion, Hugo-dir, Docusaurus-dir ([#8](https://github.com/como-technologies/adroit/issues/8)) |
+
+Per-provider capability deepens behind the same traits — reviewer @-mentions, review
+deadlines, Jira due / Linear target dates
+([#11](https://github.com/como-technologies/adroit/issues/11)). The boundary that
+keeps this in adroit's lane: its forge integration governs the **ADR lifecycle**
+(propose-on-main, accept-via-MR, status sync, reviewer assignment) and `publish`
+*produces* the artifact — it does not host, distribute, or orchestrate code across
+forges. Those are other nodes' jobs (see the portfolio loop below).
 
 ## Web dashboard
 
@@ -81,44 +97,58 @@ surfaces on the CLI or the web dashboard:
   semantics, derived from the clap tree, plus `schemars` schemas of the `view`
   types) so agents discover and drive adroit without scraping `--help`. See
   [Automation & AI](../usage/automation.md#discovering-commands--adroit-manifest).
-- **MCP tool catalog** (follow-up to #17). Wrap the manifest as
-  [Model Context Protocol](https://modelcontextprotocol.io) tools — each command a
-  tool with its args as a JSON Schema — so adroit is a first-class node for the
-  portfolio's agent orchestration (below), either as an external wrapper or a built-in
-  `adroit mcp` server.
+- **MCP tool catalog**
+  ([#19](https://github.com/como-technologies/adroit/issues/19), follow-up to #17).
+  Wrap the manifest as [Model Context Protocol](https://modelcontextprotocol.io)
+  tools — each command a tool with its args as a JSON Schema, the `view`-type schemas
+  describing results — so the portfolio's **Adopt**-stage agent engine (and any
+  agent) can drive adroit to read decisions and plans without scraping `--help`.
+  Either a thin external wrapper over `adroit manifest` or a built-in `adroit mcp`
+  server.
 
 ## Portfolio integration — the Como loop
 
 > Tracked as an epic: [#18](https://github.com/como-technologies/adroit/issues/18).
 
-adroit isn't a standalone tool; it's the **Prescribe** stage of the
+adroit is the **Prescribe** node of the
 [TAPS portfolio](https://github.com/como-technologies/portfolio)'s closed loop —
 **Assess → Prescribe → Adopt → Measure → re-assess** — where every stage emits an
-artifact the next one consumes. ADRs are the atomic unit of the playbook adroit
-authors. The strategic direction is to make adroit a **first-class node in that
-artifact pipeline** rather than an island, via typed seams in and out:
+artifact the next consumes. adroit's job is deliberately narrow: **author and govern
+decisions** (ADRs) and their implementation **plans**, and make them
+machine-consumable. It is *not* the agent that writes the code, the layer that
+orchestrates forges, or the system that hosts the playbook — those are other nodes
+(below). Holding that line is what keeps the seams clean.
 
-- **Ingest (Assess → adroit).** A structured assessment (the `assessments` app's
-  maturity model — Domain → Practice → Question leaves carrying context / value /
-  risk) seeds **proposed ADRs**: each decision a practice implies becomes a draft
-  ADR (and a reusable template), so the assessment doesn't die in a doc — it
-  *becomes* the decision backlog. A natural fit for `new --interview` /
-  `compose` with the assessment export as context.
-- **Emit (adroit → Adopt / Measure).** An accepted ADR plus its `plan`
-  (implementation checklist) feeds **tuesday** (effort / capacity), and `publish`
-  feeds the hosted **playbook** (the publish conduit above). Which decisions
-  actually landed becomes a **measure** signal.
-- **One artifact contract.** Every tool in the loop produces / consumes **markdown**;
-  keeping adroit's import/export shapes aligned with the assessment + playbook
-  formats is what keeps the thread intact "with the seams closed."
-- **Self-referential.** adroit dogfoods its own decisions (the `/adr` skill →
-  `adroit --dir adr`), and the loop is self-feeding — assessments generate ADR
-  templates, ADRs reference playbook guides, measurement re-opens the next
-  assessment.
+The seam is the **manifest** — with the `-o json` `view` contract and the MCP
+catalog ([#19](https://github.com/como-technologies/adroit/issues/19)). Structured
+JSON is how adroit's decisions cross into the rest of the loop, so a downstream agent
+*reads* a decision instead of scraping prose. The ADRs and guides stay **markdown**
+for humans; the *integration* contract is JSON.
 
-These are **directions**, not committed APIs — but they're the reason the seams
-(`query`/`view` contract, `-o json`, the publish + AI seams) are shaped the way they
-are.
+- **Ingest (Assess → adroit).** A structured assessment export (the `assessments`
+  app's Domain → Practice → Question model, each leaf carrying context / value /
+  risk, exported as JSON / YAML) seeds **proposed ADRs**: each decision a practice
+  implies becomes a draft ADR, so the assessment becomes the decision backlog rather
+  than dying in a doc. A natural fit for `new --interview` / `compose` with the
+  export as context.
+- **Emit (adroit → Adopt).** An accepted ADR plus its `plan` (the implementation
+  checklist) is the decision context the **Adopt**-stage agentic engine (Conduit)
+  turns into issues an agent works inside the team's own forge — read through the
+  manifest / `-o json` / MCP, not by parsing files. The PRs that engine ships are
+  what **tuesday** then measures (effort / capacity), and which decisions actually
+  landed re-opens the next assessment. adroit supplies *what was decided*; it does
+  not run the build loop.
+- **Stay in lane (the boundary that prevents overlap).** The forge-neutral,
+  model-neutral *code* orchestration — the event router and PR/MR lifecycle that
+  drive an agent identically across GitHub / GitLab / self-hosted forges — is the
+  Adopt engine's net-new IP, not adroit's. Hosted distribution (the playbook repo's
+  mdBook → Confluence CI, a future `publish` target) belongs to the publish seam, not
+  to adroit's core. adroit's own forge integration stays scoped to ADR-lifecycle
+  governance (the seam table above). Same loop, disjoint responsibilities.
+
+These are **directions**, not committed APIs — but they're why the seams
+(`query` / `view`, `-o json`, the manifest, the publish + AI seams) are shaped the
+way they are: each is a typed boundary another node can consume.
 
 ## Deferred / under consideration
 
