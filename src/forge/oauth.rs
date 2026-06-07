@@ -112,10 +112,16 @@ pub fn request_device_code(
     let resp = transport.request("POST", device_url, FORM_HEADERS, Some(body.as_bytes()))?;
     let v: Value = serde_json::from_slice(&resp.body).map_err(|e| ForgeError::Api {
         status: resp.status,
-        message: format!("invalid device-code response: {e}"),
+        message: format!("invalid device-code response (HTTP {}): {e}", resp.status),
     })?;
+    // A rejected request (bad client id, device flow not enabled, …) comes back as
+    // an OAuth error body, not a device_code — surface *that* instead of a generic
+    // "missing device_code".
+    let Some(device_code) = v["device_code"].as_str() else {
+        return Err(device_code_error(&v, resp.status));
+    };
     Ok(DeviceCode {
-        device_code: want_str(&v, "device_code", "OAuth")?,
+        device_code: device_code.to_string(),
         user_code: want_str(&v, "user_code", "OAuth")?,
         verification_uri: v["verification_uri"]
             .as_str()
@@ -125,6 +131,25 @@ pub fn request_device_code(
         interval: v["interval"].as_u64().unwrap_or(5),
         expires_in: v["expires_in"].as_u64().unwrap_or(900),
     })
+}
+
+/// Turn a device-code response that has no `device_code` into an actionable
+/// error: the standard OAuth `error` / `error_description` from the body (e.g. a
+/// bad client id), plus a hint at the usual cause.
+fn device_code_error(v: &Value, status: u16) -> ForgeError {
+    let detail = match (v["error"].as_str(), v["error_description"].as_str()) {
+        (Some(e), Some(d)) => format!("{e}: {d}"),
+        (Some(e), None) => e.to_string(),
+        (None, Some(d)) => d.to_string(),
+        // Fall back to GitHub's REST-style `{"message": …}`, else the bare status.
+        (None, None) => v["message"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("no device_code in the response (HTTP {status})")),
+    };
+    ForgeError::OAuth(format!(
+        "{detail}. Check `forge.oauth_client_id`, that the OAuth app has device flow enabled, and (self-hosted) `forge.host`."
+    ))
 }
 
 /// Step 2 (one poll): exchange the device code for a token, or report status.
@@ -179,21 +204,18 @@ pub fn poll_until(
             Poll::Token(t) => return Ok(t),
             Poll::Pending => {}
             Poll::SlowDown => interval += 5, // back off per the spec
-            Poll::Denied => return Err(ForgeError::Auth("device login was denied".to_string())),
+            Poll::Denied => return Err(ForgeError::OAuth("login was denied".to_string())),
             Poll::Expired => {
-                return Err(ForgeError::Auth(
+                return Err(ForgeError::OAuth(
                     "the device code expired — re-run `adroit auth`".to_string(),
                 ));
             }
-            Poll::Other(e) => {
-                return Err(ForgeError::Api {
-                    status: 0,
-                    message: format!("device login error: {e}"),
-                });
-            }
+            Poll::Other(e) => return Err(ForgeError::OAuth(e)),
         }
         if elapsed >= dc.expires_in {
-            return Err(ForgeError::Auth("device login timed out".to_string()));
+            return Err(ForgeError::OAuth(
+                "timed out waiting for authorization".to_string(),
+            ));
         }
     }
 }
@@ -305,6 +327,34 @@ mod tests {
         assert_eq!(dc.user_code, "WXYZ-1234");
         assert_eq!(dc.verification_uri, "https://github.com/login/device");
         assert_eq!(dc.interval, 5);
+    }
+
+    #[test]
+    fn bad_client_id_surfaces_the_oauth_error_not_a_missing_field() {
+        // GitHub returns an OAuth error body (no device_code) for a bad client id;
+        // we must surface *that*, with a hint — not "OAuth response missing device_code".
+        let fake = Fake::new(vec![(
+            200,
+            r#"{"error":"unauthorized","error_description":"The client_id is not valid."}"#,
+        )]);
+        let msg = request_device_code(&fake, "u", "BADID", "repo")
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("The client_id is not valid."), "got: {msg}");
+        assert!(
+            msg.contains("forge.oauth_client_id"),
+            "should hint the fix: {msg}"
+        );
+    }
+
+    #[test]
+    fn device_code_error_without_an_error_body_still_explains() {
+        // A non-OAuth-shaped body (no `error`) → still an actionable message.
+        let fake = Fake::new(vec![(200, r#"{"unexpected":true}"#)]);
+        let msg = request_device_code(&fake, "u", "cid", "repo")
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("forge.oauth_client_id"), "got: {msg}");
     }
 
     #[test]

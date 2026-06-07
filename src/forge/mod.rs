@@ -104,6 +104,11 @@ pub enum ForgeError {
     /// Authentication failed — a loud misconfiguration, not swallowed.
     #[error("forge auth failed (check your *_TOKEN env var): {0}")]
     Auth(String),
+    /// OAuth **device-flow login** failed (bad client id, device flow not enabled,
+    /// denied/expired) — distinct from a token-auth failure, so the message points
+    /// at `forge.oauth_client_id` rather than `*_TOKEN`.
+    #[error("forge OAuth login failed: {0}")]
+    OAuth(String),
     /// The API returned an error status.
     #[error("forge API error {status}: {message}")]
     Api { status: u16, message: String },

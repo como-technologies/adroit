@@ -130,6 +130,11 @@ adroit list --forge       # rows are enriched with linked issue/PR state
 If you see an authentication error, the token didn't have the needed scope
 (`repo` / `api`) — re-register with the correct scope and re-run `adroit auth`.
 
+`forge OAuth login failed: …` during `auth` means the device-code request was
+rejected — almost always a wrong/blank `forge.oauth_client_id`, an app without
+**device flow enabled**, or (self-hosted) a missing/incorrect `forge.host`. The
+message includes the provider's own reason.
+
 ## The PR-is-the-decision workflow
 
 ```sh
