@@ -61,13 +61,19 @@ Three parts, none of which can drift from the binary:
 
 - **`commands`** — every command compiled into this build, with its args / flags /
   enums / defaults, plus the semantics `--help` only implies: `reads` / `writes`,
-  `idempotent`, the lifecycle `stage`, the `-o json` output shape (`json_output`),
-  any runtime `requires` (e.g. `["ai", "ai.enabled"]` or `["forge config"]` — the
-  command is compiled but still needs an opt-in), and the `exit`-code meaning. A
-  boolean switch is marked `"flag": true`.
-- **`types`** — JSON Schemas for the `view` types the read verbs emit
-  (`AdrSummary` / `AdrDetail` / `Stats` / `Graph` / `CheckReport`), so a consumer
-  knows the exact shape of `list -o json`, `show -o json`, `check -o json`, etc.
+  `idempotent`, the `cost` profile (`local` / `provider-call` / `network` /
+  `long-running` — what to rate-limit or confirm on), the lifecycle `stage`, the
+  `-o json` output shape (`json_output`), any runtime `requires` (e.g.
+  `["ai", "ai.enabled"]` or `["forge config"]` — the command is compiled but still
+  needs an opt-in), and the `exit`-code meaning. A boolean switch is marked
+  `"flag": true`.
+- **`types`** — JSON Schemas for the structured shapes the read verbs emit, so a
+  consumer can validate an output before consuming it. Every command's
+  `json_output` name resolves here: the `view` types (`AdrSummary` / `AdrDetail` /
+  `Stats` / `Graph` / `CheckReport`) for `list` / `show` / `stats` / `graph` /
+  `check`, plus `LintFinding` (`lint`), `Match` (`dedupe` / `related`), and
+  `AskAnswer` (`ask`). A `[]` suffix on a `json_output` name means an array of that
+  type.
 - **`global_options`** + `tool` / `version` / `manifest_schema` (the version of the
   manifest's own shape — bumped on a breaking change).
 

@@ -739,16 +739,19 @@ markdown|frontmatter`, `set-status <TAB>` → the status names).
 
 Print a **machine-readable JSON catalog** of the CLI surface — every command (only
 those compiled into this build), its args / flags / enums / defaults, plus
-semantics `--help` only implies: `reads` / `writes`, `idempotent`, lifecycle
+semantics `--help` only implies: `reads` / `writes`, `idempotent`, the `cost`
+profile (`local` / `provider-call` / `network` / `long-running`), lifecycle
 `stage`, the `-o json` output shape, any runtime `requires` (e.g. `ai.enabled`), and
-the `exit`-code meaning — alongside JSON Schemas of the `view` types the read verbs
-emit. For agents and tooling that discover and drive adroit without scraping
-`--help`. Offline; reflects exactly this build. See
+the `exit`-code meaning — alongside JSON Schemas of every structured output shape
+(the `view` types plus `LintFinding` / `Match` / `AskAnswer`). For agents and
+tooling that discover and drive adroit without scraping `--help`. Offline; reflects
+exactly this build. See
 [Automation & AI](../usage/automation.md#discovering-commands--adroit-manifest).
 
 ```sh
-adroit manifest | jq '.commands[] | select(.reads) | .name'   # the read verbs
-adroit manifest | jq '.types.AdrSummary'                       # the list/search shape
+adroit manifest | jq '.commands[] | select(.reads) | .name'      # the read verbs
+adroit manifest | jq '.commands[] | select(.cost!="local") | {name,cost}'  # what to rate-limit
+adroit manifest | jq '.types.AdrSummary'                         # the list/search shape
 ```
 
 ## Configuration

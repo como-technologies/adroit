@@ -327,3 +327,15 @@ pub enum EdgeKind {
     /// `from` links to `to` via a markdown link in its body (non-supersession).
     Related,
 }
+
+/// The `-o json` shape of `adroit ask`: the model's answer plus the references of
+/// the ADRs it was grounded on (the mechanically-retrieved sources, so a caller
+/// can cite or re-open them).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
+pub struct AskAnswer {
+    /// The synthesized answer (prose).
+    pub answer: String,
+    /// References of the ADRs used as context, most relevant first.
+    pub sources: Vec<String>,
+}

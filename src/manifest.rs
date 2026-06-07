@@ -43,6 +43,10 @@ struct CommandInfo {
     reads: bool,
     writes: bool,
     idempotent: bool,
+    /// Expense profile, for rate-limiting / confirmation: `local` (filesystem
+    /// only), `provider-call` (an AI/token call), `network` (a forge/remote API),
+    /// or `long-running` (runs until stopped, e.g. a server).
+    cost: &'static str,
     /// The `-o json` output shape — a `view` type name (look it up in `types`) or a
     /// short description for ad-hoc shapes. `null` when the command has no JSON form.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,7 @@ struct Meta {
     reads: bool,
     writes: bool,
     idempotent: bool,
+    cost: &'static str,
     json_output: Option<&'static str>,
     requires: &'static [&'static str],
     exit: Option<&'static str>,
@@ -102,56 +107,60 @@ struct Meta {
 /// A superset is fine — entries for commands not compiled in are simply unused.
 #[rustfmt::skip]
 fn classified(name: &str) -> Option<Meta> {
-    // stage, reads, writes, idempotent, json_output, requires, exit
+    // stage, reads, writes, idempotent, cost, json_output, requires, exit
+    // cost ∈ { local, provider-call, network, long-running } — the expense profile
+    // an agent rate-limits / confirms on.
     macro_rules! m {
-        ($s:expr, $r:expr, $w:expr, $i:expr, $j:expr, $req:expr, $e:expr) => {
-            Meta { stage: $s, reads: $r, writes: $w, idempotent: $i, json_output: $j, requires: $req, exit: $e }
+        ($s:expr, $r:expr, $w:expr, $i:expr, $c:expr, $j:expr, $req:expr, $e:expr) => {
+            Meta { stage: $s, reads: $r, writes: $w, idempotent: $i, cost: $c, json_output: $j, requires: $req, exit: $e }
         };
     }
     const AI: &[&str] = &["ai", "ai.enabled"];
+    const PROVIDER: &str = "provider-call";
+    const NET: &str = "network";
     Some(match name {
         // Author a decision
-        "new"        => m!("author",  false, true,  false, None,                 &[],            None),
-        "draft"      => m!("author",  false, true,  false, None,                 AI,             None),
-        "compose"    => m!("author",  false, true,  false, None,                 AI,             None),
-        "plan"       => m!("author",  true,  false, true,  None,                 AI,             None),
-        "edit"       => m!("author",  false, true,  false, None,                 &[],            None),
-        "lint"       => m!("author",  true,  false, true,  Some("LintFinding[]"), &[],           Some("non-zero on mechanical findings (--ai is advisory)")),
-        "dedupe"     => m!("author",  true,  false, true,  Some("Match[]"),      &[],            None),
-        "related"    => m!("author",  true,  false, true,  Some("Match[]"),      &[],            None),
-        "link"       => m!("author",  false, true,  true,  None,                 &[],            None),
+        "new"        => m!("author",  false, true,  false, "local",   None,                 &[],            None),
+        "draft"      => m!("author",  false, true,  false, PROVIDER,  None,                 AI,             None),
+        "compose"    => m!("author",  false, true,  false, PROVIDER,  None,                 AI,             None),
+        "plan"       => m!("author",  true,  false, true,  PROVIDER,  None,                 AI,             None),
+        "edit"       => m!("author",  false, true,  false, "local",   None,                 &[],            None),
+        "lint"       => m!("author",  true,  false, true,  "local",   Some("LintFinding[]"), &[],           Some("non-zero on mechanical findings (--ai is advisory)")),
+        "dedupe"     => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
+        "related"    => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
+        "link"       => m!("author",  false, true,  true,  "local",   None,                 &[],            None),
         // Review & decide
-        "set-review" => m!("review",  false, true,  true,  None,                 &[],            None),
-        "review"     => m!("review",  true,  false, true,  None,                 &[],            None),
-        "summarize"  => m!("review",  true,  false, true,  None,                 AI,             None),
-        "set-status" => m!("review",  false, true,  true,  None,                 &[],            None),
-        "supersede"  => m!("review",  false, true,  true,  None,                 &[],            None),
+        "set-review" => m!("review",  false, true,  true,  "local",   None,                 &[],            None),
+        "review"     => m!("review",  true,  false, true,  "local",   None,                 &[],            None),
+        "summarize"  => m!("review",  true,  false, true,  PROVIDER,  None,                 AI,             None),
+        "set-status" => m!("review",  false, true,  true,  "local",   None,                 &[],            None),
+        "supersede"  => m!("review",  false, true,  true,  "local",   None,                 &[],            None),
         // Explore the corpus
-        "list"       => m!("explore", true,  false, true,  Some("AdrSummary[]"), &[],            Some("0 (read-only)")),
-        "show"       => m!("explore", true,  false, true,  Some("AdrDetail"),    &[],            None),
-        "status"     => m!("explore", true,  false, true,  None,                 &[],            None),
-        "search"     => m!("explore", true,  false, true,  Some("AdrSummary[]"), &[],            None),
-        "stats"      => m!("explore", true,  false, true,  Some("Stats"),        &[],            None),
-        "graph"      => m!("explore", true,  false, true,  Some("Graph"),        &[],            None),
-        "ask"        => m!("explore", true,  false, true,  Some("{ answer, sources[] }"), AI,    None),
-        "serve"      => m!("explore", true,  false, false, None,                 &["web"],       None),
+        "list"       => m!("explore", true,  false, true,  "local",   Some("AdrSummary[]"), &[],            Some("0 (read-only)")),
+        "show"       => m!("explore", true,  false, true,  "local",   Some("AdrDetail"),    &[],            None),
+        "status"     => m!("explore", true,  false, true,  "local",   None,                 &[],            None),
+        "search"     => m!("explore", true,  false, true,  "local",   Some("AdrSummary[]"), &[],            None),
+        "stats"      => m!("explore", true,  false, true,  "local",   Some("Stats"),        &[],            None),
+        "graph"      => m!("explore", true,  false, true,  "local",   Some("Graph"),        &[],            None),
+        "ask"        => m!("explore", true,  false, true,  PROVIDER,  Some("AskAnswer"),    AI,             None),
+        "serve"      => m!("explore", true,  false, false, "long-running", None,            &["web"],       None),
         // Maintain the repo
-        "check"      => m!("maintain", true,  false, true,  Some("CheckReport"), &[],            Some("non-zero on an Error-severity problem (CI gate)")),
-        "relink"     => m!("maintain", false, true,  true,  None,                &[],            None),
-        "renumber"   => m!("maintain", false, true,  false, None,                &[],            None),
-        "migrate"    => m!("maintain", false, true,  true,  None,                &[],            None),
-        "index"      => m!("maintain", false, true,  true,  None,                &[],            Some("`--check`: non-zero if SUMMARY.md is stale")),
-        "publish"    => m!("maintain", true,  false, true,  None,                &[],            None),
+        "check"      => m!("maintain", true,  false, true,  "local",  Some("CheckReport"), &[],            Some("non-zero on an Error-severity problem (CI gate)")),
+        "relink"     => m!("maintain", false, true,  true,  "local",  None,                &[],            None),
+        "renumber"   => m!("maintain", false, true,  false, "local",  None,                &[],            None),
+        "migrate"    => m!("maintain", false, true,  true,  "local",  None,                &[],            None),
+        "index"      => m!("maintain", false, true,  true,  "local",  None,                &[],            Some("`--check`: non-zero if SUMMARY.md is stale")),
+        "publish"    => m!("maintain", true,  false, true,  "local",  None,                &[],            None),
         // Forge integration (compiled with the `forge` feature)
-        "init"       => m!("forge",   false, true,  false, None,                 &["forge"],          None),
-        "auth"       => m!("forge",   false, true,  false, None,                 &["forge"],          None),
-        "sync"       => m!("forge",   true,  false, true,  None,                 &["forge config"],   None),
-        "reconcile"  => m!("forge",   true,  true,  false, None,                 &["forge config"],   None),
-        "notify"     => m!("forge",   true,  false, false, None,                 &["forge config"],   None),
+        "init"       => m!("forge",   false, true,  false, NET,       None,                 &["forge"],          None),
+        "auth"       => m!("forge",   false, true,  false, NET,       None,                 &["forge"],          None),
+        "sync"       => m!("forge",   true,  false, true,  NET,       None,                 &["forge config"],   None),
+        "reconcile"  => m!("forge",   true,  true,  false, NET,       None,                 &["forge config"],   None),
+        "notify"     => m!("forge",   true,  false, false, NET,       None,                 &["forge config"],   None),
         // Configuration & meta
-        "config"     => m!("config",  true,  true,  true,  None,                 &[],            None),
-        "completions"=> m!("config",  true,  false, true,  None,                 &[],            None),
-        "manifest"   => m!("config",  true,  false, true,  Some("this document"),&[],            None),
+        "config"     => m!("config",  true,  true,  true,  "local",   None,                 &[],            None),
+        "completions"=> m!("config",  true,  false, true,  "local",   None,                 &[],            None),
+        "manifest"   => m!("config",  true,  false, true,  "local",   Some("this document"),&[],            None),
         _ => return None,
     })
 }
@@ -162,6 +171,7 @@ fn meta(name: &str) -> Meta {
         reads: false,
         writes: false,
         idempotent: false,
+        cost: "local",
         json_output: None,
         requires: &[],
         exit: None,
@@ -237,6 +247,20 @@ fn type_schemas() -> serde_json::Map<String, Value> {
         "CheckReport".into(),
         to_val(schemars::schema_for!(crate::view::CheckReport)),
     );
+    // The ad-hoc read shapes, registered so every `json_output` name resolves:
+    // `lint` (LintFinding[]), `dedupe` / `related` (Match[]), `ask` (AskAnswer).
+    m.insert(
+        "LintFinding".into(),
+        to_val(schemars::schema_for!(crate::lint::LintFinding)),
+    );
+    m.insert(
+        "Match".into(),
+        to_val(schemars::schema_for!(crate::similar::Match)),
+    );
+    m.insert(
+        "AskAnswer".into(),
+        to_val(schemars::schema_for!(crate::view::AskAnswer)),
+    );
     m
 }
 
@@ -263,6 +287,7 @@ pub fn build() -> Manifest {
             reads: info.reads,
             writes: info.writes,
             idempotent: info.idempotent,
+            cost: info.cost,
             json_output: info.json_output,
             requires: info.requires.to_vec(),
             exit: info.exit,
@@ -331,6 +356,53 @@ mod tests {
         // …whose schema is published in `types`.
         assert!(v["types"]["AdrSummary"].is_object());
         assert!(v["types"]["CheckReport"].is_object());
+    }
+
+    #[test]
+    fn every_json_output_shape_is_registered() {
+        // Each command's `json_output` (a `view`-type name, minus any `[]` array
+        // suffix) must resolve to a schema in `types` — so an agent can always
+        // validate an output it's told to expect. The one non-type value is the
+        // manifest's self-description.
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        let types = v["types"].as_object().unwrap();
+        for c in v["commands"].as_array().unwrap() {
+            let Some(shape) = c["json_output"].as_str() else {
+                continue;
+            };
+            if shape == "this document" {
+                continue;
+            }
+            let ty = shape.strip_suffix("[]").unwrap_or(shape);
+            assert!(
+                types.contains_key(ty),
+                "command `{}` advertises json_output `{shape}` but `{ty}` is not in `types`",
+                c["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_has_a_known_cost() {
+        const KNOWN: &[&str] = &["local", "provider-call", "network", "long-running"];
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        for c in v["commands"].as_array().unwrap() {
+            let cost = c["cost"].as_str().expect("cost is a string");
+            assert!(
+                KNOWN.contains(&cost),
+                "command `{}` has unknown cost `{cost}`",
+                c["name"]
+            );
+        }
+        // The AI verbs are the expensive ones — `ask` makes a provider call.
+        let ask = v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "ask");
+        if let Some(ask) = ask {
+            assert_eq!(ask["cost"], "provider-call");
+        }
     }
 
     #[test]

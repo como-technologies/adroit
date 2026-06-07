@@ -13,6 +13,7 @@ use serde::Serialize;
 
 /// Where a finding came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum LintSource {
@@ -24,6 +25,7 @@ pub enum LintSource {
 
 /// One authoring-quality finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct LintFinding {
     pub source: LintSource,
     pub message: String,

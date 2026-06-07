@@ -18,6 +18,7 @@ pub struct Doc {
 
 /// A ranked similarity result.
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct Match {
     pub reference: String,
     pub title: String,

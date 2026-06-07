@@ -1815,8 +1815,11 @@ fn cmd_ask(store: &Store, cfg: &Config, question: &str, output: OutputFormat) ->
     let answer = answer.trim();
 
     if output == OutputFormat::Json {
-        let sources: Vec<&str> = top.iter().map(|m| m.reference.as_str()).collect();
-        return print_json(&serde_json::json!({ "answer": answer, "sources": sources }));
+        let sources = top.iter().map(|m| m.reference.clone()).collect();
+        return print_json(&adroit::view::AskAnswer {
+            answer: answer.to_string(),
+            sources,
+        });
     }
     println!("{answer}");
     if !top.is_empty() {
