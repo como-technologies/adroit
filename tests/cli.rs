@@ -3346,6 +3346,53 @@ fn import_works_in_the_frontmatter_profile() {
         .stdout(predicate::str::contains("proposed"));
 }
 
+#[test]
+fn import_ai_fleshes_out_seeds_with_the_fake_provider() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .arg("--ai")
+        .env("ADROIT_AI_FAKE", "A fleshed-out proposal body.")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Seeded 2 proposed ADR(s)"));
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 2);
+    // The AI pass marks the body and replaces the prose; status stays mechanical.
+    let body = fs::read_to_string(&files[0]).unwrap();
+    assert!(
+        body.contains("adroit:ai-suggested"),
+        "import --ai should mark the body AI-suggested"
+    );
+    assert!(body.contains("A fleshed-out proposal body."));
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn import_ai_degrades_to_mechanical_without_a_provider() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .env_remove("ADROIT_AI_FAKE") // hermetic: no provider at all
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .arg("--ai")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("had no AI provider"))
+        .stderr(predicate::str::contains("Seeded 2"));
+    // The mechanical seed still landed: seeded marker present, AI marker absent.
+    let secrets = adr_files(dir.path())
+        .into_iter()
+        .find(|p| p.to_string_lossy().contains("secrets-management"))
+        .unwrap();
+    let body = fs::read_to_string(secrets).unwrap();
+    assert!(body.contains("adroit:seeded-from-assessment"));
+    assert!(!body.contains("adroit:ai-suggested"));
+}
+
 // ---- plan -o json (structured plan artifact; #18 emit seam) ----
 
 #[test]

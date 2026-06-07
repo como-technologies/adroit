@@ -233,7 +233,8 @@ fn main() -> Result<()> {
             from_assessment,
             dry_run,
             force,
-        }) => cmd_import(&store, &cfg, &from_assessment, dry_run, force)?,
+            ai,
+        }) => cmd_import(&store, &cfg, &from_assessment, dry_run, force, ai)?,
         Some(Command::List {
             status,
             #[cfg(feature = "forge")]
@@ -626,18 +627,30 @@ fn cmd_new(
     Ok((path, r))
 }
 
+/// Instruction for the optional `import --ai` pass — flesh the seed's prose out of
+/// the assessment context already in the body, keeping it a proposal.
+const IMPORT_AI_INSTRUCTION: &str = "This proposed ADR was seeded from a maturity assessment: the Context and Decision \
+     Drivers are filled, but Considered Options, Decision Outcome, and Consequences are \
+     still authoring prompts. Flesh out the prose — weigh at least two concrete options \
+     with trade-offs, recommend one as a proposal (the ADR stays Proposed), and complete \
+     the positive/negative consequences and a short implementation outline — grounded in \
+     the context and drivers already present. Be concise and honest; do not invent \
+     specifics the assessment does not support.";
+
 /// `adroit import --from-assessment <file>`: the ingest seam (issue #18). Parse an
-/// assessment export, turn each practice into a **proposed** ADR (mechanical — no
-/// AI), splicing the practice's context / value / risk into the MADR sections.
-/// Re-runnable: practices whose title already exists are skipped (unless `--force`),
-/// so importing an updated assessment only adds what's new. `--dry-run` reports
-/// without writing.
+/// assessment export, turn each practice into a **proposed** ADR, splicing the
+/// practice's context / value / risk into the MADR sections — **mechanical** by
+/// default. With `--ai` the AI then fleshes each seed's prose out of that context
+/// (degrading to the mechanical seed if no provider is available). Re-runnable:
+/// practices whose title already exists are skipped (unless `--force`), so importing
+/// an updated assessment only adds what's new. `--dry-run` reports without writing.
 fn cmd_import(
     store: &Store,
     cfg: &Config,
     from_assessment: &std::path::Path,
     dry_run: bool,
     force: bool,
+    ai: bool,
 ) -> Result<()> {
     use std::collections::HashSet;
 
@@ -652,6 +665,25 @@ fn cmd_import(
         );
         return Ok(());
     }
+
+    // Resolve the provider once for `--ai`; degrade to the mechanical seed (warn,
+    // don't error) when none is available — the seeded ADRs are still useful.
+    let ai_provider = if ai && !dry_run {
+        match adroit::ai_hook::open_provider(cfg) {
+            Some(p) => Some(p),
+            None => {
+                eprintln!(
+                    "{}",
+                    "--ai had no AI provider; seeding mechanically. Enable `ai.enabled` \
+                     (+ a key) or set `ADROIT_AI_FAKE`."
+                        .yellow()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Dedupe against existing ADR titles (case-insensitive) and within this run, so
     // a re-import is safe. `--force` skips the guard.
@@ -697,6 +729,9 @@ fn cmd_import(
         });
         let (path, r) = cmd_new(store, cfg, &d.title, None, category.as_deref())?;
         splice_generated(store, &r, &adroit::import::seed_fragment(d))?;
+        if let Some(provider) = ai_provider.as_ref() {
+            flesh_out_seed(store, &path, &r, &d.title, provider.as_ref())?;
+        }
         println!("seeded   {}", path.display());
         created += 1;
     }
@@ -712,6 +747,53 @@ fn cmd_import(
         assessment.name.trim()
     );
     Ok(())
+}
+
+/// The `import --ai` pass: flesh out a just-seeded ADR's prose via the compose
+/// engine, grounded in the assessment context already in the body (the same engine
+/// as `compose`, so heading/status stay mechanical and the body is marked
+/// `AI_MARKER`). A provider failure warns and keeps the mechanical seed — it never
+/// errors the import.
+fn flesh_out_seed(
+    store: &Store,
+    path: &std::path::Path,
+    r: &AdrRef,
+    title: &str,
+    provider: &dyn adroit::ai::AiProvider,
+) -> Result<()> {
+    let detail = query::detail_at(store, path)?;
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .filter(|s| s.address != detail.summary.address)
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+    let req =
+        adroit::ai::build_compose_request(title, IMPORT_AI_INSTRUCTION, &detail.body, &corpus);
+    announce_estimate(
+        provider,
+        &req,
+        &format!("Fleshing out {}", detail.summary.reference),
+    );
+    match adroit::ai::draft_compose(
+        provider,
+        title,
+        IMPORT_AI_INSTRUCTION,
+        &detail.body,
+        &corpus,
+    ) {
+        Ok(drafted) => splice_generated(store, r, &drafted),
+        Err(e) => {
+            eprintln!(
+                "{}",
+                format!(
+                    "warning: AI draft failed for {} ({e}); kept the mechanical seed.",
+                    detail.summary.reference
+                )
+                .yellow()
+            );
+            Ok(())
+        }
+    }
 }
 
 /// `new --interview`: resolve a provider then run the shared interview. Degrades

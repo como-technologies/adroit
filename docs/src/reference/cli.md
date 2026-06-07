@@ -147,6 +147,7 @@ adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothi
 | `--from-assessment <FILE>` | Path to the assessment export (`.json`, `.yaml`/`.yml`, or `.toml`) |
 | `--dry-run` | Parse and report what would be seeded; write nothing |
 | `--force` | Seed even practices whose title already has an ADR (skip the dedupe guard) |
+| `--ai` | After the mechanical seed, have the provider flesh out each ADR's prose from the assessment context. Degrades to the mechanical seed (with a warning) when no provider is available. Needs `ai.enabled` or `ADROIT_AI_FAKE` |
 
 **Re-runnable.** Practices whose (case-insensitive) title already has an ADR are
 skipped — `(N skipped — already present)` — so importing an *updated* assessment

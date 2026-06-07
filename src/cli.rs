@@ -315,6 +315,11 @@ pub enum Command {
         /// Seed even practices whose title already exists (skip the dedupe guard).
         #[arg(long)]
         force: bool,
+        /// After the mechanical seed, have the AI flesh out each ADR's prose from
+        /// the assessment context (opt-in). Degrades to the mechanical seed when no
+        /// provider is available. Needs `ai.enabled` or the `ADROIT_AI_FAKE` seam.
+        #[arg(long)]
+        ai: bool,
     },
     /// List existing ADRs.
     List {
