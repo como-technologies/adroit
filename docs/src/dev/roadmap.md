@@ -75,13 +75,17 @@ surfaces on the CLI or the web dashboard:
 
 ## Agent surface
 
-- **Structured command manifest.** Agents introspect adroit via `--help` +
-  completions and drive it through `-o json` today; a machine-readable command
-  manifest would make discovery first-class — and adroit a first-class node for the
-  portfolio's agent orchestration (below). See
+- **Structured command manifest**
+  ([#17](https://github.com/como-technologies/adroit/issues/17)). Agents introspect
+  adroit via `--help` + completions and drive it through `-o json` today; a
+  machine-readable command manifest (derived from the clap tree + `schemars` schemas
+  of the `view` types) would make discovery first-class — and adroit a first-class
+  node for the portfolio's agent orchestration (below). See
   [Automation & AI](../usage/automation.md).
 
 ## Portfolio integration — the Como loop
+
+> Tracked as an epic: [#18](https://github.com/como-technologies/adroit/issues/18).
 
 adroit isn't a standalone tool; it's the **Prescribe** stage of the
 [TAPS portfolio](https://github.com/como-technologies/portfolio)'s closed loop —
