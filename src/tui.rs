@@ -804,10 +804,12 @@ impl TuiState {
         self.ai_result.as_ref()
     }
 
-    /// Show a read-only AI result in the popup (driver-only).
+    /// Show a read-only AI result in the popup (driver-only). The result
+    /// supersedes the "thinking…" notice, so clear that transient message.
     pub fn show_ai_result(&mut self, title: String, text: String) {
         self.ai_result = Some((title, text));
         self.ai_scroll = 0;
+        self.message = None;
         self.mode = Mode::AiResult;
     }
 
@@ -942,6 +944,11 @@ impl TuiState {
     /// Set a transient status-bar message.
     pub fn set_message(&mut self, msg: impl Into<String>) {
         self.message = Some(msg.into());
+    }
+
+    /// Clear the transient status-bar message.
+    pub fn clear_message(&mut self) {
+        self.message = None;
     }
 
     /// Store the detail for the selected row (driver-loaded via `query::detail`).
@@ -4414,9 +4421,14 @@ mod tests {
     #[test]
     fn ai_result_popup_shows_scrolls_and_dismisses() {
         let mut s = TuiState::new();
+        // Simulate the in-flight notice the driver sets before the call lands.
+        s.set_message("AI: thinking…");
         s.show_ai_result("Summary".into(), "the text".into());
         assert!(matches!(s.mode(), Mode::AiResult));
         assert_eq!(s.ai_result().map(|(t, _)| t.as_str()), Some("Summary"));
+        // The result supersedes the "thinking…" notice — it must not linger in
+        // the footer (regression: it used to persist after closing the popup).
+        assert_eq!(s.message(), None);
         s.ai_scroll_down();
         s.ai_scroll_down();
         assert_eq!(s.ai_scroll(), 2);
@@ -4424,6 +4436,7 @@ mod tests {
         assert_eq!(s.ai_scroll(), 1);
         s.back_to_list();
         assert!(matches!(s.mode(), Mode::List));
+        assert_eq!(s.message(), None); // still clear after closing
     }
 
     #[test]
