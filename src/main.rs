@@ -1366,12 +1366,20 @@ fn config_show(cli: &Cli) -> Result<()> {
         .and_then(|s| serde_yaml_ng::from_str(&s).ok())
         .unwrap_or(serde_yaml_ng::Value::Null);
 
-    println!("{:<21}{:<30} SOURCE", "KEY", "VALUE");
+    // Width the KEY column to the longest key + 1, so even the widest key
+    // (`forge.oauth_client_id`) keeps a gap before the value.
+    let key_w = config::CONFIG_KEYS
+        .iter()
+        .map(|k| k.len())
+        .max()
+        .unwrap_or(20)
+        + 1;
+    println!("{:<key_w$}{:<30} SOURCE", "KEY", "VALUE");
     for &key in config::CONFIG_KEYS {
         let value = config_effective(cli, &cfg, key);
         let source = config_source(cli, key, config::yaml_has_key(&raw, key));
         // The literal space guarantees a gap even when `value` exceeds the pad.
-        println!("{key:<21}{value:<30} {source}");
+        println!("{key:<key_w$}{value:<30} {source}");
     }
     if let Some(p) = config::config_path() {
         println!("\nconfig file: {}", p.display());
