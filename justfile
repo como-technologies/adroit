@@ -98,6 +98,9 @@ run *ARGS:
 # Build the Vue web dashboard SPA into web/dist (embedded by the `web` feature)
 web-build:
     cd web && npm install && npm run build
+    # vite empties web/dist on build, removing the tracked placeholder that keeps
+    # the rust-embed dir present on a clean checkout — recreate it.
+    @touch web/dist/.gitkeep
 
 # Build the SPA, then run the read-only web dashboard with live-reload
 serve *ARGS: web-build
