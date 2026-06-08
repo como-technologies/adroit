@@ -106,8 +106,10 @@ cargo +nightly bolero test fuzz_format_helpers -T 60sec   # coverage-guided, 60s
 
 The targets are `fuzz_format_helpers`, `fuzz_link_rewriter`, `fuzz_naming_helpers`,
 `fuzz_parse_remote_url`, `fuzz_oauth_token_parse` (the OAuth device-token response
-parser — a hostile auth response must never panic), and `fuzz_parse_assessment`
-(the assessment-import JSON/YAML parser + seed mapping). cargo-bolero builds
+parser — a hostile auth response must never panic), `fuzz_parse_assessment`
+(the assessment-import JSON/YAML parser + seed mapping), and `fuzz_publish_rewriter`
+(the `adroit publish` cross-link rewriter — adversarial nested / multibyte markdown
+must never panic). cargo-bolero builds
 its instrumented target with
 `--profile fuzz`, so the repo defines a `[profile.fuzz]` in `Cargo.toml` (inherits
 `release`, keeps debug-assertions + overflow-checks on) — without it the run fails

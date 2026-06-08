@@ -407,7 +407,10 @@ fn main() -> Result<()> {
         Some(Command::Migrate { yes, dry_run }) => cmd_migrate(&store, yes, dry_run)?,
         #[cfg(feature = "forge")]
         Some(Command::Init { print, yes }) => cmd_init(&store, print, yes)?,
-        Some(Command::Publish { out, dry_run }) => cmd_publish(&store, &out, dry_run)?,
+        Some(Command::Publish { out, to, dry_run }) => {
+            let target = to.unwrap_or(cfg.publish_target);
+            cmd_publish(&store, target, &out, dry_run)?
+        }
         #[cfg(feature = "forge")]
         Some(Command::Notify { id, dry_run }) => cmd_notify(&store, &cfg, &id, dry_run)?,
         Some(Command::Index { check }) => cmd_index(&store, &cfg, check)?,
@@ -1515,6 +1518,12 @@ fn config_cli_value(cli: &Cli, key: &str) -> Option<String> {
         "review_overdue_days" => cli.review_overdue_days.map(|n| n.to_string()),
         "date_source" => cli.date_source.map(|d| d.to_string()),
         "relink_scope" => cli.relink_scope.map(|s| s.to_string()),
+        // `publish_target` has no global flag (only `publish --to`), but
+        // `ADROIT_PUBLISH_TARGET` overrides it — surface that env value so
+        // `config show`/`get` reports "env" rather than the file/default value.
+        "publish_target" => std::env::var("ADROIT_PUBLISH_TARGET")
+            .ok()
+            .filter(|v| !v.is_empty()),
         _ => None,
     }
 }
@@ -2517,12 +2526,17 @@ fn install_precommit_hook(adr_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// `adroit publish`: export accepted ADRs to a directory (static-dir publisher).
-fn cmd_publish(store: &Store, out: &std::path::Path, dry_run: bool) -> Result<()> {
-    let report = adroit::publish::publish(store, out, !dry_run)?;
+/// `adroit publish`: render the accepted ADR set into a static-site shape.
+fn cmd_publish(
+    store: &Store,
+    target: adroit::publish::PublishTarget,
+    out: &std::path::Path,
+    dry_run: bool,
+) -> Result<()> {
+    let report = adroit::publish::publish(store, target, out, !dry_run)?;
     if dry_run {
         println!(
-            "Would publish {} accepted ADR(s) to {}:",
+            "Would publish {} accepted ADR(s) to {} ({target} target):",
             report.written,
             out.display()
         );
@@ -2532,7 +2546,7 @@ fn cmd_publish(store: &Store, out: &std::path::Path, dry_run: bool) -> Result<()
         println!("\nDry run — re-run without --dry-run to write.");
     } else {
         println!(
-            "Published {} accepted ADR(s) to {}",
+            "Published {} accepted ADR(s) to {} ({target} target)",
             report.written,
             out.display()
         );

@@ -6,6 +6,7 @@ use clap_complete::Shell;
 use crate::config::{DateSource, Layout, MarkdownTheme, RelinkScope};
 use crate::format::Format;
 use crate::naming::NamingScheme;
+use crate::publish::PublishTarget;
 
 /// How a read verb prints its result.
 ///
@@ -83,7 +84,7 @@ Maintain the repo:
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
   index         Regenerate the ADR section of SUMMARY.md
-  publish       Export the accepted ADR set to a directory
+  publish       Export accepted ADRs into a static-site tree (--to)
 
 Forge integration:
   init          Detect the forge from the git remote and configure it
@@ -142,7 +143,7 @@ Maintain the repo:
   renumber      Renumber an ADR to resolve a number collision
   migrate       Convert the repo to the configured layout/format
   index         Regenerate the ADR section of SUMMARY.md
-  publish       Export the accepted ADR set to a directory
+  publish       Export accepted ADRs into a static-site tree (--to)
 
 Configuration:
   config        Inspect or change configuration
@@ -616,10 +617,13 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Export the accepted ADR set to a directory (static-dir publisher).
+    /// Export the accepted ADR set into a static-site shape (`--to`).
     ///
-    /// Sibling to `index`, but for the published-docs side. Copies every
-    /// accepted ADR plus an `index.md` to `--out`. Idempotent.
+    /// Renders every accepted ADR into the target generator's file layout —
+    /// `static` (default), `mdbook`, `mkdocs`, `hugo`, `docusaurus`, `jekyll` —
+    /// under `--out`, with category sections and cross-links rewritten to point
+    /// only at published pages. Pure + offline; idempotent. adroit *produces*
+    /// the tree; a consuming repo's CI hosts it.
     Publish {
         /// Output directory for the published ADRs.
         ///
@@ -627,6 +631,10 @@ pub enum Command {
         /// (human/json) selector.
         #[arg(long)]
         out: PathBuf,
+        /// Static-site shape to render into. Overrides the `publish_target`
+        /// config; defaults to `static`. [env: ADROIT_PUBLISH_TARGET]
+        #[arg(long = "to", value_enum, env = "ADROIT_PUBLISH_TARGET")]
+        to: Option<PublishTarget>,
         /// Preview what would be written without writing.
         #[arg(long)]
         dry_run: bool,

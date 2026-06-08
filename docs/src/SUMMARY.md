@@ -13,6 +13,7 @@
 - [The ADR Workflow](./usage/workflow.md)
 - [Managing ADRs](./usage/managing-adrs.md)
 - [CI Integration](./usage/ci-integration.md)
+- [Publishing](./usage/publishing.md)
 - [Forge Integration](./usage/forge.md)
 - [Automation & AI](./usage/automation.md)
 - [Interactive TUI](./usage/tui.md)

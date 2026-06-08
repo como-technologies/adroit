@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::adr::Status;
 use crate::format::Format;
 use crate::naming::NamingScheme;
+use crate::publish::PublishTarget;
 
 /// On-disk directory layout for a store.
 #[derive(
@@ -426,6 +427,11 @@ pub struct Config {
     /// to a post-merge `adroit relink`), or `none` (move only). Default: `all`.
     pub relink_scope: RelinkScope,
 
+    /// Default static-site shape for `adroit publish`: `static` (default),
+    /// `mdbook`, `mkdocs`, `hugo`, `docusaurus`, or `jekyll`. The `--to` flag /
+    /// `ADROIT_PUBLISH_TARGET` override it.
+    pub publish_target: PublishTarget,
+
     /// Opt-in AI-assisted authoring (`new --interview`; future verbs).
     /// Absent by default — bare `adroit` makes no AI calls.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -458,6 +464,7 @@ impl Default for Config {
             date_source: DateSource::default(),
             naming: NamingScheme::default(),
             relink_scope: RelinkScope::default(),
+            publish_target: PublishTarget::default(),
             forge: None,
         }
     }
@@ -491,6 +498,7 @@ impl Config {
             "date_source" => self.date_source.to_string(),
             "naming" => self.naming.to_string(),
             "relink_scope" => self.relink_scope.to_string(),
+            "publish_target" => self.publish_target.to_string(),
             // Forge sub-keys read through the (optional) `forge` block, falling
             // back to ForgeConfig defaults when it's unset. `repo`/`host` are
             // genuinely optional → `None` when unset.
@@ -570,6 +578,11 @@ impl Config {
                     .parse()
                     .map_err(|_| bad("relink scope (all|self|none)"))?
             }
+            "publish_target" => {
+                self.publish_target = value.parse().map_err(|_| {
+                    bad("publish target (static|mdbook|mkdocs|hugo|docusaurus|jekyll)")
+                })?
+            }
             // Forge sub-keys lazily create the `forge` block, then set one field.
             "forge.provider" => {
                 self.forge.get_or_insert_with(ForgeConfig::default).provider = value
@@ -634,6 +647,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "date_source",
     "naming",
     "relink_scope",
+    "publish_target",
     "forge.provider",
     "forge.repo",
     "forge.host",
@@ -658,6 +672,7 @@ pub fn env_var_for(key: &str) -> Option<&'static str> {
         "date_source" => "ADROIT_DATE_SOURCE",
         "naming" => "ADROIT_NAMING",
         "relink_scope" => "ADROIT_RELINK_SCOPE",
+        "publish_target" => "ADROIT_PUBLISH_TARGET",
         _ => return None,
     })
 }

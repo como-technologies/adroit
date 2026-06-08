@@ -186,3 +186,39 @@ fn precedence_participates_for_every_profile_key() {
         );
     }
 }
+
+/// `publish_target` has no global flag (only `publish --to`), so its precedence
+/// is env (`ADROIT_PUBLISH_TARGET`) > `.env` > `config.yaml` > default (`static`).
+#[test]
+fn publish_target_precedence_without_global_flag() {
+    let env_var = "ADROIT_PUBLISH_TARGET";
+    let get = |src| resolved("publish_target", env_var, src);
+    assert_eq!(get(Sources::default()), "static", "default");
+    assert_eq!(
+        get(Sources {
+            config: Some("hugo"),
+            ..Default::default()
+        }),
+        "hugo",
+        "config.yaml"
+    );
+    assert_eq!(
+        get(Sources {
+            dotenv: Some("mkdocs"),
+            config: Some("hugo"),
+            ..Default::default()
+        }),
+        "mkdocs",
+        ".env beats config"
+    );
+    assert_eq!(
+        get(Sources {
+            env: Some("jekyll"),
+            dotenv: Some("mkdocs"),
+            config: Some("hugo"),
+            ..Default::default()
+        }),
+        "jekyll",
+        "process env beats .env + config"
+    );
+}
