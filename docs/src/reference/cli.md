@@ -671,11 +671,11 @@ config. `--print` shows the detected settings + planned steps without writing;
 
 #### `adroit auth <PROVIDER>`
 
-Store a token (`github` / `gitlab` / `jira`, or `anthropic` for the AI key) — in
-the **OS keychain** when available (macOS Keychain / Windows Credential Manager /
-Linux keyutils), else a `0600` file next to the config. The token value is never
-echoed; env vars (`ADROIT_*_TOKEN` / `ADROIT_ANTHROPIC_KEY`) still take precedence
-at use time.
+Store a token (`github` / `gitlab` / `jira` / `linear` / `monday`, or `anthropic`
+for the AI key) — in the **OS keychain** when available (macOS Keychain / Windows
+Credential Manager / Linux keyutils), else a `0600` file next to the config. The
+token value is never echoed; env vars (`ADROIT_*_TOKEN` / `ADROIT_ANTHROPIC_KEY`)
+still take precedence at use time.
 
 With no `--token`, GitHub/GitLab try an **OAuth device-flow** login when
 `forge.oauth_client_id` is set (print a URL + code, approve in the browser, store
@@ -839,15 +839,17 @@ editor: vim
 | `forge.oauth_client_id` | string | — | Public OAuth client id for `adroit auth`'s device-flow login (no secret). Unset ⇒ `auth` prompts for a token instead. |
 | `forge.branch_prefix` | string | `adr/` | Branch prefix `new --forge` generates (`adr/0021-…`). |
 | `forge.base_branch` | string | `main` | Base branch PRs target. |
-| `forge.tracker` | `native`\|`jira`\|… | `native` | Issue tracker; `native` = the forge's own issues. `jira` pairs a GitHub/GitLab forge with Jira. |
-| `forge.tracker_project` | string | — | Split-tracker project key (e.g. the Jira project `OPS`). |
-| `forge.tracker_host` | host | — | Split-tracker API host: `your-site.atlassian.net` for Jira Cloud, or a self-hosted host (`jira.example.com`) for Jira Server/Data Center. |
+| `forge.tracker` | `native`\|`jira`\|`linear`\|`monday`\|`gh_issues`\|`gl_issues` | `native` | Issue tracker; `native` = the forge's own issues (`gh_issues`/`gl_issues` are explicit aliases). `jira`/`linear`/`monday` pair a GitHub/GitLab forge with a split tracker. |
+| `forge.tracker_project` | string | — | Split-tracker container: Jira project key (`OPS`), Linear team key (`ENG`), or monday board id. |
+| `forge.tracker_host` | host | — | Split-tracker host: Jira site (`your-site.atlassian.net`, or self-hosted) or monday account subdomain (`acme`). Unused for Linear. |
 
 Tokens are **never** stored in config. They resolve in order: the environment
 (`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +
-`ADROIT_JIRA_EMAIL`), then a local credential file written by `adroit auth`. The
-`forge` feature is in the default build (only a `--no-default-features` core omits
-it). **Jira auth follows the deployment:**
+`ADROIT_JIRA_EMAIL` / `ADROIT_LINEAR_TOKEN` / `ADROIT_MONDAY_TOKEN`), then a local
+credential file written by `adroit auth`. The `forge` feature is in the default
+build (only a `--no-default-features` core omits it). **Linear** and **monday** take
+a single API token, pasted via `adroit auth linear` / `adroit auth monday` (no
+device flow). **Jira auth follows the deployment:**
 set `ADROIT_JIRA_EMAIL` for Jira **Cloud** (Basic `email:token`); omit it for
 Jira **Server/Data Center** and supply a Personal Access Token as
 `ADROIT_JIRA_TOKEN` (Bearer). GitHub/GitLab use the same token whether cloud or
@@ -880,7 +882,7 @@ self-hosted — only `forge.host` changes. The integration is opt-in per command
   static-site shape (`static`/`mdbook`/`mkdocs`/`hugo`/`docusaurus`/`jekyll`;
   core/offline); `adroit notify <id>` posts to a Slack/Teams webhook
   (`ADROIT_NOTIFY_WEBHOOK`).
-- `adroit auth <github|gitlab|jira> [--token <T>] [--email <E>]` saves a token to
+- `adroit auth <github|gitlab|jira|linear|monday> [--token <T>] [--email <E>]` saves a token to
   a `0600` `credentials.yaml` beside the config (prompts if `--token` is omitted),
   so you don't have to re-export an env var each session. Environment variables
   still take precedence; `--email` stores the Jira account email.

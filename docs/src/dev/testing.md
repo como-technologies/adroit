@@ -24,7 +24,7 @@ the approach behind these suites and where bugs tend to hide, see
 | Coverage-guided fuzz | `tests/fuzz_parsers.rs` (bolero) | same parser laws, coverage-guided under `cargo bolero` | ~1s |
 | Config precedence | `tests/config_precedence.rs` | a setting resolves flag > env > `.env` > `config.yaml` > default | fast |
 | `date_source=git` | `tests/date_source_git.rs` | the git-history timeline reconstruction is correct on real git repos | ~0.5s |
-| Forge fault-injection | `tests/forge_faults.rs` (`forge`; default build) | the GitHub/GitLab/Jira HTTP adapters never panic on hostile responses | ~1s |
+| Forge fault-injection | `tests/forge_faults.rs` (`forge`; default build) | the GitHub/GitLab/Jira/Linear/monday HTTP adapters never panic on hostile responses | ~1s |
 | Forge CLI graceful | `tests/forge_cli.rs` (`forge`; default build) | a down/inactive forge keeps the local ADR (never loses it) | ~0.1s |
 | Web security | `src/serve/mod.rs` tests (`--features web`) | the dashboard's markdown renderer can't be XSS'd; the dir picker can't crash | ~0.5s |
 

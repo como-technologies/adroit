@@ -187,9 +187,15 @@ pub enum TrackerProvider {
     /// The forge's own issue tracker (default).
     #[default]
     Native,
+    /// Jira (`tracker_project` = project key, `tracker_host` = site host).
     Jira,
+    /// Linear (`tracker_project` = team key; `tracker_host` unused).
     Linear,
+    /// monday.com (`tracker_project` = board id, `tracker_host` = account subdomain).
+    Monday,
+    /// Explicit alias of `native` for a GitHub forge's own Issues.
     GhIssues,
+    /// Explicit alias of `native` for a GitLab forge's own Issues.
     GlIssues,
 }
 
@@ -221,11 +227,12 @@ pub struct ForgeConfig {
     pub base_branch: String,
     /// Issue tracker (default `native` = the forge's own issues).
     pub tracker: TrackerProvider,
-    /// Project key/id for a **split** tracker (e.g. the Jira project `OPS`).
-    /// Unused when `tracker = native`.
+    /// Container id for a **split** tracker — Jira project key (`OPS`), Linear
+    /// team key (`ENG`), or monday board id. Unused when `tracker = native`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker_project: Option<String>,
-    /// API host for a split tracker (e.g. `your-site.atlassian.net`).
+    /// API/site host for a split tracker — Jira site (`your-site.atlassian.net`)
+    /// or monday account subdomain (`acme`). Unused for Linear (single host).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker_host: Option<String>,
     /// API token — env-only, never persisted (`#[serde(skip)]`). Populated at
@@ -613,7 +620,7 @@ impl Config {
             "forge.tracker" => {
                 self.forge.get_or_insert_with(ForgeConfig::default).tracker = value
                     .parse()
-                    .map_err(|_| bad("tracker (native|jira|linear|gh_issues|gl_issues)"))?
+                    .map_err(|_| bad("tracker (native|jira|linear|monday|gh_issues|gl_issues)"))?
             }
             "forge.tracker_project" => {
                 self.forge
@@ -1514,6 +1521,12 @@ mod tests {
             Some("como-technologies/adroit")
         );
         assert_eq!(c.get_str("forge.tracker").as_deref(), Some("jira"));
+        // The split trackers + explicit native aliases round-trip; unknown errors.
+        for t in ["linear", "monday", "native", "gh_issues", "gl_issues"] {
+            c.set_str("forge.tracker", t).unwrap();
+            assert_eq!(c.get_str("forge.tracker").as_deref(), Some(t));
+        }
+        assert!(c.set_str("forge.tracker", "asana").is_err());
         assert!(c.set_str("forge.provider", "bitbucket").is_err());
         // The token is never a config key (env-only).
         assert!(c.set_str("forge.token", "secret").is_err());

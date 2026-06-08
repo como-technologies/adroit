@@ -74,7 +74,7 @@ Providers grouped by seam — shipped, plus candidates (each a contained add):
 | Seam | Shipped | Candidates |
 |---|---|---|
 | **Repo / PR host** (`Forge`) | GitHub, GitLab | Gitea / Forgejo, Bitbucket |
-| **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, native (files-only) | Linear ([#12](https://github.com/como-technologies/adroit/issues/12)) |
+| **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, Linear + monday.com ([#12](https://github.com/como-technologies/adroit/issues/12)), native | Azure DevOps Boards, Asana |
 | **Publish target** (`Publisher`) | static, mdBook, MkDocs, Hugo, Docusaurus, Jekyll ([#8](https://github.com/como-technologies/adroit/issues/8)) | — (Confluence / Notion *hosting* is out of scope) |
 
 Per-provider capability deepens behind the same traits — reviewer @-mentions, review

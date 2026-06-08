@@ -2245,9 +2245,13 @@ fn cmd_auth(
     email: Option<String>,
 ) -> Result<()> {
     // `anthropic` stores the AI key in the same keychain/file store (read by
-    // `config::anthropic_key`); device flow only applies to github/gitlab.
-    if !matches!(provider, "github" | "gitlab" | "jira" | "anthropic") {
-        anyhow::bail!("provider must be one of: github, gitlab, jira, anthropic");
+    // `config::anthropic_key`); device flow only applies to github/gitlab — the
+    // split trackers (jira/linear/monday) are token-only.
+    if !matches!(
+        provider,
+        "github" | "gitlab" | "jira" | "linear" | "monday" | "anthropic"
+    ) {
+        anyhow::bail!("provider must be one of: github, gitlab, jira, linear, monday, anthropic");
     }
     let token = match token {
         Some(t) => t,
@@ -2402,22 +2406,43 @@ fn cmd_init(store: &Store, print_only: bool, yes: bool) -> Result<()> {
     let (tracker, tracker_project, tracker_host) = if yes {
         (config::TrackerProvider::Native, None, None)
     } else {
-        let choices = ["native (the forge's own issues)", "jira"];
+        let choices = [
+            "native (the forge's own issues)",
+            "jira",
+            "linear",
+            "monday",
+        ];
         let idx = Select::new()
             .with_prompt("Issue tracker")
             .items(choices)
             .default(0)
             .interact()?;
-        if idx == 1 {
-            let key: String = Input::new()
-                .with_prompt("Jira project key (e.g. OPS)")
-                .interact_text()?;
-            let h: String = Input::new()
-                .with_prompt("Jira host (site.atlassian.net, or a self-hosted host)")
-                .interact_text()?;
-            (config::TrackerProvider::Jira, Some(key), Some(h))
-        } else {
-            (config::TrackerProvider::Native, None, None)
+        match idx {
+            1 => {
+                let key: String = Input::new()
+                    .with_prompt("Jira project key (e.g. OPS)")
+                    .interact_text()?;
+                let h: String = Input::new()
+                    .with_prompt("Jira host (site.atlassian.net, or a self-hosted host)")
+                    .interact_text()?;
+                (config::TrackerProvider::Jira, Some(key), Some(h))
+            }
+            2 => {
+                let key: String = Input::new()
+                    .with_prompt("Linear team key (e.g. ENG)")
+                    .interact_text()?;
+                (config::TrackerProvider::Linear, Some(key), None)
+            }
+            3 => {
+                let board: String = Input::new()
+                    .with_prompt("monday board id (numeric)")
+                    .interact_text()?;
+                let sub: String = Input::new()
+                    .with_prompt("monday account subdomain (e.g. acme for acme.monday.com)")
+                    .interact_text()?;
+                (config::TrackerProvider::Monday, Some(board), Some(sub))
+            }
+            _ => (config::TrackerProvider::Native, None, None),
         }
     };
 

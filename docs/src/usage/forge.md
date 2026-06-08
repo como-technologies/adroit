@@ -165,11 +165,26 @@ Every `--forge` action accepts `--dry-run` (preview) and `--yes` (apply); withou
 
 ## Issue trackers
 
-By default the tracker is the forge's **native** issues. To pair a GitHub/GitLab
-forge with a separate tracker, set `forge.tracker` (e.g. `jira`) plus
-`forge.tracker_project` and `forge.tracker_host`, and provide that tracker's token
-via `adroit auth jira` / `ADROIT_JIRA_TOKEN` (with `ADROIT_JIRA_EMAIL` for Jira
-Cloud). The full key list is in the [forge config reference](../reference/cli.md#configuration).
+By default the tracker is the forge's **native** issues (`forge.tracker = native`;
+`gh_issues` / `gl_issues` are explicit aliases of the same — the forge's own
+Issues, no separate adapter). To pair a GitHub/GitLab forge's **PR/MR** side with a
+**separate** issue tracker, set `forge.tracker` and the tracker's location keys,
+then provide its token. The decision PR still runs on the forge; only the *issue*
+side moves to the chosen tracker.
+
+| `forge.tracker` | `forge.tracker_project` | `forge.tracker_host` | Token (env / `adroit auth …`) |
+|---|---|---|---|
+| `jira` | project key (`OPS`) | site host (`acme.atlassian.net`, or self-hosted) | `ADROIT_JIRA_TOKEN` (+ `ADROIT_JIRA_EMAIL` for Cloud) |
+| `linear` | team key (`ENG`) | — (single host) | `ADROIT_LINEAR_TOKEN` |
+| `monday` | board id (numeric) | account subdomain (`acme` → `acme.monday.com`) | `ADROIT_MONDAY_TOKEN` |
+
+All three drive the same lifecycle — `new --forge` files an issue, `set-status
+accepted` / `rejected` transitions it (Done / Won't-do), `supersede` comments on +
+closes it. **Linear** and **monday** speak GraphQL; **Linear** files to a *team* and
+maps status to its workflow-state types (`completed` / `canceled`), while **monday**
+files an *item* to a board and matches a Status-column label. Tokens are paste-only
+(`adroit auth linear` / `adroit auth monday`); device-flow login is GitHub/GitLab
+only. The full key list is in the [forge config reference](../reference/cli.md#configuration).
 
 ## In CI
 

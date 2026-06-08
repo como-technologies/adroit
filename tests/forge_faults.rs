@@ -1,7 +1,9 @@
 //! Forge fault-injection for the hardening blitz (requires `--features forge`).
 //!
-//! Every forge adapter (GitHub / GitLab / Jira) parses untrusted HTTP responses
-//! from a third-party API. This drives each adapter's `Forge` + `Tracker` methods
+//! Every forge adapter (GitHub / GitLab / Jira / Linear / monday) parses
+//! untrusted HTTP responses from a third-party API (the GraphQL trackers — Linear,
+//! monday — likewise: a garbage `{data,errors}` body must never panic). This
+//! drives each adapter's `Forge` + `Tracker` methods
 //! over a `HostileTransport` that returns arbitrary status codes and malformed /
 //! truncated / wrong-typed / oversized bodies (plus an injected connection
 //! failure), and asserts the adapters **never panic** and always return a
@@ -20,6 +22,8 @@ use std::sync::Arc;
 use adroit::forge::github::Github;
 use adroit::forge::gitlab::Gitlab;
 use adroit::forge::jira::Jira;
+use adroit::forge::linear::Linear;
+use adroit::forge::monday::Monday;
 use adroit::forge::{Forge, ForgeError, HttpResponse, HttpTransport, PrDraft, Tracker, Transition};
 
 use proptest::prelude::*;
@@ -119,9 +123,16 @@ proptest! {
         hammer_forge(&gitlab);
         hammer_tracker(&gitlab);
 
-        // Jira is only ever wired as a Tracker — its `Forge` impl is an
-        // intentional `unreachable!` guard, so we exercise only the tracker side.
+        // Jira / Linear / monday are tracker-only (no `Forge` impl), so we
+        // exercise only the tracker side. The GraphQL trackers (Linear, monday)
+        // make multiple round-trips per verb against the same hostile body.
         let jira = Jira::with_transport("https://jira.example.com", "PROJ", transport.clone());
         hammer_tracker(&jira);
+
+        let linear = Linear::with_transport("ENG", transport.clone());
+        hammer_tracker(&linear);
+
+        let monday = Monday::with_transport("acme", "123", transport.clone());
+        hammer_tracker(&monday);
     }
 }

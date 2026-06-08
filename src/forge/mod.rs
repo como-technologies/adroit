@@ -23,6 +23,8 @@ use crate::config::{Config, ForgeConfig, Provider, TrackerProvider};
 pub mod github;
 pub mod gitlab;
 pub mod jira;
+pub mod linear;
+pub mod monday;
 pub mod noop;
 pub mod oauth;
 
@@ -302,11 +304,13 @@ pub fn open(cfg: &ForgeConfig) -> Adapters {
     };
     let tracker = match cfg.tracker {
         TrackerProvider::Jira => jira::open(cfg),
-        // Linear isn't implemented yet; fall back to the forge's native tracker.
+        TrackerProvider::Linear => linear::open(cfg),
+        TrackerProvider::Monday => monday::open(cfg),
+        // `native` (and the explicit `gh_issues` / `gl_issues` aliases) file to
+        // the forge's own issue tracker — there's no separate adapter to open.
         TrackerProvider::Native | TrackerProvider::GhIssues | TrackerProvider::GlIssues => {
             native_tracker
         }
-        TrackerProvider::Linear => native_tracker,
     };
     (forge, tracker)
 }
