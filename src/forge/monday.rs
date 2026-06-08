@@ -190,6 +190,15 @@ fn pick_status_label(columns: &Value, to: Transition) -> Option<(String, String)
         })
 }
 
+/// The id of the board's first **date** column (monday's native due-date field).
+fn first_date_col(columns: &Value) -> Option<String> {
+    columns
+        .as_array()?
+        .iter()
+        .find(|c| c["type"].as_str() == Some("date"))
+        .and_then(|c| c["id"].as_str().map(str::to_string))
+}
+
 /// Whether a status label's text reads as a closed (done- or wontfix-) state.
 fn label_is_closed(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
@@ -254,6 +263,27 @@ impl Tracker for Monday {
             open,
             url: self.item_url(issue),
         })
+    }
+
+    fn set_due_date(&self, issue: &str, date: Option<&str>) -> Result<(), ForgeError> {
+        // monday has no fixed due-date field; set the board's first `date` column
+        // (the simple value is `YYYY-MM-DD`; an empty string clears it).
+        let data = self.gql(BOARD_COLUMNS, json!({ "ids": [self.board] }))?;
+        match first_date_col(&data["boards"][0]["columns"]) {
+            Some(col) => self
+                .gql(
+                    SET_STATUS,
+                    json!({ "board": self.board, "item": issue, "col": col, "val": date.unwrap_or_default() }),
+                )
+                .map(drop),
+            None => {
+                eprintln!(
+                    "adroit: no monday date column on board {}; left unchanged",
+                    self.board
+                );
+                Ok(())
+            }
+        }
     }
 
     fn describe(&self) -> String {
@@ -379,5 +409,25 @@ mod tests {
             m.create_issue("t", "b").unwrap_err(),
             ForgeError::Api { .. }
         ));
+    }
+
+    #[test]
+    fn set_due_date_sets_the_first_date_column() {
+        let cols = json!({ "data": { "boards": [ { "columns": [
+            { "id": "status", "type": "status", "settings_str": "{}" },
+            { "id": "date4", "type": "date", "settings_str": "{}" }
+        ] } ] } })
+        .to_string();
+        let (m, f) = monday(vec![
+            (200, cols),
+            (
+                200,
+                r#"{"data":{"change_simple_column_value":{"id":"42"}}}"#.into(),
+            ),
+        ]);
+        m.set_due_date("42", Some("2026-06-20")).unwrap();
+        let bodies = f.bodies.lock().unwrap();
+        assert!(bodies[1].contains("date4"), "got: {}", bodies[1]);
+        assert!(bodies[1].contains("2026-06-20"), "got: {}", bodies[1]);
     }
 }

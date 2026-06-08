@@ -69,7 +69,9 @@ pub struct DeviceCode {
 pub enum Poll {
     Token(String),
     Pending,
-    SlowDown,
+    /// Rate-limited; carries GitHub's new minimum poll `interval` (0 if it didn't
+    /// send one — the caller then applies the spec's `+5`).
+    SlowDown(u64),
     Denied,
     Expired,
     Other(String),
@@ -173,7 +175,7 @@ pub fn poll_token(
     }
     Ok(match v["error"].as_str() {
         Some("authorization_pending") => Poll::Pending,
-        Some("slow_down") => Poll::SlowDown,
+        Some("slow_down") => Poll::SlowDown(v["interval"].as_u64().unwrap_or(0)),
         Some("expired_token") => Poll::Expired,
         Some("access_denied") => Poll::Denied,
         Some(other) => Poll::Other(other.to_string()),
@@ -188,33 +190,59 @@ pub fn poll_token(
 
 /// Step 2 (loop): poll until the token is granted, denied, or expired. `sleep` is
 /// injected so tests run instantly; production passes `std::thread::sleep`.
+/// `on_poll` observes each poll outcome (an observability hook — production prints
+/// it under `ADROIT_DEBUG`; tests pass a no-op).
 pub fn poll_until(
     transport: &dyn HttpTransport,
     token_url: &str,
     client_id: &str,
     dc: &DeviceCode,
     sleep: impl Fn(Duration),
+    on_poll: impl Fn(&Poll),
 ) -> Result<String, ForgeError> {
-    let mut interval = dc.interval.max(1);
+    // Poll a hair above GitHub's stated minimum so the very first request doesn't
+    // sit on the interval boundary (clock skew / request latency there reads as
+    // "too fast" and draws a spurious `slow_down`).
+    let mut interval = dc.interval.max(1) + 1;
     let mut elapsed = 0u64;
+    let mut slow_downs = 0u32;
     loop {
         sleep(Duration::from_secs(interval));
         elapsed += interval;
-        match poll_token(transport, token_url, client_id, &dc.device_code)? {
+        let outcome = poll_token(transport, token_url, client_id, &dc.device_code)?;
+        on_poll(&outcome);
+        match outcome {
             Poll::Token(t) => return Ok(t),
-            Poll::Pending => {}
-            Poll::SlowDown => interval += 5, // back off per the spec
+            Poll::Pending => slow_downs = 0,
+            Poll::SlowDown(suggested) => {
+                // Honor the new minimum GitHub hands back; else apply the spec's +5.
+                interval = suggested.max(interval + 5);
+                slow_downs += 1;
+                // Repeated `slow_down` *while we're backing off* means GitHub is
+                // rate-limiting the device-flow endpoint (typically too many device
+                // codes requested recently) and won't hand over the token soon —
+                // bail with an actionable message rather than dotting until expiry.
+                if slow_downs >= 5 {
+                    return Err(ForgeError::OAuth(
+                        "GitHub keeps returning `slow_down` (rate-limiting the device-flow poll) — \
+                         too many device codes requested recently. Wait several minutes, then \
+                         re-run `adroit auth github`."
+                            .to_string(),
+                    ));
+                }
+            }
             Poll::Denied => return Err(ForgeError::OAuth("login was denied".to_string())),
             Poll::Expired => {
                 return Err(ForgeError::OAuth(
-                    "the device code expired — re-run `adroit auth`".to_string(),
+                    "the device code expired — re-run `adroit auth`, or pass `--token <PAT>`"
+                        .to_string(),
                 ));
             }
             Poll::Other(e) => return Err(ForgeError::OAuth(e)),
         }
         if elapsed >= dc.expires_in {
             return Err(ForgeError::OAuth(
-                "timed out waiting for authorization".to_string(),
+                "timed out waiting for authorization — re-run, or pass `--token <PAT>`".to_string(),
             ));
         }
     }
@@ -228,10 +256,18 @@ pub fn device_login(
     client_id: &str,
     announce: impl Fn(&DeviceCode),
     sleep: impl Fn(Duration),
+    on_poll: impl Fn(&Poll),
 ) -> Result<String, ForgeError> {
     let dc = request_device_code(transport, &endpoints.device_url, client_id, endpoints.scope)?;
     announce(&dc);
-    poll_until(transport, &endpoints.token_url, client_id, &dc, sleep)
+    poll_until(
+        transport,
+        &endpoints.token_url,
+        client_id,
+        &dc,
+        sleep,
+        on_poll,
+    )
 }
 
 #[cfg(test)]
@@ -365,7 +401,9 @@ mod tests {
                 Poll::Token("gho_TOKEN".into()),
             ),
             (r#"{"error":"authorization_pending"}"#, Poll::Pending),
-            (r#"{"error":"slow_down"}"#, Poll::SlowDown),
+            (r#"{"error":"slow_down"}"#, Poll::SlowDown(0)),
+            // GitHub usually sends the new minimum interval alongside slow_down.
+            (r#"{"error":"slow_down","interval":10}"#, Poll::SlowDown(10)),
             (r#"{"error":"access_denied"}"#, Poll::Denied),
             (r#"{"error":"expired_token"}"#, Poll::Expired),
         ];
@@ -394,6 +432,7 @@ mod tests {
             "cid",
             |dc| announced.borrow_mut().push_str(&dc.user_code),
             no_sleep,
+            |_| {},
         )
         .unwrap();
         assert_eq!(token, "gho_OK");
@@ -411,14 +450,35 @@ mod tests {
         };
         // Denied → Auth error.
         let denied = Fake::new(vec![(200, r#"{"error":"access_denied"}"#)]);
-        assert!(poll_until(&denied, "u", "cid", &dc, no_sleep).is_err());
+        assert!(poll_until(&denied, "u", "cid", &dc, no_sleep, |_| {}).is_err());
         // Always pending past expiry → timeout error (3 polls of interval 1).
         let pending = Fake::new(vec![
             (200, r#"{"error":"authorization_pending"}"#),
             (200, r#"{"error":"authorization_pending"}"#),
             (200, r#"{"error":"authorization_pending"}"#),
         ]);
-        assert!(poll_until(&pending, "u", "cid", &dc, no_sleep).is_err());
+        assert!(poll_until(&pending, "u", "cid", &dc, no_sleep, |_| {}).is_err());
+    }
+
+    #[test]
+    fn poll_until_bails_on_repeated_slow_down() {
+        // GitHub rate-limiting every poll (`slow_down`) must end in an actionable
+        // error, not an indefinite loop until the code expires.
+        let dc = DeviceCode {
+            device_code: "DC".into(),
+            user_code: "U".into(),
+            verification_uri: "v".into(),
+            interval: 1,
+            expires_in: 99999,
+        };
+        let slow = Fake::new(vec![(200, r#"{"error":"slow_down"}"#); 6]);
+        let err = poll_until(&slow, "u", "cid", &dc, no_sleep, |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("slow_down") || err.contains("rate-limit"),
+            "got: {err}"
+        );
     }
 
     #[test]

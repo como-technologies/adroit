@@ -187,6 +187,16 @@ impl Tracker for Jira {
         })
     }
 
+    fn set_due_date(&self, issue: &str, date: Option<&str>) -> Result<(), ForgeError> {
+        // Jira's native `duedate` field (YYYY-MM-DD); `null` clears it.
+        self.call(
+            "PUT",
+            &format!("issue/{issue}"),
+            Some(json!({ "fields": { "duedate": date } })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("jira:{}", self.project)
     }
@@ -304,5 +314,13 @@ mod tests {
             r#"{"fields":{"status":{"statusCategory":{"key":"done"}}}}"#,
         )]);
         assert!(!j.issue_state("OPS-1").unwrap().open);
+    }
+
+    #[test]
+    fn set_due_date_updates_the_duedate_field() {
+        // PUT /issue/OPS-1 returns 204 No Content; a matching route confirms it.
+        let j = jira(&[("PUT /issue/OPS-1", 204, "")]);
+        assert!(j.set_due_date("OPS-1", Some("2026-06-20")).is_ok());
+        assert!(j.set_due_date("OPS-1", None).is_ok()); // clear
     }
 }

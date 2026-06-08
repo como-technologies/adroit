@@ -67,6 +67,9 @@ every change must preserve.
 - **New write paths must keep this true** — no hidden persisted state, no mutation
   that changes a file it didn't need to. Guard test `commands_are_idempotent`
   (`tests/cli.rs`) runs the idempotent verbs twice and asserts byte-identical.
+- **`--dry-run` is a true full preview** — mutates nothing (local *or* forge),
+  even without `--forge` (`new --dry-run` allocates no ADR/editor; mutating verbs
+  gate the *local* write on `dry_run`). Guard: `dry_run_changes_nothing`.
 
 ## Build & Test
 
@@ -184,7 +187,7 @@ mtime/authored dates, no timeline). `query::open_history` centralizes this.
 
 "Today" (the `date` scheme's `YYYYMMDD-` slug + review-due math) comes from
 `config::today_override()` then the system clock: a **test-only** `ADROIT_TODAY` (ISO
-`YYYY-MM-DD`) pins it for tests/CI; unset, unchanged. Distinct from `ADROIT_DATE_SOURCE`.
+`YYYY-MM-DD`) pins it for tests/CI; unset, unchanged.
 
 ## Interactive TUI (`tui` feature)
 
@@ -311,22 +314,21 @@ key to its `ADROIT_*` var. `config show` reports each key's resolved value + sou
 (`upsert_env_file`). Keys include `relink_scope` (`all`/`self`/`none`, env
 `ADROIT_RELINK_SCOPE`, flag `--relink-scope`).
 
-Templates: `src/template.rs` (built-in `madr` + `nygard`, plus custom file/`templates_dir`,
-repo-local `adr-template.md` preferred). SUMMARY.md regeneration: `src/index.rs`.
+Templates: `src/template.rs` (`madr`/`nygard` + custom file/`templates_dir`; a repo-local
+`adr-template.md` wins). SUMMARY.md regeneration: `src/index.rs`.
 
 `adroit review <number>` generates a review-kickoff doc from the built-in `review-kickoff`
-template (business-day date math in `review_window`). Pure generation, no git. Config
-`review_days` (3) + `review_quorum` (3) supply defaults; `--days`/`--quorum`/`--output`
-override.
+template (business-day math in `review_window`). Pure generation, no git. Config `review_days`
+(3) + `review_quorum` (3) supply defaults; `--days`/`--quorum`/`--output` override.
 
 ### Supersession round-trip
 
 Both directions survive a read in BOTH profiles. Markdown: `format::parse_status_region`
 parses the `## Status` region — `Superseded by [ADR-NNNN](...)` → `superseded_by`, `Supersedes
 [ADR-NNNN](...)` → `supersedes` (tolerant of a bare `ADR-NNNN` + optional `>` banner).
-Frontmatter: optional YAML fields (`skip_serializing_if`). `query::graph` collapses the two
-reciprocal views into one `Supersedes` edge (newer → older). The `Adr` model keeps them as
-`Option<Number>`; `AdrSummary.supersedes` is a `Vec<u32>`.
+Frontmatter: optional YAML fields. `query::graph` collapses the two reciprocal views into one
+`Supersedes` edge (newer → older). The `Adr` model keeps them as `Option<Number>`;
+`AdrSummary.supersedes` is a `Vec<u32>`.
 
 ### Cross-ADR link integrity (`src/links.rs` + `Store::relink`)
 
@@ -402,8 +404,8 @@ on `forge`.
 
 **Two roles, trait objects.** `src/forge/mod.rs` defines `Forge` (PR/MR host) + `Tracker`
 (issue host); a *same-system* provider implements both over one client + token
-(`forge/github.rs`: `Github` behind `Arc`, `ADROIT_GITHUB_TOKEN`; GitLab the same shape), a
-*split* setup uses the separate `tracker`. `forge/noop.rs` is the null-object preview adapter.
+(`forge/{github,gitlab}.rs`, `ADROIT_{GITHUB,GITLAB}_TOKEN`), a *split* setup uses the
+separate `tracker`. `forge/noop.rs` is the null-object preview adapter.
 
 **Clean dispatch (two axes).** Compile-time: `#[cfg(feature="forge")]` lives only on the
 `mod` line in `lib.rs`, the `src/forge_hook.rs` facade (twin real/no-op defs), and the
@@ -426,7 +428,11 @@ dirty/diverged/rejected push leaves the move local with a warning). `set-status
 rejected`/`deprecated` close the PR + mark the issue won't-fix; `supersede` closes the old
 ADR's issue/PR (each orchestration has a testable core with mock/noop adapters). Read-side:
 `check --forge` appends `ProblemKind::ForgeIntegration` warnings; `list --forge` enriches rows
-(`AdrSummary.forge_data`); `review`/`set-review --forge` post a comment via `forge::comment`.
+(`AdrSummary.forge_data`); `review --forge` (`forge::review_kickoff`) posts the kickoff +
+@-mentions `forge.reviewers` + tags a `review-by:<date>` PR label, `set-review --forge`
+(`forge::set_review_deadline`) comments + sets the tracker's native due date — via new
+default-no-op trait methods `Forge::add_label` / `Tracker::set_due_date` (GitHub Issues have
+no due date).
 
 **Providers.** `github` + `gitlab` (same-system Forge+Tracker); `jira` (REST v2), `linear`,
 `monday` are split **Tracker**-only adapters (no `Forge`) chosen by `forge.tracker`. **Linear +
@@ -441,32 +447,29 @@ Cloud Basic `email:token`, Server/DC Bearer PAT. GitHub/GitLab use the same toke
 self-hosted; only `forge.host` changes (GH Enterprise `/api/v3`). `gh_issues`/`gl_issues` alias
 `native`.
 
-**Cross-cutting verbs.** `adroit init` (wizard: detect provider+repo from the git remote
-(`config::parse_remote_url`), pick the tracker, write `forge.*` + optionally `./.env`, an
-`adr-template.md`, a pre-commit `adroit check` hook; `--yes` non-interactive, `--print`
-previews); `adroit publish --to <target>` (render the accepted set via the
-`Publisher` seam (`src/publish/`): `static` (default), `mdbook`, `mkdocs`, `hugo`,
-`docusaurus`, `jekyll`; core/offline, idempotent; a target = one `PublishTarget` arm + module;
-default via `publish_target` / `ADROIT_PUBLISH_TARGET`. adroit **produces** the tree, the
-networked Confluence/Notion push stays the consuming repo's CI); `adroit notify <id>`
-(Slack/Teams webhook); `adroit auth <github|gitlab|jira|linear|monday> [--token] [--email]`
-(resolution = token env →
-credential store → none); `adroit reconcile` syncs local status after out-of-band changes:
-reports drift, and with `--yes` moves a merged PR's ADR to `accepted/` (read-only).
+**Cross-cutting verbs.** `adroit init` (wizard: detect provider+repo from the git remote, pick
+the tracker, write `forge.*` + optionally `./.env`, an
+`adr-template.md`, a pre-commit `adroit check` hook; `--yes`/`--print`); `adroit publish --to
+<target>` (render the accepted set via the `Publisher` seam (`src/publish/`): `static`
+(default), `mdbook`, `mkdocs`, `hugo`, `docusaurus`, `jekyll`; core/offline, idempotent; a
+target = one `PublishTarget` arm + module; default via `publish_target`. adroit **produces**
+the tree, the networked Confluence/Notion push stays the consuming repo's CI); `adroit notify
+<id>` (Slack/Teams webhook); `adroit auth <github|gitlab|jira|linear|monday> [--token]
+[--email]` (token env → credential store → none); `adroit reconcile` syncs local status after
+out-of-band changes (reports drift; `--yes` moves a merged PR's ADR to `accepted/`).
 
 **Read-only dashboard.** Two forge-aware routes, `null`/empty without an active forge (on
 `forge_hook::*` twins): `GET /api/adrs/{id}/forge` feeds `DetailView.vue`'s issue/PR panel;
-`GET /api/forge/summary` (with `AppState.review_quorum`) feeds the dashboard tiles
-(proposed-without-MR, MR-approved-waiting). The dashboard never *writes* to the forge.
+`GET /api/forge/summary` (with `AppState.review_quorum`) feeds the dashboard tiles. The
+dashboard never *writes* to the forge.
 
 **Forge config is repo-scoped, not just global.** `forge.*` is one global config, but the
-dashboard can switch dirs and the CLI runs anywhere — so the active dir may belong to a
-*different* repo than `forge.repo`. `dir_matches_forge(fcfg, dir)` compares the dir's `origin`
-remote to `forge.repo`; a definite mismatch means it doesn't apply. **Every** forge entry
-point guards on it — reads and writes call `skip_dir_mismatch`/`skip_path_mismatch` right
-after the `cfg.forge` check, before `open(fcfg)`, warning once and skipping the forge side
-(mutating verbs keep the local record, touching nothing in the wrong repo). Undeterminable
-cases (no `repo`, or no recognizable remote) assume it applies.
+active dir (the dashboard switches dirs, the CLI runs anywhere) may belong to a *different*
+repo than `forge.repo`. `dir_matches_forge(fcfg, dir)` compares the dir's `origin` remote to
+`forge.repo`; a definite mismatch means it doesn't apply. **Every** forge entry point guards
+on it — reads and writes call `skip_dir_mismatch`/`skip_path_mismatch` after the `cfg.forge`
+check, warning once and skipping the forge side (mutating verbs keep the local record, touching
+nothing in the wrong repo). Undeterminable cases (no `repo` / no recognizable remote) apply.
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `oauth_client_id`,
 `branch_prefix`, `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens
@@ -495,12 +498,10 @@ stay mechanical.
 `CompletionRequest`/`AiError`, the Socratic `Interview` + `build_request`/`draft_body`,
 `AI_MARKER`, the `FakeProvider` stand-in — so the interview flow is unit-testable with no
 network and no `ai` feature. The facade `ai_hook::open_provider(cfg)` resolves `ADROIT_AI_FAKE`
-(offline echo) → the configured rig provider (only when `ai.enabled`, never in a core build) →
-`None`.
+(offline echo) → the rig provider (only when `ai.enabled`, never in a core build) → `None`.
 
 **`ai`-gated** (`src/ai/rig_provider.rs`): `RigProvider` wraps rig (aliased from `rig-core`) —
-Anthropic and Ollama (local) — holding a current-thread tokio runtime, `block_on`-ing rig's
-async agent.
+Anthropic and Ollama (local) — on a current-thread tokio runtime, `block_on`-ing rig's agent.
 
 **`new --interview`** (`run_interview`): asks the fixed `INTERVIEW_QUESTIONS` over **plain
 stdin** (robust on non-TTY/piped), builds a corpus summary, drafts, then **splices**: keeps
@@ -515,22 +516,21 @@ editor; `require_provider` (no fallback). Flow: `new` → `draft` → `edit` →
 **`plan <ID>`**: **read-only** — reads an ADR + corpus, asks for an ordered implementation
 checklist, prints it (or `--out`); `-o json` emits a `view::Plan` envelope
 (`reference`/`title`/`plan`, markdown). Bails (not degrades) with no provider. **`summarize
-<ID>`**: a one-paragraph read-only TL;DR (stdout or `--out`); bails with no provider.
+<ID>`**: a one-paragraph read-only TL;DR (stdout or `--out`).
 
 **`lint <ID>`** (`src/lint.rs`): authoring-quality checks, **distinct from `check`**
 (structural validity). `lint::lint(body)` is the deterministic core — leftover MADR
-placeholders, missing/empty `### Negative Consequences`, `## Considered Options` with <2 items
-— returning `Vec<LintFinding>`. Needs **no AI** (CI-usable); `--ai` appends one advisory
-finding. Exits non-zero on **mechanical** findings only.
+placeholders, missing/empty `### Negative Consequences`, `## Considered Options` with <2 items.
+Needs **no AI** (CI-usable); `--ai` appends one advisory finding. Exits non-zero on
+**mechanical** findings only.
 
 **`related <ID>` / `dedupe <ID>`** (`src/similar.rs`): retrieval but **mechanical — NO AI**:
 TF-IDF cosine over the corpus. `related` excludes ADRs already linked to the target; `dedupe`
-includes them. Read-only.
+includes them.
 
 **`ask "<q>"`**: **mechanical retrieval** (`similar::rank` with the question as a transient
 target) feeds top ADR excerpts to the provider, which answers with citations. Human = answer +
 `(sources: …)` on stderr; `-o json` = `{answer, sources}`. Bails with no provider.
-**Embeddings** retrieval is future (Anthropic has no embeddings API).
 
 **`compose`** (`adroit compose <ID> "<instruction>"`; templates
 `templates/ai/compose.{system,prompt}.md`): instruction-driven (re)drafting — the model returns

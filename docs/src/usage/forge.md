@@ -139,21 +139,32 @@ message includes the provider's own reason.
 
 ```sh
 adroit new "Use PostgreSQL" --forge          # ADR + linked tracker issue + a draft PR
-adroit review 21 --forge                      # post the review-kickoff as a PR/issue comment
+adroit review 21 --forge                      # kickoff comment + @-mention reviewers + deadline label
+adroit set-review 21 2026-06-20 --forge       # comment + set the tracker's native due/target date
 adroit set-status 21 accepted --forge --yes   # verify approvals + CI, merge the PR, close the issue
 ```
 
 - **`new --forge`** creates the ADR, opens a linked **tracker issue** and a
   **draft PR** off an `adr/NNNN-…` branch, and records both URLs in the ADR's
   `## References` section.
-- **`review N --forge`** posts the review-kickoff doc as a comment on the linked
-  issue/PR.
+- **`review N --forge`** opens the ADR for formal review: it **marks the draft
+  PR/MR ready for review** (un-drafts it), posts the review-kickoff doc as a
+  comment, **@-mentions the reviewer pool** (`forge.reviewers`), and tags the PR/MR
+  with a `review-by:<deadline>` label (the deadline is the review window's last
+  day). (`set-status accepted` also un-drafts before merging, as a safety.)
+- **`set-review N <date> --forge`** comments the deadline **and** sets the
+  tracker's **native due/target date** — Jira due date, GitLab issue due date,
+  Linear target date, or monday's first date column (GitHub Issues have no due
+  date, so it's a no-op there). `--clear` clears it.
 - **`set-status N accepted --forge`** verifies the required approvals + CI, then
   merges the PR and closes the issue; `rejected` / `deprecated` close them. It
   **refuses if the PR is blocked**, and previews unless you pass `--yes`.
 
 Every `--forge` action accepts `--dry-run` (preview) and `--yes` (apply); without
-`--yes` you get a preview, mirroring `adroit migrate`.
+`--yes` you get a preview, mirroring `adroit migrate`. **`--dry-run` is a true full
+preview — it changes nothing, local *or* forge** (so `new --dry-run` creates no ADR
+and opens no editor, and `set-status … --dry-run` doesn't move the file), even
+without `--forge`.
 
 ## Keeping things in sync
 
@@ -175,7 +186,7 @@ side moves to the chosen tracker.
 | `forge.tracker` | `forge.tracker_project` | `forge.tracker_host` | Token (env / `adroit auth …`) |
 |---|---|---|---|
 | `jira` | project key (`OPS`) | site host (`acme.atlassian.net`, or self-hosted) | `ADROIT_JIRA_TOKEN` (+ `ADROIT_JIRA_EMAIL` for Cloud) |
-| `linear` | team key (`ENG`) | — (single host) | `ADROIT_LINEAR_TOKEN` |
+| `linear` | team **key** (`ENG` — the team Identifier, **not** a Linear *Project*) | — (single host) | `ADROIT_LINEAR_TOKEN` |
 | `monday` | board id (numeric) | account subdomain (`acme` → `acme.monday.com`) | `ADROIT_MONDAY_TOKEN` |
 
 All three drive the same lifecycle — `new --forge` files an issue, `set-status

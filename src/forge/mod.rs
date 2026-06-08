@@ -145,6 +145,17 @@ pub trait Forge {
     fn comment_pr(&self, pr: &str, body: &str) -> Result<(), ForgeError>;
     /// Replace a PR's description/body (MR-description sync, relink URL patch).
     fn set_pr_body(&self, pr: &str, body: &str) -> Result<(), ForgeError>;
+    /// Add a label to a PR/MR (best-effort review-deadline marker). Default no-op
+    /// for hosts without a label API; the GitHub/GitLab adapters override it.
+    fn add_label(&self, _pr: &str, _label: &str) -> Result<(), ForgeError> {
+        Ok(())
+    }
+    /// Mark a **draft** PR/MR ready for review (un-draft it), so it can be
+    /// reviewed and merged. Best-effort and idempotent (un-drafting a ready PR is
+    /// a no-op); default no-op for hosts without the concept.
+    fn mark_ready(&self, _pr: &str) -> Result<(), ForgeError> {
+        Ok(())
+    }
     /// Short label for diagnostics (e.g. `github:owner/repo`).
     fn describe(&self) -> String;
 }
@@ -160,6 +171,12 @@ pub trait Tracker {
     fn close_issue(&self, issue: &str) -> Result<(), ForgeError>;
     fn comment_issue(&self, issue: &str, body: &str) -> Result<(), ForgeError>;
     fn issue_state(&self, issue: &str) -> Result<IssueState, ForgeError>;
+    /// Set (`Some`) or clear (`None`) the issue's native due/target date, an ISO
+    /// `YYYY-MM-DD` string. Best-effort; default no-op for trackers without a
+    /// due-date field (e.g. GitHub Issues). Jira/GitLab/Linear/monday override it.
+    fn set_due_date(&self, _issue: &str, _date: Option<&str>) -> Result<(), ForgeError> {
+        Ok(())
+    }
     fn describe(&self) -> String;
 }
 
@@ -201,8 +218,14 @@ impl HttpTransport for UreqTransport {
     ) -> Result<HttpResponse, ForgeError> {
         // ureq 3 reports 4xx/5xx as `Err` by default; disable that so a non-2xx
         // still comes back as a normal response (adapters map 401→Auth, 4xx/5xx→Api).
+        // Bound every request (connect + overall) so a network hang — common on
+        // WSL2, where DNS/connect to a forge can stall — surfaces as a clean
+        // `Offline` error instead of freezing (e.g. the OAuth device-flow poll loop)
+        // with no overall timeout of its own.
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .timeout_connect(Some(std::time::Duration::from_secs(20)))
+            .timeout_global(Some(std::time::Duration::from_secs(60)))
             .build()
             .into();
         let mut builder = ureq::http::Request::builder().method(method).uri(url);
@@ -315,6 +338,35 @@ pub fn open(cfg: &ForgeConfig) -> Adapters {
     (forge, tracker)
 }
 
+/// Warn that the forge integration is inactive, naming the **specific** pieces to
+/// set so the message is actionable (vs. a bare "inactive"): the provider's token
+/// env var + `forge.repo`, plus — when the verb needs the issue side — any split
+/// tracker's own requirements. `action` is the verb-specific tail, e.g.
+/// "skipping the review kickoff".
+fn warn_inactive(fcfg: &ForgeConfig, needs_tracker: bool, action: &str) {
+    let token = match fcfg.provider {
+        Provider::Github => "ADROIT_GITHUB_TOKEN",
+        Provider::Gitlab => "ADROIT_GITLAB_TOKEN",
+        Provider::None => "a forge token",
+    };
+    let tracker = match (needs_tracker, fcfg.tracker) {
+        (true, TrackerProvider::Jira) => {
+            " + the Jira tracker (forge.tracker_host/tracker_project + ADROIT_JIRA_TOKEN)"
+        }
+        (true, TrackerProvider::Linear) => {
+            " + the Linear tracker (forge.tracker_project = team key + ADROIT_LINEAR_TOKEN)"
+        }
+        (true, TrackerProvider::Monday) => {
+            " + the monday tracker (forge.tracker_project = board id, forge.tracker_host = subdomain + ADROIT_MONDAY_TOKEN)"
+        }
+        _ => "",
+    };
+    eprintln!(
+        "adroit: --forge: `{}` integration inactive — set forge.repo + {token}{tracker}; {action}.",
+        fcfg.provider
+    );
+}
+
 /// Whether the forge config plausibly applies to the ADR directory `dir`.
 ///
 /// `forge.*` is a single (global) config, but the dashboard can switch ADR
@@ -381,12 +433,7 @@ pub fn after_new(
     }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
-        eprintln!(
-            "adroit: --forge: the `{}` integration is inactive — set the repo \
-             (`forge.repo`) and an auth token (e.g. ADROIT_GITHUB_TOKEN). Wrote the ADR \
-             locally only.",
-            fcfg.provider
-        );
+        warn_inactive(fcfg, true, "wrote the ADR locally only");
         return Ok(());
     };
     // Optional forge-artifact templates (`<templates_dir>/{issue,pr}.md`), so a
@@ -569,11 +616,7 @@ pub fn before_status_change(
     }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
-        eprintln!(
-            "adroit: --forge: `{}` integration inactive (set forge.repo + a token); \
-             doing the local status change only.",
-            fcfg.provider
-        );
+        warn_inactive(fcfg, true, "doing the local status change only");
         return Ok(true);
     };
     let proceed = run_status_change(
@@ -770,6 +813,11 @@ fn run_status_change(
                         st.ci
                     );
                 }
+                // A draft PR can't be merged — ensure it's ready first (no-op if
+                // `review` already un-drafted it). Best-effort.
+                if let Err(e) = forge.mark_ready(&pr) {
+                    eprintln!("adroit: couldn't mark PR ready before merge ({e})");
+                }
                 match forge.merge_pr(&pr) {
                     Ok(()) => {}
                     Err(e) if e.is_offline() => {
@@ -842,10 +890,7 @@ pub fn on_supersede(
     }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
-        eprintln!(
-            "adroit: --forge: `{}` integration inactive; doing the local supersede only.",
-            fcfg.provider
-        );
+        warn_inactive(fcfg, true, "doing the local supersede only");
         return Ok(true);
     };
     let refs = read_refs(old_path);
@@ -873,14 +918,46 @@ pub fn on_supersede(
     Ok(true)
 }
 
-/// Post `body` as a comment on an ADR's linked issue **and** PR (shared by
-/// `review` → kickoff and `set-review` → deadline mirror). Opt-in, dry-run/--yes
-/// gated, graceful-offline.
-pub fn comment(
+/// Comment `body` on whichever of the ADR's linked PR + issue exist (best-effort,
+/// warn-and-continue). Shared by the `review`/`set-review` forge paths.
+fn comment_both(forge: &dyn Forge, tracker: &dyn Tracker, refs: &ForgeRefs, body: &str) {
+    if let Some((pr, _)) = &refs.pr
+        && let Err(e) = forge.comment_pr(pr, body)
+    {
+        eprintln!("adroit: couldn't comment on PR ({e})");
+    }
+    if let Some((issue, _)) = &refs.issue
+        && let Err(e) = tracker.comment_issue(issue, body)
+    {
+        eprintln!("adroit: couldn't comment on issue ({e})");
+    }
+}
+
+/// A ` @handle` mention suffix for each configured reviewer (a missing `@` is
+/// added); empty when no reviewers are configured.
+fn mention_suffix(reviewers: &[String]) -> String {
+    reviewers
+        .iter()
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+        .map(|r| {
+            if r.starts_with('@') {
+                format!(" {r}")
+            } else {
+                format!(" @{r}")
+            }
+        })
+        .collect()
+}
+
+/// `review --forge`: post the kickoff `body` on the linked issue **and** PR with
+/// the reviewer pool @-mentioned, and tag the PR with a `review-by:<deadline>`
+/// label. Opt-in, dry-run/--yes gated, graceful-offline.
+pub fn review_kickoff(
     cfg: &Config,
     path: &std::path::Path,
     body: &str,
-    label: &str,
+    deadline: &str,
     dry_run: bool,
     yes: bool,
 ) -> anyhow::Result<()> {
@@ -892,37 +969,105 @@ pub fn comment(
     }
     let (forge, tracker) = open(fcfg);
     let (Some(forge), Some(tracker)) = (forge, tracker) else {
-        eprintln!(
-            "adroit: --forge: `{}` integration inactive; skipping the {label} comment.",
-            fcfg.provider
-        );
+        warn_inactive(fcfg, true, "skipping the review kickoff");
         return Ok(());
     };
     let refs = read_refs(path);
     if refs.issue.is_none() && refs.pr.is_none() {
-        return Ok(()); // nothing linked to comment on
+        eprintln!(
+            "adroit: --forge: this ADR has no linked issue/PR in `## References` \
+             (create one with `new --forge`); nothing to post."
+        );
+        return Ok(());
     }
+    let label = format!("review-by:{deadline}");
+    let mentions = mention_suffix(&fcfg.reviewers);
     let apply = yes && !dry_run;
     if !apply {
-        println!("Forge plan ({label}):");
+        println!("Forge plan (review kickoff):");
         if let Some((_, pu)) = &refs.pr {
+            println!("  - mark PR ready for review (un-draft)");
             println!("  - comment on PR {pu}");
+            println!("  - label PR `{label}`");
         }
         if let Some((_, iu)) = &refs.issue {
             println!("  - comment on issue {iu}");
         }
+        if !mentions.is_empty() {
+            println!("  - @-mention reviewers:{mentions}");
+        }
         println!("\nPreview — re-run with --yes to apply.");
         return Ok(());
     }
-    if let Some((pr, _)) = &refs.pr
-        && let Err(e) = forge.comment_pr(pr, body)
-    {
-        eprintln!("adroit: couldn't comment on PR ({e})");
+    let full = if mentions.is_empty() {
+        body.to_string()
+    } else {
+        format!("{body}\n\ncc:{mentions}")
+    };
+    comment_both(forge.as_ref(), tracker.as_ref(), &refs, &full);
+    if let Some((pr, _)) = &refs.pr {
+        // Opening for formal review → un-draft the PR so it can be reviewed + merged.
+        if let Err(e) = forge.mark_ready(pr) {
+            eprintln!("adroit: couldn't mark PR ready for review ({e})");
+        }
+        if let Err(e) = forge.add_label(pr, &label) {
+            eprintln!("adroit: couldn't label PR ({e})");
+        }
     }
+    Ok(())
+}
+
+/// `set-review --forge`: mirror the deadline to the linked issue/PR — post `note`
+/// as a comment **and** set the tracker's native due/target date (`date`, `None`
+/// clears). Opt-in, dry-run/--yes gated, graceful-offline.
+pub fn set_review_deadline(
+    cfg: &Config,
+    path: &std::path::Path,
+    note: &str,
+    date: Option<&str>,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let Some(fcfg) = cfg.forge.as_ref() else {
+        return Ok(());
+    };
+    if skip_path_mismatch(fcfg, path) {
+        return Ok(());
+    }
+    let (forge, tracker) = open(fcfg);
+    let (Some(forge), Some(tracker)) = (forge, tracker) else {
+        warn_inactive(fcfg, true, "skipping the review deadline");
+        return Ok(());
+    };
+    let refs = read_refs(path);
+    if refs.issue.is_none() && refs.pr.is_none() {
+        eprintln!(
+            "adroit: --forge: this ADR has no linked issue/PR in `## References` \
+             (create one with `new --forge`); nothing to post."
+        );
+        return Ok(());
+    }
+    let apply = yes && !dry_run;
+    if !apply {
+        println!("Forge plan (review deadline):");
+        if let Some((_, pu)) = &refs.pr {
+            println!("  - comment on PR {pu}");
+        }
+        if let Some((id, iu)) = &refs.issue {
+            println!("  - comment on issue {iu}");
+            match date {
+                Some(d) => println!("  - set issue {id} due date → {d}"),
+                None => println!("  - clear issue {id} due date"),
+            }
+        }
+        println!("\nPreview — re-run with --yes to apply.");
+        return Ok(());
+    }
+    comment_both(forge.as_ref(), tracker.as_ref(), &refs, note);
     if let Some((issue, _)) = &refs.issue
-        && let Err(e) = tracker.comment_issue(issue, body)
+        && let Err(e) = tracker.set_due_date(issue, date)
     {
-        eprintln!("adroit: couldn't comment on issue ({e})");
+        eprintln!("adroit: couldn't set issue due date ({e})");
     }
     Ok(())
 }
@@ -945,10 +1090,7 @@ pub fn sync_pr(
     }
     let (forge, _tracker) = open(fcfg);
     let Some(forge) = forge else {
-        eprintln!(
-            "adroit: --forge: `{}` integration inactive; skipping PR sync.",
-            fcfg.provider
-        );
+        warn_inactive(fcfg, false, "skipping PR sync");
         return Ok(true);
     };
     let refs = read_refs(path);
@@ -1181,10 +1323,7 @@ pub fn reconcile(
     }
     let (forge, tracker) = open(fcfg);
     let Some(forge) = forge else {
-        eprintln!(
-            "adroit: --forge: `{}` integration inactive (set forge.repo + a token).",
-            fcfg.provider
-        );
+        warn_inactive(fcfg, false, "skipping reconcile");
         return Ok(());
     };
     run_reconcile(forge.as_ref(), tracker.as_deref(), store, summaries, apply)
@@ -1321,6 +1460,13 @@ mod tests {
     fn open_disabled_provider_yields_no_adapters() {
         let (f, t) = open(&ForgeConfig::default()); // provider = none
         assert!(f.is_none() && t.is_none());
+    }
+
+    #[test]
+    fn mention_suffix_at_prefixes_each_handle_once() {
+        let r = vec!["@alice".to_string(), "bob".to_string(), "  ".to_string()];
+        assert_eq!(mention_suffix(&r), " @alice @bob");
+        assert_eq!(mention_suffix(&[]), "");
     }
 
     #[test]

@@ -295,8 +295,9 @@ pub enum Command {
         #[cfg(feature = "forge")]
         #[arg(long)]
         forge: bool,
-        /// With `--forge`, preview the forge actions without performing them.
-        #[cfg(feature = "forge")]
+        /// Preview only — create no ADR, open no editor, and (with `--forge`)
+        /// preview the forge actions without performing them. A true full
+        /// preview, available in any build (not just `--features forge`).
         #[arg(long)]
         dry_run: bool,
     },
@@ -371,8 +372,8 @@ pub enum Command {
         #[cfg(feature = "forge")]
         #[arg(long)]
         forge: bool,
-        /// With `--forge`, preview the forge actions and make no changes.
-        #[cfg(feature = "forge")]
+        /// Preview only — make no local change, and (with `--forge`) preview the
+        /// forge actions without performing them. Available in any build.
         #[arg(long)]
         dry_run: bool,
         /// With `--forge`, apply (e.g. merge the PR). Without it, preview.
@@ -390,8 +391,8 @@ pub enum Command {
         #[cfg(feature = "forge")]
         #[arg(long)]
         forge: bool,
-        /// With `--forge`, preview the forge actions and make no changes.
-        #[cfg(feature = "forge")]
+        /// Preview only — make no local change, and (with `--forge`) preview the
+        /// forge actions without performing them. Available in any build.
         #[arg(long)]
         dry_run: bool,
         /// With `--forge`, apply. Without it, preview.
@@ -434,12 +435,13 @@ pub enum Command {
         /// Remove the review deadline instead of setting one.
         #[arg(long, conflicts_with = "date")]
         clear: bool,
-        /// Also mirror the deadline as a comment on the ADR's linked issue/PR.
+        /// Also mirror the deadline to the linked issue/PR — a comment plus the
+        /// tracker's native due/target date.
         #[cfg(feature = "forge")]
         #[arg(long)]
         forge: bool,
-        /// With `--forge`, preview the comment without posting.
-        #[cfg(feature = "forge")]
+        /// Preview only — make no local change, and (with `--forge`) preview the
+        /// forge mirror without posting. Available in any build.
         #[arg(long)]
         dry_run: bool,
         /// With `--forge`, post the comment (without it, preview).
@@ -726,11 +728,12 @@ pub enum Command {
         /// human/json result-format selector.
         #[arg(long)]
         out: Option<PathBuf>,
-        /// Also post the kickoff as a comment on the ADR's linked issue/PR.
+        /// Also post the kickoff on the linked issue/PR, @-mention the reviewer
+        /// pool (`forge.reviewers`), and add a `review-by:<date>` PR label.
         #[cfg(feature = "forge")]
         #[arg(long)]
         forge: bool,
-        /// With `--forge`, preview the comment without posting.
+        /// With `--forge`, preview the comment + label without posting.
         #[cfg(feature = "forge")]
         #[arg(long)]
         dry_run: bool,

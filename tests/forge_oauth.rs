@@ -70,6 +70,7 @@ fn device_login_works_end_to_end_over_real_http() {
         "client-id-123",
         |dc| announced.lock().unwrap().push_str(&dc.user_code),
         |_d: Duration| {}, // don't actually sleep between polls
+        |_| {},            // ignore poll outcomes
     )
     .expect("device flow should complete");
 

@@ -1455,6 +1455,45 @@ fn commands_are_idempotent() {
 }
 
 #[test]
+fn dry_run_changes_nothing() {
+    // `--dry-run` is a true full preview: it must leave the repo byte-identical
+    // even **without** `--forge` (the local mutation is gated too, not just the
+    // forge side). No forge is configured here, so this isolates the local path.
+    let dir = TempDir::new().unwrap();
+    let run = |args: &[&str]| adroit(&dir).args(args).assert().success();
+    run(&["new", "First", "--no-edit"]);
+    run(&["new", "Second", "--no-edit"]);
+    run(&["new", "Third", "--no-edit"]);
+
+    let before = snapshot(dir.path());
+    let dry: &[&[&str]] = &[
+        &["new", "Fourth", "--dry-run"], // allocates no number, opens no editor
+        &["set-status", "1", "accepted", "--dry-run"],
+        &["supersede", "2", "3", "--dry-run"],
+        &["set-review", "1", "2030-01-01", "--dry-run"],
+        &["relink", "--dry-run"],
+    ];
+    for argv in dry {
+        run(argv);
+    }
+    assert_eq!(
+        before,
+        snapshot(dir.path()),
+        "every --dry-run verb must leave the repo byte-for-byte unchanged"
+    );
+
+    // And it actually *previews* (not silently no-ops): `new --dry-run` reports
+    // the would-be path and creates nothing.
+    adroit(&dir)
+        .args(["new", "Fourth", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run: would create"));
+    // The repo is still three ADRs — `new --dry-run` allocated nothing.
+    assert_eq!(before, snapshot(dir.path()));
+}
+
+#[test]
 fn migrate_is_idempotent_at_fixpoint() {
     let dir = TempDir::new().unwrap();
     let run = |args: &[&str]| adroit(&dir).args(args).assert().success();
@@ -2280,12 +2319,19 @@ fn new_with_forge_dry_run_previews_plan_without_network() {
         .args(["new", "Adopt Postgres", "--no-edit", "--forge", "--dry-run"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Dry run: would create"))
         .stdout(predicate::str::contains("Forge plan"))
         .stdout(predicate::str::contains("create issue"));
 
-    // Dry run touched nothing beyond the ADR file itself.
-    let body = fs::read_to_string(dir.path().join("proposed/0001-adopt-postgres.md")).unwrap();
-    assert!(!body.contains("## References"));
+    // A true dry run creates nothing — not even the local ADR file.
+    assert!(
+        !dir.path().join("proposed/0001-adopt-postgres.md").exists(),
+        "new --dry-run must not write the ADR"
+    );
+    assert!(
+        snapshot(dir.path()).is_empty(),
+        "new --dry-run must leave the dir untouched"
+    );
 }
 
 #[cfg(feature = "forge")]

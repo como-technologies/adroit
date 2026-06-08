@@ -163,6 +163,16 @@ impl Tracker for Gitlab {
         })
     }
 
+    fn set_due_date(&self, issue: &str, date: Option<&str>) -> Result<(), ForgeError> {
+        // GitLab issues carry a native `due_date` (YYYY-MM-DD); `null` clears it.
+        self.call(
+            "PUT",
+            &format!("projects/{}/issues/{issue}", self.proj()),
+            Some(json!({ "due_date": date })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("gitlab:{}", self.project)
     }
@@ -251,6 +261,41 @@ impl Forge for Gitlab {
             "PUT",
             &format!("projects/{}/merge_requests/{pr}", self.proj()),
             Some(json!({ "description": body })),
+        )
+        .map(drop)
+    }
+
+    fn add_label(&self, pr: &str, label: &str) -> Result<(), ForgeError> {
+        // `add_labels` merges into the MR's labels (creating the label if new).
+        self.call(
+            "PUT",
+            &format!("projects/{}/merge_requests/{pr}", self.proj()),
+            Some(json!({ "add_labels": label })),
+        )
+        .map(drop)
+    }
+
+    fn mark_ready(&self, pr: &str) -> Result<(), ForgeError> {
+        // GitLab drafts an MR via a `Draft:` title prefix — un-draft by removing
+        // it. Skip if it's already ready (idempotent).
+        let v = self.call(
+            "GET",
+            &format!("projects/{}/merge_requests/{pr}", self.proj()),
+            None,
+        )?;
+        if v["draft"].as_bool() == Some(false) {
+            return Ok(());
+        }
+        let title = v["title"].as_str().unwrap_or_default();
+        let ready = title
+            .strip_prefix("Draft: ")
+            .or_else(|| title.strip_prefix("Draft:"))
+            .unwrap_or(title)
+            .trim_start();
+        self.call(
+            "PUT",
+            &format!("projects/{}/merge_requests/{pr}", self.proj()),
+            Some(json!({ "title": ready })),
         )
         .map(drop)
     }
@@ -358,5 +403,43 @@ mod tests {
         assert_eq!(st.approvals, 2);
         assert_eq!(st.ci, CiStatus::Success);
         assert!(!st.merged && st.draft);
+    }
+
+    #[test]
+    fn add_label_updates_the_merge_request() {
+        // A matching route confirms the endpoint+method (a wrong path 404s → Err).
+        let gl = gitlab(&[("PUT /merge_requests/42", 200, "{}")]);
+        assert!(gl.add_label("42", "review-by:2026-06-20").is_ok());
+    }
+
+    #[test]
+    fn set_due_date_updates_the_issue() {
+        let gl = gitlab(&[("PUT /issues/7", 200, "{}")]);
+        assert!(gl.set_due_date("7", Some("2026-06-20")).is_ok());
+        assert!(gl.set_due_date("7", None).is_ok()); // clear
+    }
+
+    #[test]
+    fn mark_ready_strips_the_draft_title() {
+        // GET the draft MR, then PUT the de-prefixed title.
+        let gl = gitlab(&[
+            (
+                "GET /merge_requests/42",
+                200,
+                r#"{"draft":true,"title":"Draft: ADR-0007"}"#,
+            ),
+            ("PUT /merge_requests/42", 200, "{}"),
+        ]);
+        assert!(gl.mark_ready("42").is_ok());
+    }
+
+    #[test]
+    fn mark_ready_is_a_noop_when_already_ready() {
+        let gl = gitlab(&[(
+            "GET /merge_requests/42",
+            200,
+            r#"{"draft":false,"title":"ADR-0007"}"#,
+        )]);
+        assert!(gl.mark_ready("42").is_ok());
     }
 }

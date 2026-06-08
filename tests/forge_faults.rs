@@ -68,6 +68,8 @@ fn hammer_forge(f: &dyn Forge) {
     let _ = f.close_pr("1");
     let _ = f.comment_pr("1", "hello");
     let _ = f.set_pr_body("1", "new body");
+    let _ = f.add_label("1", "review-by:2026-06-20");
+    let _ = f.mark_ready("1");
     let _ = f.describe();
 }
 
@@ -80,6 +82,8 @@ fn hammer_tracker(t: &dyn Tracker) {
     let _ = t.close_issue("1");
     let _ = t.comment_issue("1", "hello");
     let _ = t.issue_state("1");
+    let _ = t.set_due_date("1", Some("2026-06-20"));
+    let _ = t.set_due_date("1", None);
     let _ = t.describe();
 }
 

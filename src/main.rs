@@ -189,12 +189,22 @@ fn main() -> Result<()> {
             interview,
             #[cfg(feature = "forge")]
             forge,
-            #[cfg(feature = "forge")]
             dry_run,
         }) => {
+            // `--forge` only exists in `--features forge` builds; bind it
+            // (default-off) so the rest of the arm is feature-agnostic. `--dry-run`
+            // is a core flag (a true full preview in any build): it creates no ADR,
+            // opens no editor, and only previews any forge actions.
+            #[cfg(feature = "forge")]
+            let forge_on = forge;
+            #[cfg(not(feature = "forge"))]
+            let forge_on = false;
+            let dry = dry_run;
+
             // Duplicate guard (`new` stays non-idempotent — this only catches the
-            // accidental re-run). Aborts before allocating a number.
-            if !dup_guard(&store, &cfg, &title, force)? {
+            // accidental re-run). Aborts before allocating a number; a dry run
+            // warns but never prompts.
+            if !dup_guard(&store, &cfg, &title, force, dry)? {
                 return Ok(());
             }
             let (path, r) = cmd_new(
@@ -203,29 +213,36 @@ fn main() -> Result<()> {
                 &title,
                 template.as_deref(),
                 category.as_deref(),
+                dry,
             )?;
-            println!("Created {}", path.display());
+            println!(
+                "{} {}",
+                if dry {
+                    "Dry run: would create"
+                } else {
+                    "Created"
+                },
+                path.display()
+            );
             // Opt-in AI draft (writes over the template body before the forge
             // hook commits it / the editor opens for review). `degraded` = the
-            // interview was asked for but no provider was available.
-            let degraded = interview && !run_interview(&store, &cfg, &title, &r)?;
-            // Opt-in forge hook (issue + draft PR + ## References). The forge
-            // flags only exist in `--features forge` builds; otherwise the hook
-            // gets disabled flags and no-ops. Runs before the editor so the
-            // populated References are visible.
-            #[cfg(feature = "forge")]
+            // interview was asked for but no provider was available. Skipped on a
+            // dry run (it would write the body).
+            let degraded = !dry && interview && !run_interview(&store, &cfg, &title, &r)?;
+            // Opt-in forge hook (issue + draft PR + ## References), or its preview
+            // under `--dry-run`. Runs before the editor so populated References are
+            // visible.
             let forge_flags = adroit::forge_hook::ForgeFlags {
-                enabled: forge,
-                dry_run,
+                enabled: forge_on,
+                dry_run: dry,
                 yes: false,
             };
-            #[cfg(not(feature = "forge"))]
-            let forge_flags = adroit::forge_hook::ForgeFlags::default();
             adroit::forge_hook::after_new(&cfg, &path, &title, forge_flags)?;
             // Don't bury a degraded-interview warning under the editor: when
             // `--interview` was requested but couldn't run, skip the auto-open so
-            // the message stays on screen (the file is still there to `edit`).
-            if cfg.open_on_new && !no_edit && !degraded {
+            // the message stays on screen (the file is still there to `edit`). A
+            // dry run never opens the editor.
+            if !dry && cfg.open_on_new && !no_edit && !degraded {
                 open_in_editor(editor, &path)?;
             }
         }
@@ -256,7 +273,6 @@ fn main() -> Result<()> {
             status,
             #[cfg(feature = "forge")]
             forge,
-            #[cfg(feature = "forge")]
             dry_run,
             #[cfg(feature = "forge")]
             yes,
@@ -268,7 +284,10 @@ fn main() -> Result<()> {
                 yes,
             };
             #[cfg(not(feature = "forge"))]
-            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                dry_run,
+                ..Default::default()
+            };
             cmd_set_status(&store, &cfg, &id, &status, forge_flags)?;
         }
         Some(Command::Supersede {
@@ -276,7 +295,6 @@ fn main() -> Result<()> {
             old,
             #[cfg(feature = "forge")]
             forge,
-            #[cfg(feature = "forge")]
             dry_run,
             #[cfg(feature = "forge")]
             yes,
@@ -288,7 +306,10 @@ fn main() -> Result<()> {
                 yes,
             };
             #[cfg(not(feature = "forge"))]
-            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                dry_run,
+                ..Default::default()
+            };
             cmd_supersede(
                 &store,
                 &cfg,
@@ -303,7 +324,6 @@ fn main() -> Result<()> {
             clear,
             #[cfg(feature = "forge")]
             forge,
-            #[cfg(feature = "forge")]
             dry_run,
             #[cfg(feature = "forge")]
             yes,
@@ -315,7 +335,10 @@ fn main() -> Result<()> {
                 yes,
             };
             #[cfg(not(feature = "forge"))]
-            let forge_flags = adroit::forge_hook::ForgeFlags::default();
+            let forge_flags = adroit::forge_hook::ForgeFlags {
+                dry_run,
+                ..Default::default()
+            };
             cmd_set_review(
                 &store,
                 &cfg,
@@ -518,7 +541,7 @@ fn store_options(cfg: &Config, format: Option<Format>, layout: Option<Layout>) -
 /// similar ADRs; on a terminal it then prompts to confirm. Returns `false` to
 /// abort (no ADR created). `--force` and non-interactive contexts proceed — `new`
 /// stays non-idempotent by design, so this only catches the accidental re-run.
-fn dup_guard(store: &Store, cfg: &Config, title: &str, force: bool) -> Result<bool> {
+fn dup_guard(store: &Store, cfg: &Config, title: &str, force: bool, dry_run: bool) -> Result<bool> {
     use std::io::{IsTerminal, Write};
     if force {
         return Ok(true);
@@ -577,6 +600,11 @@ fn dup_guard(store: &Store, cfg: &Config, title: &str, force: bool) -> Result<bo
         }
     }
 
+    // A dry run never creates, so there's nothing to confirm — warn and continue
+    // to the preview without prompting.
+    if dry_run {
+        return Ok(true);
+    }
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
         eprint!("Create another ADR with this title anyway? [y/N] ");
         std::io::stderr().flush().ok();
@@ -598,6 +626,7 @@ fn cmd_new(
     title: &str,
     template: Option<&str>,
     category: Option<&str>,
+    dry_run: bool,
 ) -> Result<(std::path::PathBuf, AdrRef)> {
     let mut adr = adroit::adr::Adr::new(title)?;
     adr.status = cfg.default_status;
@@ -628,6 +657,10 @@ fn cmd_new(
         adr.body = adroit::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
     }
 
+    // Dry run: report where it *would* land, write nothing.
+    if dry_run {
+        return Ok((store.target_path(&adr), r));
+    }
     let path = store.write(&mut adr)?;
     Ok((path, r))
 }
@@ -732,7 +765,9 @@ fn cmd_import(
                 slug
             }
         });
-        let (path, r) = cmd_new(store, cfg, &d.title, None, category.as_deref())?;
+        // `import`'s own `dry_run` is handled above (it `continue`s), so this
+        // apply path always writes.
+        let (path, r) = cmd_new(store, cfg, &d.title, None, category.as_deref(), false)?;
         splice_generated(store, &r, &adroit::import::seed_fragment(d))?;
         if let Some(provider) = ai_provider.as_ref() {
             flesh_out_seed(store, &path, &r, &d.title, provider.as_ref())?;
@@ -1155,7 +1190,18 @@ fn cmd_set_status(
     // Opt-in forge pre-step (verify + merge/close before the local move). A
     // false return means "previewed only — don't move"; an error aborts.
     let path = store.find_path_by_ref(&r)?;
-    if !adroit::forge_hook::before_status_change(cfg, &path, new_status, forge)? {
+    // The forge pre-step previews its plan (and stops) when it's a preview; a
+    // `--dry-run` then also skips the *local* move (so `--dry-run` changes nothing
+    // even without `--forge`).
+    let proceed = adroit::forge_hook::before_status_change(cfg, &path, new_status, forge)?;
+    if forge.dry_run {
+        println!(
+            "Dry run: would set {} status to {new_status} (no local changes).",
+            cfg.naming.display(&r)
+        );
+        return Ok(());
+    }
+    if !proceed {
         return Ok(());
     }
     let path = store.set_status_ref(&r, new_status)?;
@@ -1219,7 +1265,15 @@ fn cmd_supersede(
     // return means "previewed only — don't change locally".
     let old_path_pre = store.find_path_by_ref(old)?;
     let new_label = cfg.naming.display(new);
-    if !adroit::forge_hook::on_supersede(cfg, &old_path_pre, &new_label, forge)? {
+    let proceed = adroit::forge_hook::on_supersede(cfg, &old_path_pre, &new_label, forge)?;
+    if forge.dry_run {
+        println!(
+            "Dry run: would supersede {} with {new_label} (no local changes).",
+            cfg.naming.display(old)
+        );
+        return Ok(());
+    }
+    if !proceed {
         return Ok(());
     }
     let old_path = store.supersede(new, old)?;
@@ -1252,18 +1306,33 @@ fn cmd_set_review(
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
         )
     };
-    let path = store.set_review_by_ref(r, review_by)?;
     let id = cfg.naming.display(r);
-    match review_by {
-        Some(rb) => println!("Set {id} review deadline to {rb} ({})", path.display()),
-        None => println!("Cleared {id} review deadline ({})", path.display()),
-    }
-    // Opt-in: mirror the deadline to the linked issue/PR as a comment.
+    // The opt-in forge mirror: a comment plus the tracker's native due/target date
+    // (Jira/GitLab/Linear/monday).
     let note = match review_by {
         Some(rb) => format!("Review deadline for {id} set to **{rb}** (via adroit)."),
         None => format!("Review deadline for {id} cleared (via adroit)."),
     };
-    adroit::forge_hook::comment(cfg, &path, &note, "review deadline", forge)?;
+    let due = if clear { None } else { date };
+    // `--dry-run` writes nothing locally (even without `--forge`); it previews the
+    // local change and the forge mirror.
+    if forge.dry_run {
+        let path = store.find_path_by_ref(r)?;
+        match review_by {
+            Some(rb) => {
+                println!("Dry run: would set {id} review deadline to {rb} (no local changes).")
+            }
+            None => println!("Dry run: would clear {id} review deadline (no local changes)."),
+        }
+        adroit::forge_hook::set_review_deadline(cfg, &path, &note, due, forge)?;
+        return Ok(());
+    }
+    let path = store.set_review_by_ref(r, review_by)?;
+    match review_by {
+        Some(rb) => println!("Set {id} review deadline to {rb} ({})", path.display()),
+        None => println!("Cleared {id} review deadline ({})", path.display()),
+    }
+    adroit::forge_hook::set_review_deadline(cfg, &path, &note, due, forge)?;
     Ok(())
 }
 
@@ -2305,6 +2374,10 @@ fn try_device_login(cfg: &Config, provider: &str) -> Result<Option<String>> {
     let host = fcfg.and_then(|f| f.host.as_deref());
     let endpoints = oauth::endpoints(p, host)
         .ok_or_else(|| anyhow::anyhow!("device flow is not supported for {provider}"))?;
+    // `ADROIT_DEBUG` surfaces each poll outcome + the endpoints/code being used, so a
+    // stuck device flow can be diagnosed (GitHub-side `Pending` vs a transport error).
+    let debug =
+        std::env::var("ADROIT_DEBUG").is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false"));
     let token = oauth::device_login(
         &adroit::forge::UreqTransport,
         &endpoints,
@@ -2312,11 +2385,38 @@ fn try_device_login(cfg: &Config, provider: &str) -> Result<Option<String>> {
         |dc| {
             // Prompts to stderr; the token is never printed.
             eprintln!(
-                "\nTo authorize adroit, open:\n  {}\nand enter the code:  {}\n\nWaiting for authorization…",
-                dc.verification_uri, dc.user_code
+                "\nTo authorize adroit, open:\n  {}\nand enter the code:  {}\n\n\
+                 Waiting for authorization (polling up to ~{} min; Ctrl-C to cancel and \
+                 use `adroit auth {provider} --token <PAT>` instead)…",
+                dc.verification_uri,
+                dc.user_code,
+                dc.expires_in / 60
             );
+            if debug {
+                eprintln!(
+                    "[debug] client_id={client_id} token_url={} device_code={}…",
+                    endpoints.token_url,
+                    dc.device_code.chars().take(10).collect::<String>()
+                );
+            }
         },
-        std::thread::sleep,
+        // A progress dot per poll, so the wait visibly shows liveness (not a freeze).
+        |d| {
+            use std::io::Write;
+            eprint!(".");
+            let _ = std::io::stderr().flush();
+            std::thread::sleep(d);
+        },
+        // Observe each poll outcome (token redacted — never echoed).
+        |poll| {
+            if debug {
+                let outcome = match poll {
+                    oauth::Poll::Token(_) => "Token(received)".to_string(),
+                    other => format!("{other:?}"),
+                };
+                eprintln!("\n[debug] poll → {outcome}");
+            }
+        },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(Some(token))
@@ -2661,8 +2761,14 @@ fn cmd_review(
         }
         None => print!("{doc}"),
     }
-    // Opt-in: post the kickoff as a comment on the ADR's linked issue/PR.
-    adroit::forge_hook::comment(cfg, &path, &doc, "review kickoff", forge)?;
+    // Opt-in: post the kickoff (with the reviewer pool @-mentioned) on the linked
+    // issue/PR and tag the PR with a `review-by:<deadline>` label. The deadline is
+    // the review window's last day.
+    let deadline_iso = window
+        .end
+        .format(&time::format_description::well_known::Iso8601::DATE)
+        .unwrap_or_else(|_| window.end.to_string());
+    adroit::forge_hook::review_kickoff(cfg, &path, &doc, &deadline_iso, forge)?;
     Ok(())
 }
 

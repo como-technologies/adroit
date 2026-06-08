@@ -309,6 +309,11 @@ In markdown mode this writes a `Review by: <date>` line into the `## Status`
 region (format-preserving — only that line changes). In frontmatter mode it sets
 the optional `review_by` field. Pass `--clear` to remove the deadline.
 
+With `--forge`, it also comments the deadline on the linked issue/PR **and** sets
+the tracker's **native due/target date** — Jira due date, GitLab issue due date,
+Linear target date, or monday's first date column (GitHub Issues have none, so it's
+a no-op there). `--clear` clears the native date too.
+
 ```sh
 adroit set-review 3 2026-07-15   # propose a review by July 15
 adroit set-review 3 --clear      # remove the deadline
@@ -333,6 +338,11 @@ the ADR. The ADR is resolved by number through the store, so it works in
 by-status mode and errors cleanly if the number isn't found. Because the kickoff
 doc is built around the ADR number, `review` is **numeric-only** (requires a
 `sequential`/`per_category` scheme).
+
+With `--forge`, it also posts the kickoff as a comment on the linked issue/PR,
+**@-mentions** the configured reviewer pool (`forge.reviewers`), and tags the
+PR/MR with a `review-by:<deadline>` label (the deadline is the review window's
+last day).
 
 Dates are computed from today using business days (weekends skipped):
 the review period runs from today to today + `--days` business days, and the
@@ -842,6 +852,7 @@ editor: vim
 | `forge.tracker` | `native`\|`jira`\|`linear`\|`monday`\|`gh_issues`\|`gl_issues` | `native` | Issue tracker; `native` = the forge's own issues (`gh_issues`/`gl_issues` are explicit aliases). `jira`/`linear`/`monday` pair a GitHub/GitLab forge with a split tracker. |
 | `forge.tracker_project` | string | — | Split-tracker container: Jira project key (`OPS`), Linear team key (`ENG`), or monday board id. |
 | `forge.tracker_host` | host | — | Split-tracker host: Jira site (`your-site.atlassian.net`, or self-hosted) or monday account subdomain (`acme`). Unused for Linear. |
+| `forge.reviewers` | list | — | Reviewer handles `review --forge` @-mentions in the kickoff comment (comma-separated; a missing `@` is added). |
 
 Tokens are **never** stored in config. They resolve in order: the environment
 (`ADROIT_GITHUB_TOKEN` / `ADROIT_GITLAB_TOKEN` / `ADROIT_JIRA_TOKEN` +

@@ -229,27 +229,58 @@ pub fn dashboard_summary(
     Ok(None)
 }
 
-/// Post a comment to the ADR's linked issue/PR (review kickoff, review deadline).
+/// `review --forge`: post the kickoff on the linked issue/PR with the reviewer
+/// pool @-mentioned, and tag the PR with a `review-by:<deadline>` label.
 #[cfg(feature = "forge")]
-pub fn comment(
+pub fn review_kickoff(
     cfg: &Config,
     path: &Path,
     body: &str,
-    label: &str,
+    deadline: &str,
     flags: ForgeFlags,
 ) -> Result<()> {
     if !flags.enabled {
         return Ok(());
     }
-    crate::forge::comment(cfg, path, body, label, flags.dry_run, flags.yes)
+    crate::forge::review_kickoff(cfg, path, body, deadline, flags.dry_run, flags.yes)
 }
 
 #[cfg(not(feature = "forge"))]
-pub fn comment(
+pub fn review_kickoff(
     _cfg: &Config,
     _path: &Path,
     _body: &str,
-    _label: &str,
+    _deadline: &str,
+    flags: ForgeFlags,
+) -> Result<()> {
+    if flags.enabled {
+        warn_no_feature();
+    }
+    Ok(())
+}
+
+/// `set-review --forge`: comment the deadline on the linked issue/PR **and** set
+/// the tracker's native due/target date (`date`, `None` clears).
+#[cfg(feature = "forge")]
+pub fn set_review_deadline(
+    cfg: &Config,
+    path: &Path,
+    note: &str,
+    date: Option<&str>,
+    flags: ForgeFlags,
+) -> Result<()> {
+    if !flags.enabled {
+        return Ok(());
+    }
+    crate::forge::set_review_deadline(cfg, path, note, date, flags.dry_run, flags.yes)
+}
+
+#[cfg(not(feature = "forge"))]
+pub fn set_review_deadline(
+    _cfg: &Config,
+    _path: &Path,
+    _note: &str,
+    _date: Option<&str>,
     flags: ForgeFlags,
 ) -> Result<()> {
     if flags.enabled {

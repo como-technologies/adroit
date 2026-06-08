@@ -138,6 +138,11 @@ mutation($id: String!, $body: String!) {
   commentCreate(input: { issueId: $id, body: $body }) { success }
 }";
 
+const SET_DUE: &str = "\
+mutation($id: String!, $due: TimelessDate) {
+  issueUpdate(id: $id, input: { dueDate: $due }) { success }
+}";
+
 /// Construct a Linear tracker, or `None` if inactive (missing `tracker_project`
 /// or `ADROIT_LINEAR_TOKEN`). `tracker_project` is the **team key** (e.g. `ENG`).
 pub fn open(cfg: &crate::config::ForgeConfig) -> Option<Box<dyn Tracker>> {
@@ -195,7 +200,12 @@ impl Tracker for Linear {
             .as_str()
             .ok_or_else(|| ForgeError::Api {
                 status: 0,
-                message: format!("Linear: unknown team `{}`", self.team),
+                message: format!(
+                    "Linear: no team with key `{}`. `forge.tracker_project` must be the Linear \
+                     team **key** (its Identifier — the prefix on issue ids like ENG-123, under \
+                     Settings → Teams) — NOT a Linear Project or the repo name.",
+                    self.team
+                ),
             })?
             .to_string();
         let data = self.gql(
@@ -264,6 +274,15 @@ impl Tracker for Linear {
             open: !matches!(ty, "completed" | "canceled"),
             url,
         })
+    }
+
+    fn set_due_date(&self, issue: &str, date: Option<&str>) -> Result<(), ForgeError> {
+        // Linear issues carry a `dueDate` (a `TimelessDate`, ISO YYYY-MM-DD); the
+        // issue's "target date". `null` clears it.
+        let node = self.resolve(issue)?;
+        let uuid = super::want_str(&node, "id", "Linear")?;
+        self.gql(SET_DUE, json!({ "id": uuid, "due": date }))
+            .map(drop)
     }
 
     fn describe(&self) -> String {
@@ -407,5 +426,21 @@ mod tests {
     fn missing_issue_is_a_clean_error_not_a_panic() {
         let (l, _f) = linear(&[(200, r#"{"data":{"issues":{"nodes":[]}}}"#)]);
         assert!(l.issue_state("ENG-9").is_err());
+    }
+
+    #[test]
+    fn set_due_date_resolves_then_updates_with_the_date() {
+        let (l, f) = linear(&[
+            (
+                200,
+                r#"{"data":{"issues":{"nodes":[{"id":"issue-uuid"}]}}}"#,
+            ),
+            (200, r#"{"data":{"issueUpdate":{"success":true}}}"#),
+        ]);
+        l.set_due_date("ENG-7", Some("2026-06-20")).unwrap();
+        let bodies = f.bodies.lock().unwrap();
+        // The mutation carries the resolved UUID and the date.
+        assert!(bodies[1].contains("issue-uuid"), "got: {}", bodies[1]);
+        assert!(bodies[1].contains("2026-06-20"), "got: {}", bodies[1]);
     }
 }

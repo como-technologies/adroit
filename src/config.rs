@@ -228,13 +228,18 @@ pub struct ForgeConfig {
     /// Issue tracker (default `native` = the forge's own issues).
     pub tracker: TrackerProvider,
     /// Container id for a **split** tracker — Jira project key (`OPS`), Linear
-    /// team key (`ENG`), or monday board id. Unused when `tracker = native`.
+    /// team **key** (`ENG`; the Identifier, *not* a Linear Project), or monday
+    /// board id. Unused when `tracker = native`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker_project: Option<String>,
     /// API/site host for a split tracker — Jira site (`your-site.atlassian.net`)
     /// or monday account subdomain (`acme`). Unused for Linear (single host).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker_host: Option<String>,
+    /// Reviewer handles `review --forge` @-mentions when posting the kickoff
+    /// (e.g. `["@alice", "bob"]`; a missing `@` is added). Empty ⇒ no mention.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewers: Vec<String>,
     /// API token — env-only, never persisted (`#[serde(skip)]`). Populated at
     /// construction from `ADROIT_*_TOKEN`.
     #[serde(skip)]
@@ -253,6 +258,7 @@ impl Default for ForgeConfig {
             tracker: TrackerProvider::default(),
             tracker_project: None,
             tracker_host: None,
+            reviewers: Vec::new(),
             token: None,
         }
     }
@@ -536,6 +542,11 @@ impl Config {
                 .as_ref()
                 .and_then(|f| f.tracker_project.clone())?,
             "forge.tracker_host" => self.forge.as_ref().and_then(|f| f.tracker_host.clone())?,
+            "forge.reviewers" => self
+                .forge
+                .as_ref()
+                .map(|f| f.reviewers.join(", "))
+                .filter(|s| !s.is_empty())?,
             _ => return None,
         })
     }
@@ -632,6 +643,16 @@ impl Config {
                     .get_or_insert_with(ForgeConfig::default)
                     .tracker_host = Some(value.to_string())
             }
+            "forge.reviewers" => {
+                self.forge
+                    .get_or_insert_with(ForgeConfig::default)
+                    .reviewers = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            }
             _ => return Err(format!("unknown config key `{key}`")),
         }
         Ok(())
@@ -664,6 +685,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "forge.tracker",
     "forge.tracker_project",
     "forge.tracker_host",
+    "forge.reviewers",
 ];
 
 /// The environment variable that overrides a config key (for `.env` writes and
@@ -1527,6 +1549,10 @@ mod tests {
             assert_eq!(c.get_str("forge.tracker").as_deref(), Some(t));
         }
         assert!(c.set_str("forge.tracker", "asana").is_err());
+        // Reviewers round-trip as a comma-separated list (whitespace trimmed).
+        assert_eq!(c.get_str("forge.reviewers"), None); // unset
+        c.set_str("forge.reviewers", "@alice, bob ,").unwrap();
+        assert_eq!(c.get_str("forge.reviewers").as_deref(), Some("@alice, bob"));
         assert!(c.set_str("forge.provider", "bitbucket").is_err());
         // The token is never a config key (env-only).
         assert!(c.set_str("forge.token", "secret").is_err());

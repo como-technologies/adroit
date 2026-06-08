@@ -379,6 +379,18 @@ impl Store {
 
     /// Write an ADR to disk using the configured naming scheme + format/layout.
     /// Assigns an identity (via the scheme) if the ADR doesn't have one yet.
+    /// The on-disk path an ADR maps to — its status/category directory + the
+    /// scheme filename. This is the **read-only** half of [`write`], so a
+    /// `new --dry-run` can show where the ADR *would* land without creating it.
+    /// The ADR must already carry its identity (`number`/`slug`).
+    pub fn target_path(&self, adr: &Adr) -> PathBuf {
+        let dir = match (self.opts.layout, adr.category.as_deref()) {
+            (Layout::ByCategory, Some(category)) => self.category_dir(category),
+            _ => self.status_dir(adr.status),
+        };
+        dir.join(self.opts.naming.filename(&adr.reference(), &adr.title))
+    }
+
     pub fn write(&self, adr: &mut Adr) -> Result<PathBuf, StoreError> {
         if adr.number.is_none() && adr.slug.is_none() {
             let r = if self.opts.layout == Layout::ByCategory {
@@ -391,16 +403,13 @@ impl Store {
             };
             apply_ref(adr, r);
         }
-        let r = adr.reference();
         let content = format::serialize(adr, self.opts.format)?;
-        let dir = match (self.opts.layout, adr.category.as_deref()) {
-            (Layout::ByCategory, Some(category)) => self.category_dir(category),
-            _ => self.status_dir(adr.status),
-        };
-        if !dir.is_dir() {
-            std::fs::create_dir_all(&dir)?;
+        let path = self.target_path(adr);
+        if let Some(parent) = path.parent()
+            && !parent.is_dir()
+        {
+            std::fs::create_dir_all(parent)?;
         }
-        let path = dir.join(self.opts.naming.filename(&r, &adr.title));
         std::fs::write(&path, content)?;
         Ok(path)
     }

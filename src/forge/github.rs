@@ -291,6 +291,65 @@ impl Forge for Github {
         .map(drop)
     }
 
+    fn add_label(&self, pr: &str, label: &str) -> Result<(), ForgeError> {
+        // Labels live on the issues endpoint (a PR is an issue); GitHub creates
+        // the label if it doesn't exist.
+        self.call(
+            "POST",
+            &format!("repos/{}/issues/{pr}/labels", self.repo),
+            Some(json!({ "labels": [label] })),
+        )
+        .map(drop)
+    }
+
+    fn mark_ready(&self, pr: &str) -> Result<(), ForgeError> {
+        // GitHub's REST API can't un-draft a PR — only the GraphQL
+        // `markPullRequestReadyForReview` mutation can. Fetch the PR's GraphQL
+        // node id, then call it; skip if it's already a real PR (idempotent).
+        let v = self.call("GET", &format!("repos/{}/pulls/{pr}", self.repo), None)?;
+        if v["draft"].as_bool() == Some(false) {
+            return Ok(());
+        }
+        let node_id = super::want_str(&v, "node_id", "GitHub")?;
+        // GraphQL lives at `/graphql` on the API host (GHE: `<host>/api/v3` →
+        // `<host>/api/graphql`).
+        let gql_url = if self.host == "api.github.com" {
+            "https://api.github.com/graphql".to_string()
+        } else {
+            format!("https://{}/graphql", self.host.trim_end_matches("/v3"))
+        };
+        let auth = format!("Bearer {}", self.token);
+        let headers = [
+            ("Authorization", auth.as_str()),
+            ("Accept", "application/json"),
+            ("Content-Type", "application/json"),
+            ("User-Agent", "adroit"),
+        ];
+        let query = "mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }";
+        let resp = super::rest_call(
+            self.transport.as_ref(),
+            "POST",
+            &gql_url,
+            &headers,
+            Some(json!({ "query": query, "variables": { "id": node_id } })),
+            "GitHub",
+            message_of,
+        )?;
+        // GraphQL signals failure with a 200 + `errors` array.
+        if let Some(errs) = resp.get("errors").and_then(Value::as_array)
+            && !errs.is_empty()
+        {
+            return Err(ForgeError::Api {
+                status: 200,
+                message: errs[0]["message"]
+                    .as_str()
+                    .unwrap_or("GitHub GraphQL error")
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn describe(&self) -> String {
         format!("github:{}", self.repo)
     }
@@ -385,6 +444,39 @@ mod tests {
         let gh = github(&[("POST /issues", 401, r#"{"message":"Bad credentials"}"#)]);
         let err = gh.create_issue("x", "y").unwrap_err();
         assert!(matches!(err, ForgeError::Auth(_)));
+    }
+
+    #[test]
+    fn add_label_posts_to_the_issue_labels_endpoint() {
+        // Labels share the issues endpoint (a PR is an issue); a matching route
+        // confirms the path (a wrong one would 404 → Err).
+        let gh = github(&[("POST /issues/42/labels", 200, "[]")]);
+        assert!(gh.add_label("42", "review-by:2026-06-20").is_ok());
+    }
+
+    #[test]
+    fn mark_ready_undrafts_via_graphql() {
+        // Fetch node_id (REST), then call the GraphQL mutation.
+        let gh = github(&[
+            (
+                "GET /pulls/42",
+                200,
+                r#"{"draft":true,"node_id":"PR_node_42"}"#,
+            ),
+            (
+                "POST /graphql",
+                200,
+                r#"{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}"#,
+            ),
+        ]);
+        assert!(gh.mark_ready("42").is_ok());
+    }
+
+    #[test]
+    fn mark_ready_is_a_noop_when_already_ready() {
+        // Already a real PR → no GraphQL call needed (the single route is enough).
+        let gh = github(&[("GET /pulls/42", 200, r#"{"draft":false,"node_id":"x"}"#)]);
+        assert!(gh.mark_ready("42").is_ok());
     }
 
     #[test]

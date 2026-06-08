@@ -77,8 +77,10 @@ Providers grouped by seam — shipped, plus candidates (each a contained add):
 | **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, Linear + monday.com ([#12](https://github.com/como-technologies/adroit/issues/12)), native | Azure DevOps Boards, Asana |
 | **Publish target** (`Publisher`) | static, mdBook, MkDocs, Hugo, Docusaurus, Jekyll ([#8](https://github.com/como-technologies/adroit/issues/8)) | — (Confluence / Notion *hosting* is out of scope) |
 
-Per-provider capability deepens behind the same traits — reviewer @-mentions, review
-deadlines, Jira due / Linear target dates
+Per-provider capability deepens behind the same traits — reviewer @-mentions + an MR
+review-deadline label on `review --forge`, and the tracker's native due/target date
+(Jira / GitLab / Linear / monday) on `set-review --forge`, shipped via the default-no-op
+`Forge::add_label` / `Tracker::set_due_date` methods
 ([#11](https://github.com/como-technologies/adroit/issues/11)). The boundary that
 keeps this in adroit's lane: its forge integration governs the **ADR lifecycle**
 (propose-on-main, accept-via-MR, status sync, reviewer assignment), and `publish`
