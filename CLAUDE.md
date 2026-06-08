@@ -26,6 +26,27 @@ live-reload ships behind the `web` feature.
   relevant mdbook page *and* this file in the same change, and verify by running
   the CLI — docs must reflect what the code ACTUALLY does. Periodically sweep
   code↔docs for drift. Run `just book` to confirm the manual builds.
+- **Definition of done — run the matching skill, don't freelance (HARD RULE).** A
+  feature or seam change is NOT complete until its skill checklist *and* the gate
+  pass. This isn't a nicety: skipping it has repeatedly shipped a feature missing
+  its oracle/property/fuzz coverage or its doc updates, then needed a second pass to
+  add them. Before calling work done (or asking to push):
+  - **Adding a seam variant** — forge/tracker provider, naming scheme, format,
+    layout, publish adapter, template, config key, **CLI subcommand** → run
+    **`/extend`** and do every test + doc its checklist lists (including the manifest
+    `classified()` entry for a new subcommand).
+  - **A new/changed parser of untrusted input, a mutating write path, or any
+    invariant** → run **`/harden`**: an oracle `Op` in `tests/model.rs` for a new
+    verb, a `tests/parsers.rs` no-panic + structural property AND a
+    `tests/fuzz_parsers.rs` bolero target for a new parser — then **soak**
+    (`PROPTEST_CASES=1500+`).
+  - **Any behavior change** → **`/doc-sync`** the mdbook + this file, keeping the
+    *enumerated* lists current: the oracle verb list and fuzz-target list in
+    `docs/src/dev/testing.md`, the manifest `classified()` table, the help groups.
+  - Finish with **`/gate`** (`just ci`) green.
+  When unsure which applies, run them — a new verb that also reads a file format
+  pulls in **all** of `/extend` + `/harden` + `/doc-sync`. Default to the checklist
+  over judgment; that is the whole point of having it.
 
 ## Design principles — statelessness & idempotency (architectural invariant)
 
@@ -735,9 +756,12 @@ provider-resolution that degrades to the template, whereas `draft` uses
 
 **`plan <ID>`** (`cmd_plan`, `ai::build_plan_request`/`draft_plan`): the
 **read-only** companion — reads an ADR (`query::detail_at`) + corpus, asks the
-provider for an ordered implementation checklist, prints it (or `--out`). Never
-modifies the ADR; bails (not degrades) when no provider is available, since a
-plan is inherently AI.
+provider for an ordered implementation checklist, prints it (or `--out`). `-o json`
+emits a `view::Plan` envelope (`reference`/`title`/`plan`) to stdout — the plan
+stays markdown (the model writes prose; adroit doesn't fake-parse it into steps),
+tagged with the ADR identity so the Adopt-stage engine can route it. Never modifies
+the ADR; bails (not degrades) when no provider is available, since a plan is
+inherently AI.
 
 **`summarize <ID>`** (`cmd_summarize`, `ai::build_summary_request`/`draft_summary`):
 a one-paragraph read-only TL;DR of an ADR (PR body / notify / decision log); prints

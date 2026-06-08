@@ -1,0 +1,56 @@
+# A sample maturity assessment, shaped like an `assessments` export (YAML form),
+# for trying `adroit import`. Equivalent to assessment.json.
+name: Platform Engineering Baseline
+description: A sample maturity assessment, shaped like an `assessments` export, for trying `adroit import`.
+goal: Establish a modern, measurable platform engineering practice.
+domains:
+  - name: Delivery
+    context: How code reaches production — the path from a merge to a running change.
+    value: Fast, safe delivery is the multiplier on every other engineering investment.
+    risk: A slow or unreliable path to production caps throughput and erodes trust in changes.
+    practices:
+      - name: Required CI checks on merge
+        context: >-
+          Pull requests can merge today without any required automated checks;
+          regressions are caught in review or after release, not by the pipeline.
+        value: Required checks catch regressions before they reach main, so the default branch stays releasable.
+        risk: Without a gate, a broken main blocks the whole team and is found late, when it is expensive to fix.
+        effort: M
+        questions:
+          - text: Are automated checks required to pass before a pull request can merge?
+            polarity: positive
+          - text: Does the pipeline give feedback in under ten minutes?
+            polarity: positive
+      - name: Trunk-based development
+        context: Long-lived feature branches diverge from main for weeks before a large, risky merge.
+        value: Short-lived branches integrated daily keep merges small and reviewable.
+        risk: Big-bang merges accumulate integration debt and hide conflicts until the worst moment.
+        effort: M
+        questions:
+          - text: Do branches typically merge within a day or two of being opened?
+            polarity: positive
+  - name: Observability
+    context: How the team understands what production is doing — and how quickly it can answer 'is it working?'
+    value: Good signal turns incidents from guesswork into triage and shortens time-to-resolution.
+    risk: Without it, outages are diagnosed by intuition and reliability work is unprioritised.
+    practices:
+      - name: Structured logging with correlation IDs
+        context: Services emit free-text logs with no shared schema, so cross-service queries are manual and slow.
+        value: Structured logs with a request/correlation ID make an incident queryable end-to-end.
+        risk: Plaintext logs stretch mean-time-to-resolution during the incidents that matter most.
+        effort: S
+        questions:
+          - text: Are logs emitted as structured records (e.g. JSON) rather than free text?
+            polarity: positive
+          - text: Can a single request be traced across services by a correlation ID?
+            polarity: positive
+      - name: Service-level objectives
+        context: There are no defined SLOs; alerting fires on raw thresholds, producing noise without a shared reliability target.
+        value: SLOs give the team and its stakeholders one agreed definition of 'reliable enough'.
+        risk: Threshold-only alerting causes fatigue, so real signals are missed among the noise.
+        effort: L
+        questions:
+          - text: Are there documented SLOs for the team's critical user journeys?
+            polarity: positive
+          - text: Is alerting driven by error budgets rather than raw thresholds?
+            polarity: positive

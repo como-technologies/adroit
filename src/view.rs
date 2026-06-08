@@ -339,3 +339,19 @@ pub struct AskAnswer {
     /// References of the ADRs used as context, most relevant first.
     pub sources: Vec<String>,
 }
+
+/// The `-o json` shape of `adroit plan`: the implementation plan (markdown body)
+/// tagged with the ADR it's for, so a downstream agent (the Adopt-stage engine)
+/// can route the plan to the right decision without re-deriving identity. The
+/// `plan` text stays markdown — the model writes prose, and adroit doesn't pretend
+/// to parse it into structured steps.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
+pub struct Plan {
+    /// The ADR's display reference (e.g. `ADR-0009`).
+    pub reference: String,
+    /// The ADR's title.
+    pub title: String,
+    /// The implementation plan, as markdown (the model's output).
+    pub plan: String,
+}

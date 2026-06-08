@@ -30,8 +30,8 @@ the approach behind these suites and where bugs tend to hide, see
 
 The centerpiece is the **oracle** (`tests/model.rs`): it generates a random matrix
 cell (format × layout × naming × relink_scope) and a random sequence of mutating
-CLI commands (`new`, `set-status`, `supersede`, `set-review`, `renumber`,
-`relink`, `link`, `draft`), runs each against the **real binary** on a throwaway
+CLI commands (`new`, `import`, `set-status`, `supersede`, `set-review`,
+`renumber`, `relink`, `link`, `draft`), runs each against the **real binary** on a throwaway
 `TempDir`, and asserts a battery of invariants after **every** command — on-disk
 state agrees with an in-memory oracle, `adroit check` is clean, the repo stays
 link-canonical (scope-aware), and each ADR sits where its status implies. `link`
@@ -105,8 +105,9 @@ cargo +nightly bolero test fuzz_format_helpers -T 60sec   # coverage-guided, 60s
 ```
 
 The targets are `fuzz_format_helpers`, `fuzz_link_rewriter`, `fuzz_naming_helpers`,
-`fuzz_parse_remote_url`, and `fuzz_oauth_token_parse` (the OAuth device-token
-response parser — a hostile auth response must never panic). cargo-bolero builds
+`fuzz_parse_remote_url`, `fuzz_oauth_token_parse` (the OAuth device-token response
+parser — a hostile auth response must never panic), and `fuzz_parse_assessment`
+(the assessment-import JSON/YAML parser + seed mapping). cargo-bolero builds
 its instrumented target with
 `--profile fuzz`, so the repo defines a `[profile.fuzz]` in `Cargo.toml` (inherits
 `release`, keeps debug-assertions + overflow-checks on) — without it the run fails

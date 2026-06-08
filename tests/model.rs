@@ -162,6 +162,19 @@ enum Op {
     Draft {
         which: usize,
     },
+    /// `import --from-assessment <file>` — bulk-seed proposed ADRs from a generated
+    /// assessment. Like `new` it only creates (Proposed) ADRs, so the model reads
+    /// the new identities back from disk; the invariants then verify the seeded
+    /// repo stays valid across the matrix. `nonce` keeps practice titles unique so
+    /// each import lands fresh (the title dedup is covered in `tests/cli.rs`). `ai`
+    /// runs the `--ai` flesh-out pass via the fake seam (only the prose changes, so
+    /// the model is unchanged — the invariants verify the splice keeps it valid).
+    Import {
+        nonce: u64,
+        n: usize,
+        dom_idx: usize,
+        ai: bool,
+    },
 }
 
 /// The three typed-link relations `link` accepts.
@@ -422,6 +435,63 @@ impl Harness {
                 );
                 // No model change — draft rewrites only the prose body.
             }
+            Op::Import {
+                nonce,
+                n,
+                dom_idx,
+                ai,
+            } => {
+                let before: HashSet<PathBuf> =
+                    self.observe()?.into_iter().map(|(p, _)| p).collect();
+                // A tiny assessment with `n` uniquely-titled practices in one domain.
+                // The domain maps to a category under by_category (import slugifies
+                // it); using a CATEGORIES name keeps that consistent with `new`.
+                let domain = CATEGORIES[dom_idx % CATEGORIES.len()];
+                let practices: String = (0..*n)
+                    .map(|i| {
+                        format!(
+                            r#"{{"name":"imported {nonce} {i}","context":"c","value":"v","risk":"r"}}"#
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let assessment = format!(
+                    r#"{{"name":"oracle","domains":[{{"name":"{domain}","practices":[{practices}]}}]}}"#
+                );
+                let path = self.dir.path().join("__assessment.json");
+                std::fs::write(&path, assessment).expect("write assessment file");
+                let path_str = path.to_string_lossy().into_owned();
+                // `--ai` runs the flesh-out pass offline via the fake seam.
+                let mut cmd = self.cmd();
+                cmd.args(["import", "--from-assessment", &path_str]);
+                if *ai {
+                    cmd.args(["--ai"])
+                        .env("ADROIT_AI_FAKE", "A fake fleshed-out ADR body.");
+                }
+                let out = cmd.output().expect("spawn adroit");
+                prop_assert!(
+                    out.status.success(),
+                    "`adroit import{}` failed in {:?}: {}",
+                    if *ai { " --ai" } else { "" },
+                    self.profile,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                // Read every newly-created ADR back from disk (robust to the title
+                // dedup), and record each as a Proposed ADR in the oracle.
+                for (p, adr) in self.observe()? {
+                    if before.contains(&p) {
+                        continue;
+                    }
+                    self.model.push(ModelAdr {
+                        addr: adr.reference().addr(),
+                        title: adr.title.clone(),
+                        status: Status::Proposed,
+                        superseded_by: None,
+                        review_by: None,
+                        category: adr.category.clone(),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -622,6 +692,23 @@ impl Harness {
                     String::from_utf8_lossy(&out.stderr)
                 );
             }
+            // `plan -o json` emits a structured envelope — it must succeed and parse.
+            let out = self
+                .cmd()
+                .args(["plan", id.as_str(), "-o", "json"])
+                .env("ADROIT_AI_FAKE", "A fake plan paragraph.")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("spawn adroit");
+            prop_assert!(
+                out.status.success(),
+                "`adroit plan -o json` failed in {:?}: {}",
+                self.profile,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).map_err(|e| {
+                TestCaseError::fail(format!("`adroit plan -o json` emitted invalid JSON: {e}"))
+            })?;
             // `ask` (corpus Q&A) needs a non-empty corpus — it errors with "no ADRs
             // to answer from" otherwise, so only probe it once an ADR exists.
             let out = self
@@ -685,6 +772,8 @@ fn arb_op() -> impl Strategy<Value = Op> {
         2 => (any::<usize>(), any::<usize>(), any::<usize>())
             .prop_map(|(src, dst, rel)| Op::Link { src, dst, rel }),
         2 => any::<usize>().prop_map(|which| Op::Draft { which }),
+        1 => (any::<u64>(), 1usize..4, any::<usize>(), any::<bool>())
+            .prop_map(|(nonce, n, dom_idx, ai)| Op::Import { nonce, n, dom_idx, ai }),
     ]
 }
 

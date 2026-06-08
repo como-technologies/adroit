@@ -42,6 +42,50 @@ prompt, so it doubles as a "what's left to write" checklist. The AI verbs
 (`draft` / `new --interview`) only ever write *prose* — identity, status, and
 dates stay mechanical. See [Automation & AI](./automation.md) for the AI layer.
 
+### Seed a backlog from an assessment — `adroit import`
+
+When the decisions come from a structured **assessment** rather than a blank page,
+`import` turns that export into a proposed-ADR backlog in one shot — the *ingest*
+seam of the portfolio loop (Assess → Prescribe):
+
+```sh
+adroit import --from-assessment maturity.json   # one proposed ADR per practice
+adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothing
+```
+
+A ready-to-run sample lives in the repo's
+[`examples/`](https://github.com/como-technologies/adroit/tree/main/examples)
+directory — the same generic platform-engineering assessment as
+`assessment.json`, `assessment.yaml`, and `assessment.toml` (one per format). Try
+`adroit import --from-assessment examples/assessment.json --dry-run` (add `--ai` to
+see the fleshed-out variant) — it seeds **four proposed ADRs**.
+
+It reads an [`assessments`](https://github.com/como-technologies) export (a
+`Domain → Practice → Question` maturity model, as `.json`, `.yaml`, or `.toml`) and seeds one
+**proposed** ADR per practice: the practice's *context* becomes the problem
+statement, its *value* / *risk* / *effort* become decision drivers, and its
+questions are recorded as assessment signals. The body is marked
+`<!-- adroit:seeded-from-assessment -->` and carries a provenance note back to the
+source practice. By default the mapping is **mechanical** — no AI, no network — so
+identity, status, and the heading stay fixed; the seeded prose is a starting point
+you refine (`adroit draft <id>` to flesh one out, then `edit` / `lint` as above).
+
+```sh
+adroit import --from-assessment maturity.json --ai   # also AI-flesh each seed's prose
+```
+
+Pass **`--ai`** to have the configured provider flesh each seed out in one pass —
+it completes the Considered Options, Decision Outcome, and Consequences from the
+context and drivers already present (marked `<!-- adroit:ai-suggested -->`, status
+still mechanical). It **degrades to the mechanical seed** with a warning when no
+provider is available, so the import never fails for lack of AI. Mechanical is the
+deterministic, offline default; `--ai` trades tokens for a fuller first draft.
+
+`import` is **re-runnable**: practices whose title already has an ADR are skipped
+(report `(N skipped — already present)`), so importing an *updated* assessment only
+adds what's new. Pass `--force` to seed anyway. Under the `by_category` layout each
+domain becomes the category.
+
 ## 2. Review & decide
 
 Open the draft for review, then record the outcome.

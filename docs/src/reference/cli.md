@@ -126,6 +126,34 @@ only writes the prose sections, marked `<!-- adroit:ai-suggested -->` for you to
 review and edit before committing. If no provider is configured it degrades to
 the plain template (the ADR is still created).
 
+#### `adroit import --from-assessment <FILE>`
+
+Seed a **proposed-ADR backlog** from an [`assessments`](../usage/automation.md)
+export — the *ingest* seam (Assess → Prescribe). Reads a `Domain → Practice →
+Question` maturity model (`.json`, `.yaml`/`.yml`, or `.toml`) and creates one **proposed**
+ADR per practice: the practice's *context* → problem statement, its *value* /
+*risk* / *effort* → decision drivers, its questions → recorded signals. The body is
+marked `<!-- adroit:seeded-from-assessment -->` with a provenance note. The mapping
+is **mechanical** — no AI, no network — so identity / status / heading stay fixed;
+the seeded prose is a starting point to refine (`adroit draft <id>`, `edit`).
+
+```sh
+adroit import --from-assessment maturity.json
+adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothing
+```
+
+| Flag | Description |
+|---|---|
+| `--from-assessment <FILE>` | Path to the assessment export (`.json`, `.yaml`/`.yml`, or `.toml`) |
+| `--dry-run` | Parse and report what would be seeded; write nothing |
+| `--force` | Seed even practices whose title already has an ADR (skip the dedupe guard) |
+| `--ai` | After the mechanical seed, have the provider flesh out each ADR's prose from the assessment context. Degrades to the mechanical seed (with a warning) when no provider is available. Needs `ai.enabled` or `ADROIT_AI_FAKE` |
+
+**Re-runnable.** Practices whose (case-insensitive) title already has an ADR are
+skipped — `(N skipped — already present)` — so importing an *updated* assessment
+only adds what's new. Under the `by_category` layout each domain becomes the
+category. See [The ADR Workflow](../usage/workflow.md#seed-a-backlog-from-an-assessment--adroit-import).
+
 #### `adroit draft <ID>`
 
 The **after-the-fact `new --interview`**: run the same AI interview on an ADR you
@@ -172,12 +200,16 @@ adroit compose 2 "add a rejected option about Redis" --no-edit
 Draft an **AI implementation plan** for an (accepted) ADR: reads the ADR + the
 existing corpus and asks the configured AI provider for an ordered, actionable
 checklist (steps, components touched, testing, rollout, risks). **Read-only** —
-it never modifies the ADR. Prints to stdout unless `--out <PATH>` is given. Needs
-an AI provider — see [AI-assisted authoring](../usage/automation.md#ai-assisted-authoring).
+it never modifies the ADR. Prints to stdout unless `--out <PATH>` is given. With
+`-o json` it emits a `Plan` envelope (`{ reference, title, plan }`, the `plan` a
+markdown string) to stdout — the plan tagged with its ADR identity for an agent to
+consume. Needs an AI provider — see
+[AI-assisted authoring](../usage/automation.md#ai-assisted-authoring).
 
 ```sh
 adroit plan 21                       # print the plan
 adroit plan 21 --out plan-0021.md    # write it to a file
+adroit plan 21 -o json               # structured { reference, title, plan }
 ```
 
 | Flag | Description |

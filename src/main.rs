@@ -149,8 +149,8 @@ fn main() -> Result<()> {
     let store = Store::open_or_create_with(&dir, opts)?;
     if !dir_existed {
         match &cli.command {
-            // `new` legitimately scaffolds a brand-new repo — a neutral note.
-            Some(Command::New { .. }) => {
+            // `new` / `import` legitimately scaffold a brand-new repo — a neutral note.
+            Some(Command::New { .. }) | Some(Command::Import { .. }) => {
                 eprintln!("Created new ADR directory {}", dir.display());
             }
             // Any other command against a non-existent dir means we're pointed at
@@ -229,6 +229,12 @@ fn main() -> Result<()> {
                 open_in_editor(editor, &path)?;
             }
         }
+        Some(Command::Import {
+            from_assessment,
+            dry_run,
+            force,
+            ai,
+        }) => cmd_import(&store, &cfg, &from_assessment, dry_run, force, ai)?,
         Some(Command::List {
             status,
             #[cfg(feature = "forge")]
@@ -351,9 +357,13 @@ fn main() -> Result<()> {
             cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, true, output)?
         }
         Some(Command::Ask { question }) => cmd_ask(&store, &cfg, &question, output)?,
-        Some(Command::Plan { id, out }) => {
-            cmd_plan(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
-        }
+        Some(Command::Plan { id, out }) => cmd_plan(
+            &store,
+            &cfg,
+            &resolve_ref(&cfg, &id)?,
+            out.as_deref(),
+            output,
+        )?,
         Some(Command::Draft { id, no_edit }) => {
             cmd_draft(&store, &cfg, &resolve_ref(&cfg, &id)?, no_edit, editor)?
         }
@@ -617,6 +627,175 @@ fn cmd_new(
     Ok((path, r))
 }
 
+/// Instruction for the optional `import --ai` pass — flesh the seed's prose out of
+/// the assessment context already in the body, keeping it a proposal.
+const IMPORT_AI_INSTRUCTION: &str = "This proposed ADR was seeded from a maturity assessment: the Context and Decision \
+     Drivers are filled, but Considered Options, Decision Outcome, and Consequences are \
+     still authoring prompts. Flesh out the prose — weigh at least two concrete options \
+     with trade-offs, recommend one as a proposal (the ADR stays Proposed), and complete \
+     the positive/negative consequences and a short implementation outline — grounded in \
+     the context and drivers already present. Be concise and honest; do not invent \
+     specifics the assessment does not support.";
+
+/// `adroit import --from-assessment <file>`: the ingest seam (issue #18). Parse an
+/// assessment export, turn each practice into a **proposed** ADR, splicing the
+/// practice's context / value / risk into the MADR sections — **mechanical** by
+/// default. With `--ai` the AI then fleshes each seed's prose out of that context
+/// (degrading to the mechanical seed if no provider is available). Re-runnable:
+/// practices whose title already exists are skipped (unless `--force`), so importing
+/// an updated assessment only adds what's new. `--dry-run` reports without writing.
+fn cmd_import(
+    store: &Store,
+    cfg: &Config,
+    from_assessment: &std::path::Path,
+    dry_run: bool,
+    force: bool,
+    ai: bool,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let text = std::fs::read_to_string(from_assessment)
+        .with_context(|| format!("reading assessment export {}", from_assessment.display()))?;
+    let assessment = adroit::import::parse_assessment(&text, from_assessment)?;
+    let drafts = adroit::import::seed_drafts(&assessment);
+    if drafts.is_empty() {
+        eprintln!(
+            "{}",
+            "No named practices found in the assessment — nothing to seed.".yellow()
+        );
+        return Ok(());
+    }
+
+    // Resolve the provider once for `--ai`; degrade to the mechanical seed (warn,
+    // don't error) when none is available — the seeded ADRs are still useful.
+    let ai_provider = if ai && !dry_run {
+        match adroit::ai_hook::open_provider(cfg) {
+            Some(p) => Some(p),
+            None => {
+                eprintln!(
+                    "{}",
+                    "--ai had no AI provider; seeding mechanically. Enable `ai.enabled` \
+                     (+ a key) or set `ADROIT_AI_FAKE`."
+                        .yellow()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Dedupe against existing ADR titles (case-insensitive) and within this run, so
+    // a re-import is safe. `--force` skips the guard.
+    let mut existing: HashSet<String> = if force {
+        HashSet::new()
+    } else {
+        store
+            .list()
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .iter()
+            .map(|a| a.title.trim().to_lowercase())
+            .collect()
+    };
+
+    let by_category = store.options().layout == Layout::ByCategory;
+    let mut created = 0usize;
+    let mut skipped = 0usize;
+
+    for d in &drafts {
+        let key = d.title.trim().to_lowercase();
+        if !existing.insert(key) {
+            skipped += 1;
+            continue;
+        }
+        if dry_run {
+            println!(
+                "would seed   {}   [{} → {}]",
+                d.title,
+                assessment.name.trim(),
+                d.domain
+            );
+            created += 1;
+            continue;
+        }
+        // Under by_category each ADR lives in a subdir — map the domain to it.
+        let category = by_category.then(|| {
+            let slug = adroit::naming::slugify(&d.domain);
+            if slug.is_empty() {
+                "uncategorized".to_string()
+            } else {
+                slug
+            }
+        });
+        let (path, r) = cmd_new(store, cfg, &d.title, None, category.as_deref())?;
+        splice_generated(store, &r, &adroit::import::seed_fragment(d))?;
+        if let Some(provider) = ai_provider.as_ref() {
+            flesh_out_seed(store, &path, &r, &d.title, provider.as_ref())?;
+        }
+        println!("seeded   {}", path.display());
+        created += 1;
+    }
+
+    let verb = if dry_run { "Would seed" } else { "Seeded" };
+    let tail = if skipped > 0 {
+        format!(" ({skipped} skipped — already present)")
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "{verb} {created} proposed ADR(s) from assessment \"{}\"{tail}.",
+        assessment.name.trim()
+    );
+    Ok(())
+}
+
+/// The `import --ai` pass: flesh out a just-seeded ADR's prose via the compose
+/// engine, grounded in the assessment context already in the body (the same engine
+/// as `compose`, so heading/status stay mechanical and the body is marked
+/// `AI_MARKER`). A provider failure warns and keeps the mechanical seed — it never
+/// errors the import.
+fn flesh_out_seed(
+    store: &Store,
+    path: &std::path::Path,
+    r: &AdrRef,
+    title: &str,
+    provider: &dyn adroit::ai::AiProvider,
+) -> Result<()> {
+    let detail = query::detail_at(store, path)?;
+    let corpus: Vec<String> = query::summaries(store, &Filter::default())?
+        .iter()
+        .filter(|s| s.address != detail.summary.address)
+        .map(|s| format!("{} — {}", s.reference, s.title))
+        .collect();
+    let req =
+        adroit::ai::build_compose_request(title, IMPORT_AI_INSTRUCTION, &detail.body, &corpus);
+    announce_estimate(
+        provider,
+        &req,
+        &format!("Fleshing out {}", detail.summary.reference),
+    );
+    match adroit::ai::draft_compose(
+        provider,
+        title,
+        IMPORT_AI_INSTRUCTION,
+        &detail.body,
+        &corpus,
+    ) {
+        Ok(drafted) => splice_generated(store, r, &drafted),
+        Err(e) => {
+            eprintln!(
+                "{}",
+                format!(
+                    "warning: AI draft failed for {} ({e}); kept the mechanical seed.",
+                    detail.summary.reference
+                )
+                .yellow()
+            );
+            Ok(())
+        }
+    }
+}
+
 /// `new --interview`: resolve a provider then run the shared interview. Degrades
 /// to a note (keeping the plain template) when no provider is available, so the
 /// ADR is always created. Returns `true` when the draft actually ran (so the
@@ -706,7 +885,7 @@ fn interview_and_draft(
     };
     // Journal the raw draft before splicing, so it survives a failed write/edit.
     let journal = journal_draft(store, r, &draft);
-    splice_ai_draft(store, r, &draft)?;
+    splice_generated(store, r, &draft)?;
     eprintln!(
         "AI-drafted the body (marked `{}`). Review and edit before committing.",
         ai::AI_MARKER
@@ -720,12 +899,13 @@ fn interview_and_draft(
     Ok(true)
 }
 
-/// Splice a marker-wrapped AI `draft` into the ADR at `r`: keep the mechanical
-/// header (every line before the first `## Context…` prose section) and replace
-/// the prose. In the markdown profile `adr.body` is the whole document, so this
-/// is what preserves the H1 + `## Status`; in frontmatter it's the prose after the
-/// YAML. AI never touches identity/status. Shared by `new --interview` + `draft`.
-fn splice_ai_draft(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
+/// Splice a marker-wrapped generated `body` into the ADR at `r`: keep the
+/// mechanical header (every line before the first `## Context…` prose section) and
+/// replace the prose. In the markdown profile `adr.body` is the whole document, so
+/// this is what preserves the H1 + `## Status`; in frontmatter it's the prose after
+/// the YAML. Identity/status are never touched. Shared by `new --interview` /
+/// `draft` (AI drafts) and `import` (mechanical assessment seeds).
+fn splice_generated(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
     let path = store
         .find_path_by_ref(r)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -840,7 +1020,7 @@ fn cmd_compose(
         &corpus,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    splice_ai_draft(store, r, &drafted)?;
+    splice_generated(store, r, &drafted)?;
     println!(
         "Revised {} (AI-suggested; review before committing).",
         detail.summary.reference
@@ -1935,7 +2115,13 @@ fn cmd_summarize(
 /// `adroit plan <ID>`: an AI implementation plan for an (accepted) ADR. Reads the
 /// ADR + corpus, asks the provider for an ordered checklist, and prints it (or
 /// writes `--out`). Read-only — the ADR is never modified.
-fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Path>) -> Result<()> {
+fn cmd_plan(
+    store: &Store,
+    cfg: &Config,
+    r: &AdrRef,
+    out: Option<&std::path::Path>,
+    output: OutputFormat,
+) -> Result<()> {
     let provider = require_provider(cfg, "plan")?;
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
@@ -1958,6 +2144,15 @@ fn cmd_plan(store: &Store, cfg: &Config, r: &AdrRef, out: Option<&std::path::Pat
         &corpus,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // `-o json` emits a structured envelope to stdout (the plan tagged with its ADR
+    // identity); `json` always goes to stdout, so `--out` is for the human file.
+    if output == OutputFormat::Json {
+        return print_json(&adroit::view::Plan {
+            reference: detail.summary.reference.clone(),
+            title: detail.summary.title.clone(),
+            plan,
+        });
+    }
     match out {
         Some(p) => {
             std::fs::write(p, &plan)?;

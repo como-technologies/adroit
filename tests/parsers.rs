@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use adroit::adr::Status;
 use adroit::format;
+use adroit::import::{self, SEED_MARKER, parse_assessment, seed_drafts, seed_fragment};
 use adroit::links;
 use adroit::naming::{AdrRef, NamingScheme};
 
@@ -97,6 +98,62 @@ fn arb_ref() -> impl Strategy<Value = AdrRef> {
     ]
 }
 
+// An arbitrary `assessments`-export model, built directly (pub fields) with
+// adversarial unicode in every text field, to stress the seed mapping.
+fn arb_question() -> impl Strategy<Value = import::Question> {
+    (arb_text(), prop::option::of(arb_token()))
+        .prop_map(|(text, polarity)| import::Question { text, polarity })
+}
+
+fn arb_practice() -> impl Strategy<Value = import::Practice> {
+    (
+        arb_text(),
+        arb_text(),
+        arb_text(),
+        arb_text(),
+        prop::collection::vec(arb_question(), 0..3),
+        prop::option::of(arb_token()),
+    )
+        .prop_map(
+            |(name, context, value, risk, questions, effort)| import::Practice {
+                name,
+                context,
+                value,
+                risk,
+                questions,
+                effort,
+            },
+        )
+}
+
+fn arb_domain() -> impl Strategy<Value = import::Domain> {
+    (
+        arb_text(),
+        arb_text(),
+        arb_text(),
+        arb_text(),
+        prop::collection::vec(arb_practice(), 0..3),
+    )
+        .prop_map(|(name, context, value, risk, practices)| import::Domain {
+            name,
+            context,
+            value,
+            risk,
+            practices,
+        })
+}
+
+fn arb_assessment() -> impl Strategy<Value = import::Assessment> {
+    (arb_text(), prop::collection::vec(arb_domain(), 0..3)).prop_map(|(name, domains)| {
+        import::Assessment {
+            name,
+            description: String::new(),
+            goal: String::new(),
+            domains,
+        }
+    })
+}
+
 /// A resolver mapping any link target carrying a number to a fixed canonical
 /// path, used to drive `rewrite_links` idempotence.
 fn fixed_resolver(target: &str) -> Option<PathBuf> {
@@ -163,6 +220,52 @@ proptest! {
     #[test]
     fn config_parse_remote_url_never_panics(text in arb_text()) {
         let _ = adroit::config::parse_remote_url(&text);
+    }
+
+    /// The assessment parser tolerates arbitrary input (JSON and YAML extensions),
+    /// and the seed mapping never panics on whatever parses.
+    #[test]
+    fn import_parser_and_mapping_never_panic(text in arb_text()) {
+        for ext in ["a.json", "a.yaml", "a.toml"] {
+            if let Ok(a) = parse_assessment(&text, Path::new(ext)) {
+                for d in seed_drafts(&a) {
+                    let _ = seed_fragment(&d);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Seed-mapping invariants (assessment → proposed ADRs)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::default())]
+
+    /// `seed_drafts` yields exactly one draft per practice with a non-blank name,
+    /// each with a non-empty title; and every `seed_fragment` is a well-formed MADR
+    /// body — marked, with the required sections, newline-terminated — for any
+    /// (adversarial-unicode) assessment.
+    #[test]
+    fn seed_mapping_holds_structural_invariants(a in arb_assessment()) {
+        let drafts = seed_drafts(&a);
+        let expected = a
+            .domains
+            .iter()
+            .flat_map(|d| &d.practices)
+            .filter(|p| !p.name.trim().is_empty())
+            .count();
+        prop_assert_eq!(drafts.len(), expected, "one draft per non-blank practice");
+        for d in &drafts {
+            prop_assert!(!d.title.trim().is_empty(), "seed title must be non-empty");
+            let body = seed_fragment(d);
+            prop_assert!(body.starts_with(SEED_MARKER), "fragment must start with the seed marker");
+            prop_assert!(body.contains("## Context and Problem Statement"));
+            prop_assert!(body.contains("## Decision Drivers"));
+            prop_assert!(body.contains("## Implementation"));
+            prop_assert!(body.ends_with('\n'), "fragment must be newline-terminated");
+        }
     }
 }
 

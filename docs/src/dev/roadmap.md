@@ -74,15 +74,18 @@ Providers grouped by seam — shipped, plus candidates (each a contained add):
 |---|---|---|
 | **Repo / PR host** (`Forge`) | GitHub, GitLab | Gitea / Forgejo, Bitbucket |
 | **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, native (files-only) | Linear ([#12](https://github.com/como-technologies/adroit/issues/12)) |
-| **Publish target** (`Publisher`) | static dir (mdBook / plain) | Confluence, Notion, Hugo-dir, Docusaurus-dir ([#8](https://github.com/como-technologies/adroit/issues/8)) |
+| **Publish target** (`Publisher`) | static dir (mdBook / plain) | hugo-dir, docusaurus-dir ([#8](https://github.com/como-technologies/adroit/issues/8)) |
 
 Per-provider capability deepens behind the same traits — reviewer @-mentions, review
 deadlines, Jira due / Linear target dates
 ([#11](https://github.com/como-technologies/adroit/issues/11)). The boundary that
 keeps this in adroit's lane: its forge integration governs the **ADR lifecycle**
-(propose-on-main, accept-via-MR, status sync, reviewer assignment) and `publish`
-*produces* the artifact — it does not host, distribute, or orchestrate code across
-forges. Those are other nodes' jobs (see the portfolio loop below).
+(propose-on-main, accept-via-MR, status sync, reviewer assignment), and `publish`
+**produces** the accepted-set artifact (a static / `hugo-dir` / `docusaurus-dir`
+tree) — it does not *host* it. The networked **Confluence / Notion push is the
+consuming repo's CI** (e.g. the playbook repo's mdBook → Confluence pipeline), not
+adroit; and code orchestration across forges is the Adopt engine's. Those are other
+nodes' jobs (see the portfolio loop below).
 
 ## Web dashboard
 
@@ -125,12 +128,12 @@ JSON is how adroit's decisions cross into the rest of the loop, so a downstream 
 *reads* a decision instead of scraping prose. The ADRs and guides stay **markdown**
 for humans; the *integration* contract is JSON.
 
-- **Ingest (Assess → adroit).** A structured assessment export (the `assessments`
-  app's Domain → Practice → Question model, each leaf carrying context / value /
-  risk, exported as JSON / YAML) seeds **proposed ADRs**: each decision a practice
-  implies becomes a draft ADR, so the assessment becomes the decision backlog rather
-  than dying in a doc. A natural fit for `new --interview` / `compose` with the
-  export as context.
+- **Ingest (Assess → adroit) — shipped.** `adroit import --from-assessment <file>`
+  turns an `assessments` export (the Domain → Practice → Question maturity model,
+  each leaf carrying context / value / risk, as JSON / YAML) into a **proposed-ADR
+  backlog** — one ADR per practice, mechanically — so the assessment becomes the
+  decision backlog rather than dying in a doc. Drafting richer prose from a seed
+  (feeding it to `draft` / `compose` as context) is the natural `--ai` follow-up.
 - **Emit (adroit → Adopt).** An accepted ADR plus its `plan` (the implementation
   checklist) is the decision context the **Adopt**-stage agentic engine (Conduit)
   turns into issues an agent works inside the team's own forge — read through the
