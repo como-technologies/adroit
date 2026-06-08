@@ -450,6 +450,8 @@ fn main() -> Result<()> {
             )?;
         }
         Some(Command::Serve { host, port }) => serve(&cfg, &dir, &host, port)?,
+        #[cfg(feature = "mcp")]
+        Some(Command::Mcp) => adroit::mcp::run(&cfg, &dir)?,
         // `config` / `completions` return before the store is opened (see above).
         Some(Command::Config { .. }) => unreachable!("config handled before store open"),
         Some(Command::Completions { .. }) => {

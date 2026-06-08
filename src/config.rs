@@ -874,14 +874,32 @@ impl CredentialBackend for FileBackend {
 #[cfg(feature = "keychain")]
 struct KeyringBackend;
 
+/// keyring 4 needs the platform credential store registered once before any
+/// `Entry` is created (the OS keychain on macOS/Windows, kernel keyutils on Linux).
+#[cfg(feature = "keychain")]
+fn ensure_default_store() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // `false` keeps Linux on the kernel keyutils store (matching keyring 3's
+        // `linux-native`); macOS/Windows use their OS keychain regardless.
+        let _ = keyring::use_native_store(false);
+    });
+}
+
 #[cfg(feature = "keychain")]
 impl CredentialBackend for KeyringBackend {
     fn get(&self, key: &str) -> Option<String> {
-        keyring::Entry::new("adroit", key).ok()?.get_password().ok()
+        ensure_default_store();
+        keyring_core::Entry::new("adroit", key)
+            .ok()?
+            .get_password()
+            .ok()
     }
 
     fn set(&self, key: &str, token: &str) -> Result<(), ConfigError> {
-        keyring::Entry::new("adroit", key)
+        ensure_default_store();
+        keyring_core::Entry::new("adroit", key)
             .and_then(|e| e.set_password(token))
             .map_err(|e| ConfigError::Keychain(e.to_string()))
     }

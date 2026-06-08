@@ -97,6 +97,7 @@ Configuration:
   config        Inspect or change configuration
   completions   Print a shell completion script (bash/zsh/fish/…)
   manifest      Print a machine-readable CLI manifest (JSON, for agents)
+  mcp           Run an MCP server exposing read verbs to agents (stdio)
   help          Print help for a command
 
 Options:
@@ -149,6 +150,7 @@ Configuration:
   config        Inspect or change configuration
   completions   Print a shell completion script (bash/zsh/fish/…)
   manifest      Print a machine-readable CLI manifest (JSON, for agents)
+  mcp           Run an MCP server exposing read verbs to agents (stdio)
   help          Print help for a command
 
 Options:
@@ -778,6 +780,14 @@ pub enum Command {
     /// `--help`.
     #[cfg(feature = "manifest")]
     Manifest,
+    /// Run a Model Context Protocol server over stdio (for agents / editors).
+    ///
+    /// Speaks JSON-RPC 2.0 on stdin/stdout and exposes adroit's read verbs as MCP
+    /// tools (projected from the `manifest`), so an MCP client drives adroit to read
+    /// decisions + plans without scraping `--help`. Read-only; reopens the store per
+    /// call against `--dir`.
+    #[cfg(feature = "mcp")]
+    Mcp,
 }
 
 /// Subcommands for `adroit config`.

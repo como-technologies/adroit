@@ -12,11 +12,16 @@ description = "A snappy tool for managing Architecture Decision Records"
 # (`query`/`view`) and write (`store`) layers never depend on the TUI, AI, or a
 # forge; `just lint-core` guards that layering in CI. `web` stays opt-in (it needs
 # the Vue SPA bundle — `just serve`).
-default = ["tui", "ai", "forge", "manifest"]
+default = ["tui", "ai", "forge", "manifest", "mcp"]
 # `adroit manifest` — a machine-readable catalog of the CLI surface (commands,
 # args, the `view`-type JSON schemas, and per-command semantics) for agents.
 # Behind a default-on feature so a `--no-default-features` core drops `schemars`.
 manifest = ["dep:schemars"]
+# `adroit mcp` — a Model Context Protocol server (JSON-RPC 2.0 over stdio) that
+# projects the manifest's read verbs as MCP tools so an agent drives adroit
+# without scraping `--help`. Depends on `manifest`; adds NO new deps (serde_json +
+# std only). A `--no-default-features` core drops the command.
+mcp = ["manifest"]
 tui = [
     "dep:ratatui",
     "dep:crossterm",
@@ -48,7 +53,7 @@ forge = ["dep:ureq", "keychain"]
 # Manager / Linux kernel keyutils), with the 0600 file store as the universal
 # fallback. Enabled by `ai` + `forge` (both keep secrets); the bare core stays
 # file-only. Pure-Rust backends only — no C/system build deps.
-keychain = ["dep:keyring"]
+keychain = ["dep:keyring", "dep:keyring-core"]
 # `ai` is on by default. It brings rig (async LLM framework) + tokio for the
 # Anthropic/Ollama adapters; the AI verbs bridge to async with a single
 # `block_on` at the CLI boundary, so a `--no-default-features` build stays
@@ -58,82 +63,88 @@ keychain = ["dep:keyring"]
 ai = ["dep:rig", "dep:tokio", "keychain"]
 
 [dependencies]
+# Use the LATEST published version when adding or bumping any dependency (see
+# CLAUDE.md). Grouped by the feature that pulls them in.
+
+# ── Core — always compiled (lib + CLI). `--no-default-features` builds these alone.
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-# Terminal color for human output (status, graph edges). Auto-disabled on a
-# non-tty / `-o json` / `NO_COLOR`.
-colored = "2"
-crossterm = { version = "0.29", optional = true }
+# Human-output color (status, graph edges). Auto-disabled off-tty / `-o json` / `NO_COLOR`.
+colored = "3"
 dialoguer = "0.12"
 directories = "6"
 dotenvy = "0.15"
 edit = "0.1"
-ratatui = { version = "0.30", optional = true }
 serde = { version = "1", features = ["derive"] }
-# Core: `-o json` output for the read verbs serializes the `view` types directly.
+# `-o json` output for the read verbs; also the `mcp` server's JSON-RPC framing.
 serde_json = "1"
-# manifest feature only: derive JSON Schema for the `view` types so `adroit
-# manifest` can publish the exact `-o json` shapes. No runtime cost when off.
-schemars = { version = "0.8", optional = true }
-shellexpand = "3"
 serde_yaml_ng = "0.10"
+shellexpand = "3"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
 # `adroit import` reads an assessment export in JSON, YAML, or TOML — `assessments`
 # exports all three; TOML deserializes the same lenient serde structs.
-toml = "0.8"
+toml = "1"
 time = { version = "0.3", features = ["serde-human-readable", "formatting", "parsing", "macros", "local-offset"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 which = "8"
 
-# web feature only (read-only dashboard: Axum JSON API + embedded Vue SPA)
-axum = { version = "0.8", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"], optional = true }
-# Bridges the live-reload `broadcast` channel into an SSE response stream.
-tokio-stream = { version = "0.1", features = ["sync"], optional = true }
-tower = { version = "0.5", features = ["util"], optional = true }
-tower-http = { version = "0.6", features = ["trace"], optional = true }
-pulldown-cmark = { version = "0.12", default-features = false, features = ["html"], optional = true }
-rust-embed = { version = "8", optional = true }
-mime_guess = { version = "2", optional = true }
-# Filesystem watcher driving auto live-reload (recursive watch on the ADR dir).
-notify = { version = "8", optional = true }
-# forge feature only: a small blocking HTTP client (rustls TLS) for the
-# GitHub/GitLab adapters. Deliberately blocking — the core CLI has no async
-# runtime (tokio is web-only).
-ureq = { version = "2", features = ["json"], optional = true }
-# ai feature only: rig is the async LLM framework (Anthropic + Ollama providers,
-# plus embeddings/RAG for future verbs). Bridged via block_on at the CLI edge.
-rig = { package = "rig-core", version = "0.38", optional = true }
-# keychain feature only: cross-platform OS keychain for stored tokens. Pure-Rust
-# backends (security-framework on macOS, windows-sys on Windows, linux-keyutils on
-# Linux) — no C / system build deps. Secret Service (libdbus) is an opt-in swap if
-# persistent Linux storage across logout is needed.
-keyring = { version = "3.6", default-features = false, features = [
-    "apple-native",
-    "windows-native",
-    "linux-native",
-], optional = true }
-# tui feature only: renders GitHub-Flavored Markdown into a ratatui Text for the
-# preview pane. Targets ratatui-core 0.1 (the 0.30-era core) — no duplicate ratatui.
+# ── manifest feature (and `mcp`, which depends on it) ──
+# Derive JSON Schema for the `view` types so `adroit manifest` publishes the exact
+# `-o json` shapes. No runtime cost when off.
+schemars = { version = "1", optional = true }
+
+# ── tui feature — the interactive two-pane terminal app ──
+crossterm = { version = "0.29", optional = true }
+ratatui = { version = "0.30", optional = true }
+# GitHub-Flavored Markdown → ratatui Text for the preview pane. Targets
+# ratatui-core 0.1 (the 0.30-era core) — no duplicate ratatui in the tree.
 the-other-tui-markdown = { version = "0.1.0", optional = true }
-# tui feature only: the fuzzy matcher behind the command palette + ADR picker
-# (same engine as helix/telescope). Pure scoring, no terminal/ratatui deps.
+# Fuzzy matcher behind the command palette + ADR picker (helix/telescope engine).
 nucleo-matcher = { version = "0.3", optional = true }
-# tui feature only: syntax highlighting for preview code blocks. Pure-Rust
-# regex (fancy-regex, no onig/C) + the embedded default syntaxes/themes; we
-# convert syntect styles to ratatui spans ourselves (syntect-tui targets an
-# older ratatui, which would duplicate ratatui in the tree).
+# Syntax highlighting for preview code blocks. Pure-Rust regex (fancy-regex, no
+# onig/C) + embedded default syntaxes/themes; we convert syntect styles to ratatui
+# spans ourselves (syntect-tui targets an older ratatui).
 syntect = { version = "5", default-features = false, features = [
     "parsing",
     "default-syntaxes",
     "default-themes",
     "regex-fancy",
 ], optional = true }
-# tui feature only: animated spinner shown while a reload runs on a worker
-# thread (large repos shell `git log` per ADR). Targets ratatui 0.30.
+# Animated spinner shown while a reload runs on a worker thread.
 throbber-widgets-tui = { version = "0.11", optional = true }
+
+# ── web feature — read-only dashboard (Axum JSON API + embedded Vue SPA) ──
+axum = { version = "0.8", optional = true }
+# Async runtime — web only (the `ai` feature also enables tokio).
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"], optional = true }
+# Bridges the live-reload `broadcast` channel into an SSE response stream.
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+tower-http = { version = "0.6", features = ["trace"], optional = true }
+# Server-side markdown → HTML for the dashboard.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
+rust-embed = { version = "8", optional = true }
+mime_guess = { version = "2", optional = true }
+# Filesystem watcher driving auto live-reload (recursive watch on the ADR dir).
+notify = { version = "8", optional = true }
+
+# ── forge feature — issue + PR/MR adapters ──
+# A small *blocking* HTTP client (rustls TLS) — deliberately blocking so the core
+# CLI has no async runtime (tokio is web/ai only).
+ureq = { version = "3", features = ["json"], optional = true }
+
+# ── ai feature — rig (async LLM framework), bridged via block_on at the CLI edge ──
+# (also enables `tokio`). Anthropic + Ollama providers; embeddings/RAG are future.
+rig = { package = "rig-core", version = "0.38", optional = true }
+
+# ── keychain feature (enabled by ai + forge) — OS keychain for stored tokens ──
+# keyring 4 split into a `keyring-core` (the `Entry` type) + a `keyring` facade that
+# registers the platform store (`use_native_store()`): macOS Keychain / Windows
+# Credential Manager / Linux kernel keyutils — pure-Rust, no C / system build deps.
+keyring = { version = "4", optional = true }
+keyring-core = { version = "1", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -150,7 +161,7 @@ proptest = "1"
 # Coverage-guided fuzzing for the parsers (tests/fuzz_parsers.rs). The same target
 # runs as a stable property test under `cargo test` (CI) and coverage-guided under
 # `cargo bolero test <name>` (nightly + the cargo-bolero CLI).
-bolero = "0.11"
+bolero = "0.13"
 
 # cargo-bolero builds its instrumented (coverage-guided) target with
 # `--profile fuzz`; without this section it fails with

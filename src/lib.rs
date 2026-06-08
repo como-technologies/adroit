@@ -27,6 +27,8 @@ pub mod lint;
 // `--no-default-features` core drops `schemars`.
 #[cfg(feature = "manifest")]
 pub mod manifest;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod naming;
 pub mod publish;
 pub mod query;

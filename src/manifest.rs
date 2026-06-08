@@ -34,57 +34,76 @@ pub struct Manifest {
     types: serde_json::Map<String, Value>,
 }
 
-#[derive(Serialize)]
-struct CommandInfo {
-    name: String,
+impl Manifest {
+    /// The per-command catalog — the `mcp` server projects its read verbs as tools.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn commands(&self) -> &[CommandInfo] {
+        &self.commands
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct CommandInfo {
+    pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    stage: &'static str,
-    reads: bool,
-    writes: bool,
-    idempotent: bool,
+    pub(crate) summary: Option<String>,
+    pub(crate) stage: &'static str,
+    pub(crate) reads: bool,
+    pub(crate) writes: bool,
+    pub(crate) idempotent: bool,
     /// Expense profile, for rate-limiting / confirmation: `local` (filesystem
     /// only), `provider-call` (an AI/token call), `network` (a forge/remote API),
     /// or `long-running` (runs until stopped, e.g. a server).
-    cost: &'static str,
+    pub(crate) cost: &'static str,
     /// The `-o json` output shape — a `view` type name (look it up in `types`) or a
     /// short description for ad-hoc shapes. `null` when the command has no JSON form.
     #[serde(skip_serializing_if = "Option::is_none")]
-    json_output: Option<&'static str>,
+    pub(crate) json_output: Option<&'static str>,
     /// Runtime prerequisites: a compiled command may still need an opt-in
     /// (`ai.enabled` + a provider, a configured forge, …) before it will run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    requires: Vec<&'static str>,
+    pub(crate) requires: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    exit: Option<&'static str>,
+    pub(crate) exit: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    args: Vec<OptionInfo>,
+    pub(crate) args: Vec<OptionInfo>,
 }
 
-#[derive(Serialize)]
-struct OptionInfo {
-    name: String,
+impl CommandInfo {
+    /// A read-only, side-effect-free verb safe to expose as an MCP tool: it reads,
+    /// never writes the repo, and costs only `local` work or a (read-only) AI call.
+    /// Excludes `network` verbs (`sync` / `notify` reach a forge / webhook) and
+    /// `long-running` servers (`serve` / `mcp`).
+    #[cfg(feature = "mcp")]
+    pub(crate) fn is_read_tool(&self) -> bool {
+        self.reads && !self.writes && matches!(self.cost, "local" | "provider-call")
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct OptionInfo {
+    pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    long: Option<String>,
+    pub(crate) long: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    short: Option<String>,
+    pub(crate) short: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
-    positional: bool,
+    pub(crate) positional: bool,
     #[serde(skip_serializing_if = "is_false")]
-    required: bool,
+    pub(crate) required: bool,
     /// A boolean switch (`--flag`, takes no value) rather than `--opt <value>`.
     #[serde(skip_serializing_if = "is_false")]
-    flag: bool,
+    pub(crate) flag: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<String>,
+    pub(crate) value: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    values: Vec<String>,
+    pub(crate) values: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    default: Option<String>,
+    pub(crate) default: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    env: Option<String>,
+    pub(crate) env: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    help: Option<String>,
+    pub(crate) help: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -162,6 +181,7 @@ fn classified(name: &str) -> Option<Meta> {
         "config"     => m!("config",  true,  true,  true,  "local",   None,                 &[],            None),
         "completions"=> m!("config",  true,  false, true,  "local",   None,                 &[],            None),
         "manifest"   => m!("config",  true,  false, true,  "local",   Some("this document"),&[],            None),
+        "mcp"        => m!("config",  true,  false, false, "long-running", None,            &[],            None),
         _ => return None,
     })
 }
@@ -224,7 +244,7 @@ fn arg_info(a: &clap::Arg) -> OptionInfo {
 }
 
 fn type_schemas() -> serde_json::Map<String, Value> {
-    fn to_val(s: schemars::schema::RootSchema) -> Value {
+    fn to_val(s: schemars::Schema) -> Value {
         serde_json::to_value(s).unwrap_or(Value::Null)
     }
     let mut m = serde_json::Map::new();

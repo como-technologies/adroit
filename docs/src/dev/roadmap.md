@@ -101,14 +101,21 @@ nodes' jobs (see the portfolio loop below).
   semantics, derived from the clap tree, plus `schemars` schemas of the `view`
   types) so agents discover and drive adroit without scraping `--help`. See
   [Automation & AI](../usage/automation.md#discovering-commands--adroit-manifest).
-- **MCP tool catalog**
+- **MCP server — shipped**
   ([#19](https://github.com/como-technologies/adroit/issues/19), follow-up to #17).
-  Wrap the manifest as [Model Context Protocol](https://modelcontextprotocol.io)
-  tools — each command a tool with its args as a JSON Schema, the `view`-type schemas
-  describing results — so the portfolio's **Adopt**-stage agent engine (and any
-  agent) can drive adroit to read decisions and plans without scraping `--help`.
-  Either a thin external wrapper over `adroit manifest` or a built-in `adroit mcp`
-  server.
+  `adroit mcp` is a built-in [Model Context Protocol](https://modelcontextprotocol.io)
+  server (JSON-RPC 2.0 over stdio) that projects the manifest's read verbs as MCP
+  tools — each verb a tool with its args as a JSON Schema — so the portfolio's
+  **Adopt**-stage agent engine (and any agent) drives adroit to read decisions and
+  plans without scraping `--help`. Behind the default-on `mcp` feature; a
+  hand-rolled JSON-RPC/stdio loop, no async runtime. **Read-only** — the read verbs
+  (`list` / `show` / `search` /
+  `stats` / `graph` / `check` / `plan` / `related` / `dedupe` / …) as tools, so an
+  agent reads decisions + plans but can't mutate the repo over the wire. Exposing
+  the **mutating** verbs (`new` / `set-status` / `supersede`) is a later opt-in —
+  gated behind an explicit `adroit mcp --allow-write` (annotated `destructiveHint`),
+  or deferred to the MCP client's own confirmation — and additive, since the server
+  just projects the manifest's `reads` / `writes` flags.
 
 ## Portfolio integration — the Como loop
 

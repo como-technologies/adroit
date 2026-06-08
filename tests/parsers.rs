@@ -162,6 +162,17 @@ fn fixed_resolver(target: &str) -> Option<PathBuf> {
     links::number_in_target(target).map(|n| PathBuf::from(format!("/r/accepted/{n:04}-x.md")))
 }
 
+/// A shared MCP server (built once from the manifest over a throwaway dir) for the
+/// `handle_line` no-panic property — rebuilding per case would churn the clap walk.
+#[cfg(feature = "mcp")]
+fn mcp_server() -> &'static adroit::mcp::Server {
+    use std::sync::OnceLock;
+    static SERVER: OnceLock<adroit::mcp::Server> = OnceLock::new();
+    SERVER.get_or_init(|| {
+        adroit::mcp::Server::new(&adroit::config::Config::default(), &std::env::temp_dir())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // No-panic: the markdown format helpers tolerate any input
 // ---------------------------------------------------------------------------
@@ -239,6 +250,15 @@ proptest! {
     fn publish_strip_h1_never_panics_and_only_drops_lines(text in arb_text()) {
         let out = publish::strip_h1(&text);
         prop_assert!(out.lines().count() <= text.lines().count());
+    }
+
+    /// The MCP JSON-RPC line handler tolerates arbitrary stdin (hostile JSON,
+    /// multibyte, lone `\r`) — a malformed request yields an error response, never
+    /// a panic.
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_handle_line_never_panics(line in arb_text()) {
+        let _ = adroit::mcp::handle_line(mcp_server(), &line);
     }
 
     #[test]

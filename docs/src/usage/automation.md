@@ -80,13 +80,47 @@ Three parts, none of which can drift from the binary:
 The syntax is derived from the clap command tree and the type schemas from the
 same serde structs that produce `-o json`, so the manifest **always matches the
 build**: feature-gated commands appear only when compiled in, and `requires` flags
-the ones that exist but need a runtime opt-in. It's the natural backing for an MCP
-tool catalog (each command → a tool with its args as a JSON Schema). The
-human-facing introspection still works too:
+the ones that exist but need a runtime opt-in. It backs the `adroit mcp` server
+(below). The human-facing introspection still works too:
 
 - `adroit --help` lists every verb grouped by workflow; `adroit <verb> --help`
   details one (terse with `-h`).
 - `adroit completions <bash|zsh|fish|…>` prints a shell-completion script.
+
+## Driving adroit over MCP — `adroit mcp`
+
+`adroit mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server on **stdio** (JSON-RPC 2.0), so an MCP client — Claude / Claude Code, an
+editor, the portfolio's Adopt-stage engine, any agent — drives adroit as a
+first-class tool server instead of scraping `--help` or shelling out by hand.
+
+It is a **projection of the manifest**: every **read-only** verb (`list`, `show`,
+`search`, `stats`, `graph`, `check`, `plan`, `related`, `dedupe`, `summarize`,
+`ask`, …) becomes an MCP **tool**, with its arguments as the tool's JSON Schema
+(`inputSchema`); a `tools/call` runs the verb and returns its `-o json` output.
+Because it's projected, it **can't drift** — a new read verb appears as a tool
+automatically.
+
+**Read-only by design.** Only verbs the manifest marks read-only and
+side-effect-free are exposed — no repo mutations (`new` / `set-status` /
+`supersede`), no network verbs (`sync` / `notify`), no artifact producers
+(`publish`). An agent can *read* decisions + plans over MCP but can't change
+anything. (Exposing the mutating verbs behind an explicit opt-in is a future
+addition — see the [roadmap](../dev/roadmap.md#agent-surface).)
+
+Point a client at it like any stdio MCP server — the command is `adroit mcp` (add
+`--dir <path>` to pick the ADR repo). For example, in an MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "adroit": { "command": "adroit", "args": ["--dir", "/path/to/repo/adr", "mcp"] }
+  }
+}
+```
+
+Built behind the default-on `mcp` Cargo feature (it needs `manifest`); a
+`--no-default-features` core drops the command.
 
 ## AI-assisted authoring
 

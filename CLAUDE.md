@@ -89,6 +89,17 @@ Treat both as invariants every change must preserve:
 
 Always use `just` recipes — never raw `cargo` or `mdbook` commands.
 
+**Dependencies: always pull the latest (HARD RULE).** When adding a new
+dependency *or* bumping an existing one, use the **latest published version**
+(check crates.io — `cargo search <name>` or the crates.io API) rather than an
+older one from memory. `Cargo.toml` groups deps by the feature that pulls them in
+(core / manifest / tui / web / forge / ai / keychain); keep a new dep in its group
+with a one-line "why". Do a major bump's code migration (feature renames / API
+rewrites — e.g. keyring 4's `keyring-core` split + `use_native_store`, ureq 3's
+`http`-based client, schemars 1's `Schema`) **inline** and re-test the affected
+feature. Don't unilaterally split work into a separate issue/PR — the user decides
+when to split.
+
 ```sh
 just init        # install all project tools (clippy, rustfmt, cargo-watch, mdbook)
 just ci          # full CI suite: fmt-check, lint, test, book build
@@ -159,8 +170,21 @@ superset is fine, and `manifest_classifies_every_command` (mirrors
 `commands_are_all_grouped`) fails CI if a compiled command lacks an entry. `requires`
 captures **runtime** gating (`["ai","ai.enabled"]`, `["forge config"]`) distinct from
 compile-time. The command is handled before the store opens (like `completions`); a
-`--no-default-features` core drops the command + `schemars`. An MCP tool catalog is
-the planned follow-up. The destination flags on `publish` and
+`--no-default-features` core drops the command + `schemars`.
+
+**Agent surface — `adroit mcp`** (`src/mcp/`, default-on `mcp` feature = `manifest`).
+A built-in **Model Context Protocol** server (JSON-RPC 2.0 over stdio) that
+**projects the manifest's read verbs as MCP tools** so an agent drives adroit
+without scraping `--help`. Hand-rolled sync stdio loop (`serde_json` + `std::io` —
+no async runtime, matching the sync core); `handle_line` is a pure `&str ->
+Option<String>` (unit-tested + fuzzed via `fuzz_mcp_request`), `run` the thin
+driver. **Read-only:** `Server::new` filters the manifest to `is_read_tool()` verbs
+(`reads && !writes && cost ∈ {local, provider-call}`, minus the artifact-producing
+`publish`) — so repo-mutating, network (`sync`/`notify`), and long-running verbs
+are never exposed. A `tools/call` re-runs `adroit <verb> … -o json` as a subprocess
+with the resolved on-disk shape forwarded as env (drift-proof: a new read verb
+auto-appears + executes). Gated like `manifest`/`auth`; dispatched with the resolved
+`--dir` (like `serve`). The destination flags on `publish` and
 `review` are **`--out`** (long-only) so the short `-o` belongs to `--output`.
 `stats` + `graph` are thin CLI verbs over `query::stats`/`query::graph` (added to
 both `help_template`s — the `commands_are_all_grouped` guard). Note the five
