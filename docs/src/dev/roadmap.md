@@ -58,9 +58,10 @@ match arm* — no call-site changes:
 
 - **`Forge`** — the PR/MR side (`open_pr` / `pr_state` / `merge_pr` / `comment_pr` …).
 - **`Tracker`** — the issue side (`create_issue` / `transition` / `issue_state` …).
-- **`Publisher`** *(planned)* — render the accepted set into a target's shape.
-  `publish` is a single static-dir function today; it factors out to a trait as the
-  first hosted target lands.
+- **`Publisher`** — render the accepted set into a target's shape behind the
+  `publish --to` flag: `static` (default), `mdbook`, `mkdocs`, `hugo`,
+  `docusaurus`, `jekyll`. Pure + offline; adroit produces the tree, the consuming
+  repo's CI hosts it ([#8](https://github.com/como-technologies/adroit/issues/8)).
 
 Every adapter takes an injectable `HttpTransport`, so each is unit-tested against a
 fault-injected mock and the lifecycle cores run on mock adapters; the remaining
@@ -74,7 +75,7 @@ Providers grouped by seam — shipped, plus candidates (each a contained add):
 |---|---|---|
 | **Repo / PR host** (`Forge`) | GitHub, GitLab | Gitea / Forgejo, Bitbucket |
 | **Issue tracker** (`Tracker`) | GitHub Issues, GitLab Issues, Jira, native (files-only) | Linear ([#12](https://github.com/como-technologies/adroit/issues/12)) |
-| **Publish target** (`Publisher`) | static dir (mdBook / plain) | hugo-dir, docusaurus-dir ([#8](https://github.com/como-technologies/adroit/issues/8)) |
+| **Publish target** (`Publisher`) | static, mdBook, MkDocs, Hugo, Docusaurus, Jekyll ([#8](https://github.com/como-technologies/adroit/issues/8)) | — (Confluence / Notion *hosting* is out of scope) |
 
 Per-provider capability deepens behind the same traits — reviewer @-mentions, review
 deadlines, Jira due / Linear target dates

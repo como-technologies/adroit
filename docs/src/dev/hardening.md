@@ -53,7 +53,12 @@ path, the parsers, or a renderer:
   normalize newlines, escape raw HTML, and neutralize dangerous URL schemes. The
   same rule covers *imported files* — the assessment-import JSON/YAML parser and its
   seed mapping take untrusted input and must only ever yield `Ok`/`Err`, never panic
-  (fuzzed via `fuzz_parse_assessment` + a structural-invariant property).
+  (fuzzed via `fuzz_parse_assessment` + a structural-invariant property). The
+  `adroit publish` cross-link rewriter is the same class: scanning markdown links by
+  byte index, it sliced `content[last..lb]` with `last > lb` on nested / adjacent
+  brackets (`[[x](a.md)](b.md)`) — a backwards-range panic, fixed by requiring the
+  label's `[` to lie in the not-yet-emitted region, with a regression plus a
+  no-panic property and the `fuzz_publish_rewriter` bolero target.
 - **Auth, tokens & external responses.** Anything touching credentials gets extra
   scrutiny: HTTP/forge/OAuth responses are untrusted (parsers must never panic —
   fuzzed via `fuzz_oauth_token_parse` + property tests over arbitrary bytes); values

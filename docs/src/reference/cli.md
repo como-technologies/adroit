@@ -641,15 +641,20 @@ adroit index --check    # verify SUMMARY.md is up to date; non-zero if stale
 |---|---|
 | `--check` | Verify `SUMMARY.md` is up to date without writing; exit non-zero if stale |
 
-#### `adroit publish --out <DIR>`
+#### `adroit publish --out <DIR> [--to <TARGET>]`
 
-Export the accepted ADR set to a directory (static-dir publisher). `--out <OUT>`
-is **required**; `--dry-run` previews the export without writing. Also honors the
-global `-o`/`--output`.
+Render the accepted ADR set into a static-site shape. `--out <OUT>` is
+**required**; `--dry-run` previews the export without writing. `--to` selects the
+target — `static` (default), `mdbook`, `mkdocs`, `hugo`, `docusaurus`, or
+`jekyll` — and can also be set via the `publish_target` config key /
+`ADROIT_PUBLISH_TARGET`. Pure and offline; re-running overwrites idempotently.
+adroit *produces* the tree; a consuming repo's CI hosts it. See
+[Publishing](../usage/publishing.md).
 
 ```sh
-adroit publish --out ./public/adrs     # export accepted ADRs to a static dir
-adroit publish --out ./public/adrs --dry-run
+adroit publish --out ./public/adrs            # static dir (default)
+adroit publish --to hugo --out ./site/content # Hugo content section
+adroit publish --to mkdocs --out ./site --dry-run
 ```
 
 ### Forge integration
@@ -856,8 +861,10 @@ self-hosted — only `forge.host` changes. The integration is opt-in per command
   shell), drops a repo-local `adr-template.md` (MADR), and installs a pre-commit
   hook running `adroit check`. `--print` previews; `--yes` does the full setup
   non-interactively (detected forge + native tracker).
-- `adroit publish --out <dir>` exports accepted ADRs (static-dir, core/offline);
-  `adroit notify <id>` posts to a Slack/Teams webhook (`ADROIT_NOTIFY_WEBHOOK`).
+- `adroit publish --to <target> --out <dir>` renders accepted ADRs into a
+  static-site shape (`static`/`mdbook`/`mkdocs`/`hugo`/`docusaurus`/`jekyll`;
+  core/offline); `adroit notify <id>` posts to a Slack/Teams webhook
+  (`ADROIT_NOTIFY_WEBHOOK`).
 - `adroit auth <github|gitlab|jira> [--token <T>] [--email <E>]` saves a token to
   a `0600` `credentials.yaml` beside the config (prompts if `--token` is omitted),
   so you don't have to re-export an env var each session. Environment variables

@@ -654,9 +654,15 @@ or self-hosted; only `forge.host` changes (GitHub Enterprise host includes the
 provider+repo from the git remote → `config::parse_remote_url`, pick the tracker,
 write `forge.*`, then optionally `./.env` (ADROIT_DIR), a repo-local
 `adr-template.md`, and a pre-commit hook running `adroit check`; `--yes` runs it
-non-interactively, `--print` previews), `adroit publish` (export accepted
-ADRs to a dir — `src/publish.rs`, core/offline; Confluence/Notion adapters are
-future), `adroit notify <id>` (POST to a Slack/Teams webhook via
+non-interactively, `--print` previews), `adroit publish --to <target>` (render
+the accepted set into a static-site shape — the `Publisher` seam in
+`src/publish/`: `static` (default), `mdbook`, `mkdocs`, `hugo`, `docusaurus`,
+`jekyll`; core/offline, idempotent. A shared `PublishModel` (accepted set +
+category grouping + cross-link rewrite to published pages only) is serialized by
+each adapter module; adding a target = one `PublishTarget` arm + one module. The
+`publish_target` config key / `ADROIT_PUBLISH_TARGET` set the default. adroit
+**produces** the tree; the networked Confluence/Notion *hosting* push stays the
+consuming repo's CI), `adroit notify <id>` (POST to a Slack/Teams webhook via
 `forge::notify`), and `adroit auth <github|gitlab|jira> [--token] [--email]`
 (store a token; `{github,gitlab,jira}::open` resolve the token env → credential
 store → none). `adroit reconcile` syncs local

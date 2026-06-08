@@ -11,6 +11,7 @@
 //!
 //! See the book's Hardening & Quality page (docs/src/dev/hardening.md).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use adroit::adr::Status;
@@ -18,6 +19,7 @@ use adroit::format;
 use adroit::import::{self, SEED_MARKER, parse_assessment, seed_drafts, seed_fragment};
 use adroit::links;
 use adroit::naming::{AdrRef, NamingScheme};
+use adroit::publish;
 
 use proptest::prelude::*;
 
@@ -198,6 +200,45 @@ proptest! {
         let _ = links::number_in_target(&token);
         let _ = links::is_relative_md(&token);
         let _ = links::rel_link(Path::new(&token), Path::new(&token));
+    }
+
+    /// The publish cross-link rewriter tolerates arbitrary, adversarial input
+    /// (multibyte, lone `\r`, nested/adjacent brackets) for any scheme + published
+    /// set — the byte-index scan must never slice a backwards or non-boundary range.
+    #[test]
+    fn publish_rewriter_never_panics(
+        doc in arb_link_doc(),
+        text in arb_text(),
+        r1 in arb_ref(),
+        r2 in arb_ref(),
+        page in arb_token(),
+    ) {
+        let published: HashMap<AdrRef, PathBuf> = [
+            (r1, PathBuf::from(format!("{page}.md"))),
+            (r2, PathBuf::from("docs/sub/0001-x.md")),
+        ]
+        .into_iter()
+        .collect();
+        for input in [&doc, &text] {
+            for scheme in SCHEMES {
+                for cat in [None, Some("data")] {
+                    let _ = publish::rewrite_published_links(
+                        input,
+                        Path::new("a/page.md"),
+                        &scheme,
+                        &published,
+                        cat,
+                    );
+                }
+            }
+        }
+    }
+
+    /// `strip_h1` tolerates any input and only ever drops lines (never adds).
+    #[test]
+    fn publish_strip_h1_never_panics_and_only_drops_lines(text in arb_text()) {
+        let out = publish::strip_h1(&text);
+        prop_assert!(out.lines().count() <= text.lines().count());
     }
 
     #[test]

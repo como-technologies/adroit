@@ -15,11 +15,12 @@
 //! See the book's Development pages: Testing & Fuzzing (docs/src/dev/testing.md)
 //! and Hardening & Quality (docs/src/dev/hardening.md).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use adroit::adr::Status;
-use adroit::naming::NamingScheme;
-use adroit::{format, links};
+use adroit::naming::{AdrRef, NamingScheme};
+use adroit::{format, links, publish};
 
 use bolero::check;
 
@@ -65,6 +66,34 @@ fn fuzz_link_rewriter() {
         let _ = links::relative_md_targets(input);
         let _ = links::number_in_target(input);
         let _ = links::is_relative_md(input);
+    });
+}
+
+/// The publish cross-link rewriter never panics on hostile input (nested /
+/// adjacent brackets, multibyte, lone `\r`) under any scheme — the byte-index
+/// link scan must never slice a backwards or non-char-boundary range. `strip_h1`
+/// tolerates any input too.
+#[test]
+fn fuzz_publish_rewriter() {
+    check!().with_type::<String>().for_each(|input: &String| {
+        let page = Path::new("a/page.md");
+        let published: HashMap<AdrRef, PathBuf> = [
+            (AdrRef::Number(1), PathBuf::from("docs/0001-x.md")),
+            (
+                AdrRef::Slug("20260601-y".into()),
+                PathBuf::from("docs/20260601-y.md"),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        for scheme in SCHEMES {
+            let _ = publish::rewrite_published_links(input, page, &scheme, &published, Some("cat"));
+        }
+        // Nothing published → exercise the unlink path (no-panic on hostile input).
+        let empty: HashMap<AdrRef, PathBuf> = HashMap::new();
+        let _ =
+            publish::rewrite_published_links(input, page, &NamingScheme::Sequential, &empty, None);
+        let _ = publish::strip_h1(input);
     });
 }
 

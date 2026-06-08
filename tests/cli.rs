@@ -3413,3 +3413,38 @@ fn plan_emits_a_structured_json_envelope() {
         .stdout(predicate::str::contains("\"plan\":"))
         .stdout(predicate::str::contains("Create the schema."));
 }
+
+#[test]
+fn publish_to_renders_a_generator_tree() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["set-status", "1", "accepted"])
+        .assert()
+        .success();
+
+    // `--to mkdocs` renders the MkDocs shape (nav config + docs/ page).
+    let out = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["publish", "--to", "mkdocs", "--out"])
+        .arg(out.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mkdocs target"));
+    assert!(out.path().join("mkdocs.yml").is_file());
+    assert!(out.path().join("docs/0001-use-postgresql.md").is_file());
+
+    // No `--to` defaults to the static-dir target (back-compat).
+    let out2 = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["publish", "--out"])
+        .arg(out2.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("static target"));
+    assert!(out2.path().join("index.md").is_file());
+    assert!(out2.path().join("0001-use-postgresql.md").is_file());
+}
