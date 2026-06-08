@@ -166,3 +166,16 @@ fn fuzz_oauth_token_parse() {
         let _ = oauth::request_device_code(&t, "https://x/device", "cid", "repo");
     });
 }
+
+/// The MCP request handler tolerates any stdin line — a hostile / garbage JSON-RPC
+/// message must never panic, only yield an error response. The server (projected
+/// from the manifest) is built once; the fuzzer drives `handle_line` over it.
+#[cfg(feature = "mcp")]
+#[test]
+fn fuzz_mcp_request() {
+    let server =
+        adroit::mcp::Server::new(&adroit::config::Config::default(), &std::env::temp_dir());
+    check!().with_type::<String>().for_each(|input: &String| {
+        let _ = adroit::mcp::handle_line(&server, input);
+    });
+}

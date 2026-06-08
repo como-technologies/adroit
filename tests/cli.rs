@@ -3448,3 +3448,36 @@ fn publish_to_renders_a_generator_tree() {
     assert!(out2.path().join("index.md").is_file());
     assert!(out2.path().join("0001-use-postgresql.md").is_file());
 }
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_server_handshakes_lists_tools_and_runs_a_read_verb() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+
+    // initialize → notification (no reply) → tools/list → tools/call list.
+    let input = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list","arguments":{}}}"#,
+    ]
+    .join("\n");
+
+    let assert = adroit(&dir)
+        .arg("mcp")
+        .write_stdin(input)
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    // Handshake + a read verb exposed as a tool + the seeded ADR returned as JSON
+    // from the in-process `tools/call`. A write verb is never a tool.
+    assert!(stdout.contains("\"serverInfo\""), "{stdout}");
+    assert!(stdout.contains("\"name\":\"list\""), "{stdout}");
+    assert!(stdout.contains("Use PostgreSQL"), "{stdout}");
+    assert!(!stdout.contains("\"name\":\"set-status\""), "{stdout}");
+}

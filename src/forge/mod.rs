@@ -197,29 +197,32 @@ impl HttpTransport for UreqTransport {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Result<HttpResponse, ForgeError> {
-        let mut req = ureq::request(method, url);
+        // ureq 3 reports 4xx/5xx as `Err` by default; disable that so a non-2xx
+        // still comes back as a normal response (adapters map 401→Auth, 4xx/5xx→Api).
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut builder = ureq::http::Request::builder().method(method).uri(url);
         for (k, v) in headers {
-            req = req.set(k, v);
+            builder = builder.header(*k, *v);
         }
-        let result = match body {
-            Some(b) => req.send_bytes(b),
-            None => req.call(),
-        };
-        match result {
+        let request = builder
+            .body(body.unwrap_or(&[]).to_vec())
+            .map_err(|e| ForgeError::Offline(e.to_string()))?;
+        match agent.run(request) {
             Ok(resp) => Ok(read_response(resp)),
-            // A non-2xx still carries a response we can read (status + body).
-            Err(ureq::Error::Status(_, resp)) => Ok(read_response(resp)),
             // Connection refused / DNS / TLS / timeout → offline.
-            Err(ureq::Error::Transport(t)) => Err(ForgeError::Offline(t.to_string())),
+            Err(e) => Err(ForgeError::Offline(e.to_string())),
         }
     }
 }
 
-fn read_response(resp: ureq::Response) -> HttpResponse {
-    let status = resp.status();
+fn read_response(resp: ureq::http::Response<ureq::Body>) -> HttpResponse {
+    let status = resp.status().as_u16();
     let mut body = Vec::new();
     // Best-effort body read; an unreadable body is just empty bytes.
-    let _ = resp.into_reader().read_to_end(&mut body);
+    let _ = resp.into_body().into_reader().read_to_end(&mut body);
     HttpResponse { status, body }
 }
 

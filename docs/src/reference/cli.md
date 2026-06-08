@@ -791,6 +791,21 @@ adroit manifest | jq '.commands[] | select(.cost!="local") | {name,cost}'  # wha
 adroit manifest | jq '.types.AdrSummary'                         # the list/search shape
 ```
 
+#### `adroit mcp`
+
+Run a **[Model Context Protocol](https://modelcontextprotocol.io) server** on
+stdio (JSON-RPC 2.0), exposing adroit's **read-only** verbs as MCP **tools** so an
+MCP client (Claude / Claude Code, an editor, an agent) drives adroit without
+scraping `--help`. The tools are projected from `manifest`, so the surface can't
+drift; a `tools/call` runs the verb and returns its `-o json` output. Read-only —
+repo-mutating, network (`sync` / `notify`), and artifact-producing (`publish`)
+verbs are never exposed. Behind the default-on `mcp` feature; honors `--dir`. See
+[Automation & AI](../usage/automation.md#driving-adroit-over-mcp--adroit-mcp).
+
+```sh
+adroit --dir ./adr mcp     # an MCP client launches this; speaks JSON-RPC on stdio
+```
+
 ## Configuration
 
 adroit stores configuration in `~/.config/adroit/config.yaml` (XDG on Linux, platform-appropriate elsewhere). The file is created automatically on first run with your detected editor.
