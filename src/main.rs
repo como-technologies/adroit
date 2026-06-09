@@ -276,6 +276,8 @@ fn main() -> Result<()> {
             dry_run,
             #[cfg(feature = "forge")]
             yes,
+            #[cfg(feature = "forge")]
+            quorum,
         }) => {
             #[cfg(feature = "forge")]
             let forge_flags = adroit::forge_hook::ForgeFlags {
@@ -288,7 +290,11 @@ fn main() -> Result<()> {
                 dry_run,
                 ..Default::default()
             };
-            cmd_set_status(&store, &cfg, &id, &status, forge_flags)?;
+            #[cfg(feature = "forge")]
+            let quorum_override = quorum;
+            #[cfg(not(feature = "forge"))]
+            let quorum_override = None;
+            cmd_set_status(&store, &cfg, &id, &status, forge_flags, quorum_override)?;
         }
         Some(Command::Supersede {
             new,
@@ -1180,6 +1186,7 @@ fn cmd_set_status(
     id: &str,
     status: &str,
     forge: adroit::forge_hook::ForgeFlags,
+    quorum: Option<u32>,
 ) -> Result<()> {
     let new_status: Status = status.parse().map_err(|_| {
         anyhow::anyhow!(
@@ -1193,7 +1200,7 @@ fn cmd_set_status(
     // The forge pre-step previews its plan (and stops) when it's a preview; a
     // `--dry-run` then also skips the *local* move (so `--dry-run` changes nothing
     // even without `--forge`).
-    let proceed = adroit::forge_hook::before_status_change(cfg, &path, new_status, forge)?;
+    let proceed = adroit::forge_hook::before_status_change(cfg, &path, new_status, forge, quorum)?;
     if forge.dry_run {
         println!(
             "Dry run: would set {} status to {new_status} (no local changes).",

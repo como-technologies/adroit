@@ -8,8 +8,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{
-    CiStatus, Forge, ForgeError, HttpTransport, IssueRef, IssueState, PrDraft, PrRef, PrState,
-    Tracker, Transition, UreqTransport,
+    CiStatus, Forge, ForgeComment, ForgeError, HttpTransport, IssueRef, IssueState, PrDraft, PrRef,
+    PrState, Tracker, Transition, UreqTransport,
 };
 
 /// A GitLab REST v4 client scoped to one project.
@@ -173,6 +173,30 @@ impl Tracker for Gitlab {
         .map(drop)
     }
 
+    fn comments_on_issue(&self, issue: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        let v = self.call(
+            "GET",
+            &format!("projects/{}/issues/{issue}/notes?per_page=100", self.proj()),
+            None,
+        )?;
+        Ok(super::parse_rest_comments(&v, "body"))
+    }
+
+    fn update_issue_comment(
+        &self,
+        issue: &str,
+        comment_id: &str,
+        body: &str,
+    ) -> Result<(), ForgeError> {
+        // GitLab edits a note under its parent issue (the iid is in the path).
+        self.call(
+            "PUT",
+            &format!("projects/{}/issues/{issue}/notes/{comment_id}", self.proj()),
+            Some(json!({ "body": body })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("gitlab:{}", self.project)
     }
@@ -251,6 +275,30 @@ impl Forge for Gitlab {
         self.call(
             "POST",
             &format!("projects/{}/merge_requests/{pr}/notes", self.proj()),
+            Some(json!({ "body": body })),
+        )
+        .map(drop)
+    }
+
+    fn comments_on_pr(&self, pr: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        let v = self.call(
+            "GET",
+            &format!(
+                "projects/{}/merge_requests/{pr}/notes?per_page=100",
+                self.proj()
+            ),
+            None,
+        )?;
+        Ok(super::parse_rest_comments(&v, "body"))
+    }
+
+    fn update_pr_comment(&self, pr: &str, comment_id: &str, body: &str) -> Result<(), ForgeError> {
+        self.call(
+            "PUT",
+            &format!(
+                "projects/{}/merge_requests/{pr}/notes/{comment_id}",
+                self.proj()
+            ),
             Some(json!({ "body": body })),
         )
         .map(drop)
@@ -441,5 +489,28 @@ mod tests {
             r#"{"draft":false,"title":"ADR-0007"}"#,
         )]);
         assert!(gl.mark_ready("42").is_ok());
+    }
+
+    #[test]
+    fn upsert_pr_comment_edits_the_marked_mr_note() {
+        let marker = "<!-- adroit:review-kickoff -->";
+        let listing = format!(r#"[{{"id":9,"body":"old\n\n{marker}"}}]"#);
+        // GET notes + PUT note/9 wired (no POST) → Ok proves the edit path.
+        let gl = gitlab(&[
+            ("GET /merge_requests/42/notes", 200, &listing),
+            ("PUT /merge_requests/42/notes/9", 200, "{}"),
+        ]);
+        assert!(gl.upsert_pr_comment("42", marker, "new body").is_ok());
+    }
+
+    #[test]
+    fn upsert_issue_comment_creates_a_note_when_none_is_marked() {
+        let marker = "<!-- adroit:review-deadline -->";
+        // GET notes (none marked) + POST notes wired (no PUT) → Ok proves create.
+        let gl = gitlab(&[
+            ("GET /issues/7/notes", 200, "[]"),
+            ("POST /issues/7/notes", 201, "{}"),
+        ]);
+        assert!(gl.upsert_issue_comment("7", marker, "deadline").is_ok());
     }
 }

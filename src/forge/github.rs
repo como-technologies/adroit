@@ -8,8 +8,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{
-    CiStatus, Forge, ForgeError, HttpTransport, IssueRef, IssueState, PrDraft, PrRef, PrState,
-    Tracker, Transition, UreqTransport,
+    CiStatus, Forge, ForgeComment, ForgeError, HttpTransport, IssueRef, IssueState, PrDraft, PrRef,
+    PrState, Tracker, Transition, UreqTransport,
 };
 
 /// A GitHub REST client scoped to one `owner/repo`.
@@ -172,6 +172,31 @@ impl Tracker for Github {
         })
     }
 
+    fn comments_on_issue(&self, issue: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        // PR conversation comments are issue comments — the same endpoint.
+        let v = self.call(
+            "GET",
+            &format!("repos/{}/issues/{issue}/comments?per_page=100", self.repo),
+            None,
+        )?;
+        Ok(super::parse_rest_comments(&v, "body"))
+    }
+
+    fn update_issue_comment(
+        &self,
+        _issue: &str,
+        comment_id: &str,
+        body: &str,
+    ) -> Result<(), ForgeError> {
+        // GitHub edits issue/PR comments by their global id (no parent in the path).
+        self.call(
+            "PATCH",
+            &format!("repos/{}/issues/comments/{comment_id}", self.repo),
+            Some(json!({ "body": body })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("github:{}", self.repo)
     }
@@ -280,6 +305,15 @@ impl Forge for Github {
             Some(json!({ "body": body })),
         )
         .map(drop)
+    }
+
+    fn comments_on_pr(&self, pr: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        // PR conversation comments are issue comments — reuse the Tracker side.
+        Tracker::comments_on_issue(self, pr)
+    }
+
+    fn update_pr_comment(&self, pr: &str, comment_id: &str, body: &str) -> Result<(), ForgeError> {
+        Tracker::update_issue_comment(self, pr, comment_id, body)
     }
 
     fn set_pr_body(&self, pr: &str, body: &str) -> Result<(), ForgeError> {
@@ -452,6 +486,47 @@ mod tests {
         // confirms the path (a wrong one would 404 → Err).
         let gh = github(&[("POST /issues/42/labels", 200, "[]")]);
         assert!(gh.add_label("42", "review-by:2026-06-20").is_ok());
+    }
+
+    // For the upsert tests below, route-presence proves which call ran: a missing
+    // route 404s → Err, so `is_ok()` confirms the expected create/update/no-op path.
+
+    #[test]
+    fn upsert_pr_comment_edits_the_existing_marked_comment() {
+        let marker = "<!-- adroit:review-kickoff -->";
+        // An older adroit comment (id 99) carries the marker but a different body.
+        let listing = format!(r#"[{{"id":1,"body":"hi"}},{{"id":99,"body":"old\n\n{marker}"}}]"#);
+        // Only GET + PATCH wired (no POST) — so a create attempt would 404 → Err.
+        let gh = github(&[
+            ("GET /issues/42/comments", 200, &listing),
+            ("PATCH /issues/comments/99", 200, "{}"),
+        ]);
+        assert!(gh.upsert_pr_comment("42", marker, "new body").is_ok());
+    }
+
+    #[test]
+    fn upsert_pr_comment_creates_when_none_is_marked() {
+        let marker = "<!-- adroit:review-kickoff -->";
+        // No marked comment → create. Only GET + POST wired (no PATCH).
+        let gh = github(&[
+            (
+                "GET /issues/42/comments",
+                200,
+                r#"[{"id":1,"body":"unrelated"}]"#,
+            ),
+            ("POST /issues/42/comments", 201, "{}"),
+        ]);
+        assert!(gh.upsert_pr_comment("42", marker, "kickoff").is_ok());
+    }
+
+    #[test]
+    fn upsert_pr_comment_is_a_noop_when_unchanged() {
+        let marker = "<!-- adroit:review-kickoff -->";
+        // The stored body already equals the tagged body → no write at all. Only
+        // the GET is wired; any PATCH/POST would 404 → Err, so Ok proves the no-op.
+        let listing = format!(r#"[{{"id":99,"body":"kickoff\n\n{marker}"}}]"#);
+        let gh = github(&[("GET /issues/42/comments", 200, &listing)]);
+        assert!(gh.upsert_pr_comment("42", marker, "kickoff").is_ok());
     }
 
     #[test]

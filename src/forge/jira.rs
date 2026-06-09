@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport};
+use super::{
+    ForgeComment, ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition,
+    UreqTransport,
+};
 
 /// A Jira REST client scoped to one project (Cloud or Server/Data Center).
 #[derive(Clone)]
@@ -197,6 +200,26 @@ impl Tracker for Jira {
         .map(drop)
     }
 
+    fn comments_on_issue(&self, issue: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        let v = self.call("GET", &format!("issue/{issue}/comment"), None)?;
+        // Jira nests the array under `comments`; v2 comment bodies are plain strings.
+        Ok(super::parse_rest_comments(&v["comments"], "body"))
+    }
+
+    fn update_issue_comment(
+        &self,
+        issue: &str,
+        comment_id: &str,
+        body: &str,
+    ) -> Result<(), ForgeError> {
+        self.call(
+            "PUT",
+            &format!("issue/{issue}/comment/{comment_id}"),
+            Some(json!({ "body": body })),
+        )
+        .map(drop)
+    }
+
     fn describe(&self) -> String {
         format!("jira:{}", self.project)
     }
@@ -322,5 +345,29 @@ mod tests {
         let j = jira(&[("PUT /issue/OPS-1", 204, "")]);
         assert!(j.set_due_date("OPS-1", Some("2026-06-20")).is_ok());
         assert!(j.set_due_date("OPS-1", None).is_ok()); // clear
+    }
+
+    #[test]
+    fn upsert_issue_comment_edits_the_marked_jira_comment() {
+        let marker = "<!-- adroit:review-deadline -->";
+        // Jira nests comments under `comments`; ids are strings.
+        let listing = format!(r#"{{"comments":[{{"id":"55","body":"old\n\n{marker}"}}]}}"#);
+        // GET + PUT comment/55 wired (no POST) → Ok proves the edit path.
+        let j = jira(&[
+            ("GET /issue/OPS-1/comment", 200, &listing),
+            ("PUT /issue/OPS-1/comment/55", 204, ""),
+        ]);
+        assert!(j.upsert_issue_comment("OPS-1", marker, "new body").is_ok());
+    }
+
+    #[test]
+    fn upsert_issue_comment_creates_when_none_is_marked() {
+        let marker = "<!-- adroit:review-deadline -->";
+        // GET (empty) + POST wired (no PUT) → Ok proves the create path.
+        let j = jira(&[
+            ("GET /issue/OPS-1/comment", 200, r#"{"comments":[]}"#),
+            ("POST /issue/OPS-1/comment", 201, r#"{"id":"1"}"#),
+        ]);
+        assert!(j.upsert_issue_comment("OPS-1", marker, "deadline").is_ok());
     }
 }

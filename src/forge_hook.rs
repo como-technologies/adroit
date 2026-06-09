@@ -54,11 +54,12 @@ pub fn before_status_change(
     path: &Path,
     new_status: Status,
     flags: ForgeFlags,
+    quorum: Option<u32>,
 ) -> Result<bool> {
     if !flags.enabled {
         return Ok(true);
     }
-    crate::forge::before_status_change(cfg, path, new_status, flags.dry_run, flags.yes)
+    crate::forge::before_status_change(cfg, path, new_status, quorum, flags.dry_run, flags.yes)
 }
 
 #[cfg(not(feature = "forge"))]
@@ -67,6 +68,7 @@ pub fn before_status_change(
     _path: &Path,
     _new_status: Status,
     flags: ForgeFlags,
+    _quorum: Option<u32>,
 ) -> Result<bool> {
     if flags.enabled {
         warn_no_feature();

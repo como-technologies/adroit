@@ -158,7 +158,16 @@ adroit set-status 21 accepted --forge --yes   # verify approvals + CI, merge the
   date, so it's a no-op there). `--clear` clears it.
 - **`set-status N accepted --forge`** verifies the required approvals + CI, then
   merges the PR and closes the issue; `rejected` / `deprecated` close them. It
-  **refuses if the PR is blocked**, and previews unless you pass `--yes`.
+  **refuses if the PR is blocked**, and previews unless you pass `--yes`. The
+  approval count comes from `review_quorum` (default 3); override it for one run
+  with `--quorum N` (e.g. `--quorum 1` for a solo repo).
+
+> **Re-running converges — it doesn't spam.** `review --forge` and `set-review
+> --forge` post their comment **idempotently**: the comment carries a hidden
+> marker, so a re-run *edits adroit's own comment in place* (a no-op if nothing
+> changed) instead of adding a duplicate. Labels, the native due date, and the
+> un-draft are likewise idempotent. (On monday, which has no edit-update API, a
+> re-run still avoids a duplicate but can't refresh the body.)
 
 Every `--forge` action accepts `--dry-run` (preview) and `--yes` (apply); without
 `--yes` you get a preview, mirroring `adroit migrate`. **`--dry-run` is a true full

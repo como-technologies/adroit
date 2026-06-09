@@ -156,6 +156,31 @@ pub trait Forge {
     fn mark_ready(&self, _pr: &str) -> Result<(), ForgeError> {
         Ok(())
     }
+    /// List a PR/MR's existing comments (for idempotent upsert). Default empty — a
+    /// host that doesn't override this falls back to always creating.
+    fn comments_on_pr(&self, _pr: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        Ok(Vec::new())
+    }
+    /// Edit an existing PR/MR comment by id. Default no-op (no edit endpoint).
+    fn update_pr_comment(
+        &self,
+        _pr: &str,
+        _comment_id: &str,
+        _body: &str,
+    ) -> Result<(), ForgeError> {
+        Ok(())
+    }
+    /// Post `body` on a PR/MR **idempotently**: edit the comment tagged with
+    /// `marker` in place (no-op if unchanged), else create one. Converges instead
+    /// of accumulating, so re-running `review`/`set-review --forge` never spams.
+    fn upsert_pr_comment(&self, pr: &str, marker: &str, body: &str) -> Result<(), ForgeError> {
+        let tagged = tag_body(marker, body);
+        match plan_upsert(&self.comments_on_pr(pr)?, marker, &tagged) {
+            UpsertAction::Noop => Ok(()),
+            UpsertAction::Update(id) => self.update_pr_comment(pr, &id, &tagged),
+            UpsertAction::Create => self.comment_pr(pr, &tagged),
+        }
+    }
     /// Short label for diagnostics (e.g. `github:owner/repo`).
     fn describe(&self) -> String;
 }
@@ -176,6 +201,33 @@ pub trait Tracker {
     /// due-date field (e.g. GitHub Issues). Jira/GitLab/Linear/monday override it.
     fn set_due_date(&self, _issue: &str, _date: Option<&str>) -> Result<(), ForgeError> {
         Ok(())
+    }
+    /// List an issue's existing comments (for idempotent upsert). Default empty.
+    fn comments_on_issue(&self, _issue: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        Ok(Vec::new())
+    }
+    /// Edit an existing issue comment by id. Default no-op (no edit endpoint).
+    fn update_issue_comment(
+        &self,
+        _issue: &str,
+        _comment_id: &str,
+        _body: &str,
+    ) -> Result<(), ForgeError> {
+        Ok(())
+    }
+    /// Post `body` on an issue **idempotently** (see [`Forge::upsert_pr_comment`]).
+    fn upsert_issue_comment(
+        &self,
+        issue: &str,
+        marker: &str,
+        body: &str,
+    ) -> Result<(), ForgeError> {
+        let tagged = tag_body(marker, body);
+        match plan_upsert(&self.comments_on_issue(issue)?, marker, &tagged) {
+            UpsertAction::Noop => Ok(()),
+            UpsertAction::Update(id) => self.update_issue_comment(issue, &id, &tagged),
+            UpsertAction::Create => self.comment_issue(issue, &tagged),
+        }
     }
     fn describe(&self) -> String;
 }
@@ -303,6 +355,71 @@ pub(crate) fn want_num(v: &Value, key: &str, label: &str) -> Result<String, Forg
             status: 0,
             message: format!("{label} response missing numeric `{key}`"),
         })
+}
+
+// ---------------------------------------------------------------------------
+// Idempotent comments — converge, don't accumulate.
+// ---------------------------------------------------------------------------
+
+/// One existing comment fetched from a forge (id + raw body), so adroit can find
+/// and update the comment it authored on a re-run instead of posting a new one.
+#[derive(Debug, Clone)]
+pub struct ForgeComment {
+    pub id: String,
+    pub body: String,
+}
+
+/// Hidden marker tagging adroit's `review --forge` kickoff comment, so a re-run
+/// edits that one comment in place rather than posting a duplicate. Invisible in
+/// rendered markdown (GitHub/GitLab/Linear); see [`plan_upsert`].
+pub const MARKER_REVIEW_KICKOFF: &str = "<!-- adroit:review-kickoff -->";
+/// Hidden marker tagging adroit's `set-review --forge` deadline comment.
+pub const MARKER_REVIEW_DEADLINE: &str = "<!-- adroit:review-deadline -->";
+
+/// Parse a REST comments array into [`ForgeComment`]s. `id` may be numeric (GitHub/
+/// GitLab) or a string (Jira); `body` is read from `body_key`. Anything malformed
+/// is skipped, never panics.
+pub(crate) fn parse_rest_comments(v: &Value, body_key: &str) -> Vec<ForgeComment> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let id = c["id"]
+                .as_u64()
+                .map(|n| n.to_string())
+                .or_else(|| c["id"].as_str().map(str::to_string))?;
+            let body = c[body_key].as_str().unwrap_or_default().to_string();
+            Some(ForgeComment { id, body })
+        })
+        .collect()
+}
+
+/// The action an idempotent comment upsert should take, decided purely from the
+/// existing comments. The body is tagged with `marker` so a later run can find it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UpsertAction {
+    /// A marked comment already holds exactly this body — do nothing (no API write).
+    Noop,
+    /// A marked comment exists but differs — edit it (carry its id).
+    Update(String),
+    /// No marked comment — create one.
+    Create,
+}
+
+/// Append `marker` to `body` (what gets stored, so the next run recognizes it).
+pub(crate) fn tag_body(marker: &str, body: &str) -> String {
+    format!("{body}\n\n{marker}")
+}
+
+/// Decide the upsert action: find the first comment containing `marker`; if its
+/// body already equals `tagged` it's a no-op, else update it; absent → create.
+/// Pure — unit-tested without a network.
+pub(crate) fn plan_upsert(existing: &[ForgeComment], marker: &str, tagged: &str) -> UpsertAction {
+    match existing.iter().find(|c| c.body.contains(marker)) {
+        Some(c) if c.body == tagged => UpsertAction::Noop,
+        Some(c) => UpsertAction::Update(c.id.clone()),
+        None => UpsertAction::Create,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +722,7 @@ pub fn before_status_change(
     cfg: &Config,
     path: &std::path::Path,
     new_status: Status,
+    quorum: Option<u32>,
     dry_run: bool,
     yes: bool,
 ) -> anyhow::Result<bool> {
@@ -624,7 +742,7 @@ pub fn before_status_change(
         tracker.as_ref(),
         &read_refs(path),
         new_status,
-        cfg.review_quorum,
+        quorum.unwrap_or(cfg.review_quorum),
         dry_run,
         yes,
     )?;
@@ -920,14 +1038,24 @@ pub fn on_supersede(
 
 /// Comment `body` on whichever of the ADR's linked PR + issue exist (best-effort,
 /// warn-and-continue). Shared by the `review`/`set-review` forge paths.
-fn comment_both(forge: &dyn Forge, tracker: &dyn Tracker, refs: &ForgeRefs, body: &str) {
+/// Post `body` on the linked PR **and** issue **idempotently**, tagged with
+/// `marker` so a re-run edits adroit's own comment in place instead of adding a
+/// duplicate (converge, don't accumulate). Graceful-offline: a failure on one
+/// side warns and the other still posts.
+fn upsert_both(
+    forge: &dyn Forge,
+    tracker: &dyn Tracker,
+    refs: &ForgeRefs,
+    marker: &str,
+    body: &str,
+) {
     if let Some((pr, _)) = &refs.pr
-        && let Err(e) = forge.comment_pr(pr, body)
+        && let Err(e) = forge.upsert_pr_comment(pr, marker, body)
     {
         eprintln!("adroit: couldn't comment on PR ({e})");
     }
     if let Some((issue, _)) = &refs.issue
-        && let Err(e) = tracker.comment_issue(issue, body)
+        && let Err(e) = tracker.upsert_issue_comment(issue, marker, body)
     {
         eprintln!("adroit: couldn't comment on issue ({e})");
     }
@@ -1004,7 +1132,13 @@ pub fn review_kickoff(
     } else {
         format!("{body}\n\ncc:{mentions}")
     };
-    comment_both(forge.as_ref(), tracker.as_ref(), &refs, &full);
+    upsert_both(
+        forge.as_ref(),
+        tracker.as_ref(),
+        &refs,
+        MARKER_REVIEW_KICKOFF,
+        &full,
+    );
     if let Some((pr, _)) = &refs.pr {
         // Opening for formal review → un-draft the PR so it can be reviewed + merged.
         if let Err(e) = forge.mark_ready(pr) {
@@ -1063,7 +1197,13 @@ pub fn set_review_deadline(
         println!("\nPreview — re-run with --yes to apply.");
         return Ok(());
     }
-    comment_both(forge.as_ref(), tracker.as_ref(), &refs, note);
+    upsert_both(
+        forge.as_ref(),
+        tracker.as_ref(),
+        &refs,
+        MARKER_REVIEW_DEADLINE,
+        note,
+    );
     if let Some((issue, _)) = &refs.issue
         && let Err(e) = tracker.set_due_date(issue, date)
     {
@@ -1467,6 +1607,67 @@ mod tests {
         let r = vec!["@alice".to_string(), "bob".to_string(), "  ".to_string()];
         assert_eq!(mention_suffix(&r), " @alice @bob");
         assert_eq!(mention_suffix(&[]), "");
+    }
+
+    fn comment(id: &str, body: &str) -> ForgeComment {
+        ForgeComment {
+            id: id.to_string(),
+            body: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn plan_upsert_creates_when_no_marked_comment_exists() {
+        let tagged = tag_body(MARKER_REVIEW_KICKOFF, "kickoff");
+        // Empty, and an unrelated comment, both → create.
+        assert_eq!(
+            plan_upsert(&[], MARKER_REVIEW_KICKOFF, &tagged),
+            UpsertAction::Create
+        );
+        let others = [comment("1", "someone else's note")];
+        assert_eq!(
+            plan_upsert(&others, MARKER_REVIEW_KICKOFF, &tagged),
+            UpsertAction::Create
+        );
+    }
+
+    #[test]
+    fn plan_upsert_is_a_noop_when_the_marked_comment_is_unchanged() {
+        let tagged = tag_body(MARKER_REVIEW_KICKOFF, "kickoff");
+        let existing = [comment("1", "noise"), comment("7", &tagged)];
+        // Same body already posted → converged, no API write.
+        assert_eq!(
+            plan_upsert(&existing, MARKER_REVIEW_KICKOFF, &tagged),
+            UpsertAction::Noop
+        );
+    }
+
+    #[test]
+    fn plan_upsert_updates_the_marked_comment_when_the_body_changed() {
+        let old = tag_body(MARKER_REVIEW_KICKOFF, "old deadline 2026-06-10");
+        let new = tag_body(MARKER_REVIEW_KICKOFF, "new deadline 2026-06-20");
+        let existing = [comment("42", &old)];
+        // Found by marker, body differs → edit comment 42 (don't post a duplicate).
+        assert_eq!(
+            plan_upsert(&existing, MARKER_REVIEW_KICKOFF, &new),
+            UpsertAction::Update("42".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_rest_comments_tolerates_numeric_and_string_ids() {
+        let v = serde_json::json!([
+            { "id": 12, "body": "a" },
+            { "id": "c-uuid", "body": "b" },
+            { "id": null, "body": "skipped" },
+            "garbage",
+        ]);
+        let parsed = parse_rest_comments(&v, "body");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].id, "12");
+        assert_eq!(parsed[1].id, "c-uuid");
+        // A non-array (hostile shape) is an empty list, never a panic.
+        assert!(parse_rest_comments(&serde_json::json!({}), "body").is_empty());
     }
 
     #[test]

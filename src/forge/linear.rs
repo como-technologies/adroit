@@ -29,7 +29,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport};
+use super::{
+    ForgeComment, ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition,
+    UreqTransport,
+};
 
 const API: &str = "https://api.linear.app/graphql";
 
@@ -141,6 +144,18 @@ mutation($id: String!, $body: String!) {
 const SET_DUE: &str = "\
 mutation($id: String!, $due: TimelessDate) {
   issueUpdate(id: $id, input: { dueDate: $due }) { success }
+}";
+
+const COMMENTS: &str = "\
+query($key: String!, $num: Float!) {
+  issues(filter: { team: { key: { eq: $key } }, number: { eq: $num } }, first: 1) {
+    nodes { comments { nodes { id body } } }
+  }
+}";
+
+const UPDATE_COMMENT: &str = "\
+mutation($id: String!, $body: String!) {
+  commentUpdate(id: $id, input: { body: $body }) { success }
 }";
 
 /// Construct a Linear tracker, or `None` if inactive (missing `tracker_project`
@@ -282,6 +297,31 @@ impl Tracker for Linear {
         let node = self.resolve(issue)?;
         let uuid = super::want_str(&node, "id", "Linear")?;
         self.gql(SET_DUE, json!({ "id": uuid, "due": date }))
+            .map(drop)
+    }
+
+    fn comments_on_issue(&self, issue: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        // Resolve by team-key + number (one call), pulling the issue's comments —
+        // ids are UUIDs (strings), which `parse_rest_comments` handles.
+        let (key, number) = split_identifier(issue).ok_or_else(|| ForgeError::Api {
+            status: 0,
+            message: format!("Linear: unrecognized issue identifier `{issue}`"),
+        })?;
+        let data = self.gql(COMMENTS, json!({ "key": key, "num": number }))?;
+        Ok(super::parse_rest_comments(
+            &data["issues"]["nodes"][0]["comments"]["nodes"],
+            "body",
+        ))
+    }
+
+    fn update_issue_comment(
+        &self,
+        _issue: &str,
+        comment_id: &str,
+        body: &str,
+    ) -> Result<(), ForgeError> {
+        // `commentUpdate` takes the comment's own UUID directly.
+        self.gql(UPDATE_COMMENT, json!({ "id": comment_id, "body": body }))
             .map(drop)
     }
 
@@ -442,5 +482,23 @@ mod tests {
         // The mutation carries the resolved UUID and the date.
         assert!(bodies[1].contains("issue-uuid"), "got: {}", bodies[1]);
         assert!(bodies[1].contains("2026-06-20"), "got: {}", bodies[1]);
+    }
+
+    #[test]
+    fn upsert_issue_comment_edits_the_marked_comment_by_uuid() {
+        let marker = "<!-- adroit:review-kickoff -->";
+        // 1st call: list comments (one carries the marker, id c1). 2nd: commentUpdate.
+        let listing = format!(
+            r#"{{"data":{{"issues":{{"nodes":[{{"comments":{{"nodes":[{{"id":"c1","body":"old\n\n{marker}"}}]}}}}]}}}}}}"#
+        );
+        let (l, f) = linear(&[
+            (200, listing.as_str()),
+            (200, r#"{"data":{"commentUpdate":{"success":true}}}"#),
+        ]);
+        l.upsert_issue_comment("ENG-7", marker, "new body").unwrap();
+        let bodies = f.bodies.lock().unwrap();
+        // The 2nd call is `commentUpdate` carrying the comment's own UUID.
+        assert!(bodies[1].contains("c1"), "got: {}", bodies[1]);
+        assert!(bodies[1].contains("commentUpdate"), "got: {}", bodies[1]);
     }
 }

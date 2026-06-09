@@ -57,7 +57,8 @@ every change must preserve.
   is a no-op.
 - **Idempotent verbs** (re-run = byte-identical): `set-status`, `supersede`,
   `set-review`, `relink`, `migrate` (converges to a fixpoint then "nothing to
-  migrate"), `index`, `link`/link-rewriting, `publish`, `check`.
+  migrate"), `index`, `link`/link-rewriting, `publish`, `check`. Forge **comments**
+  converge too (`review`/`set-review --forge` upsert by a hidden marker — forge section).
 - **Intentionally non-idempotent** *imperative events* (repeating repeats the event,
   by design): `new` (allocates the next ADR), `renumber old new` (one-shot;
   re-running fails because `old` is gone), `notify` (fresh message), forge/git side
@@ -411,8 +412,8 @@ separate `tracker`. `forge/noop.rs` is the null-object preview adapter.
 `mod` line in `lib.rs`, the `src/forge_hook.rs` facade (twin real/no-op defs), and the
 **forge CLI surface** in `src/cli.rs` — the `--forge`/`--dry-run`/`--yes` opt-in flags on
 shared verbs *and* the forge-only commands (`init`/`auth`/`sync`/`notify`), so a no-forge
-build doesn't expose them (`publish` stays — offline; the `help_template` is `cfg_attr`-
-selected to omit the Forge section). Verb handlers call `forge_hook::*` unconditionally (no-op
+build doesn't expose them (`publish` stays — offline; `help_template` `cfg_attr`-omits the
+Forge section). Verb handlers call `forge_hook::*` unconditionally (no-op
 twins); `main` builds `ForgeFlags` with a small `#[cfg]`. Runtime: `forge::open(&ForgeConfig)`
 is a thin dispatcher (`match Provider`); adding a provider = one match arm + module. HTTP is
 behind the `HttpTransport` seam (tested with `FakeTransport`).
@@ -428,11 +429,13 @@ dirty/diverged/rejected push leaves the move local with a warning). `set-status
 rejected`/`deprecated` close the PR + mark the issue won't-fix; `supersede` closes the old
 ADR's issue/PR (each orchestration has a testable core with mock/noop adapters). Read-side:
 `check --forge` appends `ProblemKind::ForgeIntegration` warnings; `list --forge` enriches rows
-(`AdrSummary.forge_data`); `review --forge` (`forge::review_kickoff`) posts the kickoff +
-@-mentions `forge.reviewers` + tags a `review-by:<date>` PR label, `set-review --forge`
-(`forge::set_review_deadline`) comments + sets the tracker's native due date — via new
-default-no-op trait methods `Forge::add_label` / `Tracker::set_due_date` (GitHub Issues have
-no due date).
+(`AdrSummary.forge_data`); `review --forge` (`forge::review_kickoff`) **un-drafts** the PR
+(`mark_ready`), upserts the kickoff comment, @-mentions `forge.reviewers`, tags a
+`review-by:<date>` label; `set-review --forge` upserts a comment + sets the tracker's native
+due date. All via default-no-op trait methods (`add_label`/`mark_ready`/`set_due_date`; comment
+upsert = `upsert_{pr,issue}_comment` over `plan_upsert` + `comments_on_*`/`update_*_comment`;
+GitHub Issues have no due date, monday no edit API → no-dup, no-refresh). `accepted` un-drafts
+before merge + takes `--quorum` (overrides `review_quorum`).
 
 **Providers.** `github` + `gitlab` (same-system Forge+Tracker); `jira` (REST v2), `linear`,
 `monday` are split **Tracker**-only adapters (no `Forge`) chosen by `forge.tracker`. **Linear +
@@ -441,51 +444,47 @@ monday are GraphQL** (`forge/{linear,monday}.rs`): one `POST`, reusing `rest_cal
 = team key), maps `Transition`→workflow-state `type` (`completed`/`canceled`/`unstarted`), and
 stores a **slug-stripped** URL so `read_refs` recovers `ENG-123` from the trailing segment
 (resolved to the UUID by team-key+number); monday files an **item** to a board
-(`tracker_project` = board id, `tracker_host` = subdomain), matching a Status-column label by
-keyword. All split trackers are token-only (`ADROIT_{JIRA,LINEAR,MONDAY}_TOKEN`). Jira auth:
-Cloud Basic `email:token`, Server/DC Bearer PAT. GitHub/GitLab use the same token cloud or
-self-hosted; only `forge.host` changes (GH Enterprise `/api/v3`). `gh_issues`/`gl_issues` alias
-`native`.
+(`tracker_project` = board id, `tracker_host` = subdomain), matching a Status-column label.
+All split trackers are token-only (`ADROIT_{JIRA,LINEAR,MONDAY}_TOKEN`). Jira auth: Cloud Basic
+`email:token`, Server/DC Bearer PAT. GitHub/GitLab use one token cloud or self-hosted; only
+`forge.host` changes (GHE `/api/v3`). `gh_issues`/`gl_issues` alias `native`.
 
-**Cross-cutting verbs.** `adroit init` (wizard: detect provider+repo from the git remote, pick
-the tracker, write `forge.*` + optionally `./.env`, an
-`adr-template.md`, a pre-commit `adroit check` hook; `--yes`/`--print`); `adroit publish --to
+**Cross-cutting verbs.** `adroit init` (wizard: detect provider+repo from the remote, pick the
+tracker, write `forge.*` + optionally `./.env` / `adr-template.md` / a pre-commit `adroit check`
+hook; `--yes`/`--print`); `adroit publish --to
 <target>` (render the accepted set via the `Publisher` seam (`src/publish/`): `static`
-(default), `mdbook`, `mkdocs`, `hugo`, `docusaurus`, `jekyll`; core/offline, idempotent; a
-target = one `PublishTarget` arm + module; default via `publish_target`. adroit **produces**
-the tree, the networked Confluence/Notion push stays the consuming repo's CI); `adroit notify
+(default), `mdbook`, `mkdocs`, `hugo`, `docusaurus`, `jekyll`; core/offline, idempotent;
+default via `publish_target`. adroit **produces** the tree; Confluence/Notion hosting stays the
+consuming repo's CI); `adroit notify
 <id>` (Slack/Teams webhook); `adroit auth <github|gitlab|jira|linear|monday> [--token]
 [--email]` (token env → credential store → none); `adroit reconcile` syncs local status after
 out-of-band changes (reports drift; `--yes` moves a merged PR's ADR to `accepted/`).
 
 **Read-only dashboard.** Two forge-aware routes, `null`/empty without an active forge (on
 `forge_hook::*` twins): `GET /api/adrs/{id}/forge` feeds `DetailView.vue`'s issue/PR panel;
-`GET /api/forge/summary` (with `AppState.review_quorum`) feeds the dashboard tiles. The
-dashboard never *writes* to the forge.
+`GET /api/forge/summary` (with `AppState.review_quorum`) feeds the dashboard tiles. Never
+*writes* to the forge.
 
-**Forge config is repo-scoped, not just global.** `forge.*` is one global config, but the
-active dir (the dashboard switches dirs, the CLI runs anywhere) may belong to a *different*
-repo than `forge.repo`. `dir_matches_forge(fcfg, dir)` compares the dir's `origin` remote to
-`forge.repo`; a definite mismatch means it doesn't apply. **Every** forge entry point guards
-on it — reads and writes call `skip_dir_mismatch`/`skip_path_mismatch` after the `cfg.forge`
-check, warning once and skipping the forge side (mutating verbs keep the local record, touching
-nothing in the wrong repo). Undeterminable cases (no `repo` / no recognizable remote) apply.
+**Forge config is repo-scoped.** `forge.*` is global, but the active dir (dashboard switches
+dirs; CLI runs anywhere) may belong to a *different* repo than `forge.repo`. `dir_matches_forge`
+compares the dir's `origin` to `forge.repo`; on a definite mismatch **every** forge entry point
+(`skip_dir_mismatch`/`skip_path_mismatch`, after the `cfg.forge` check) warns once and skips the
+forge side — mutating verbs keep the local record, touching nothing in the wrong repo.
+Undeterminable cases (no `repo`/no recognizable remote) apply.
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `oauth_client_id`,
-`branch_prefix`, `base_branch`, `tracker: TrackerProvider`) under `Config.forge`; tokens
-env-only (`#[serde(skip)]`). `just lint-forge`/`test-forge` (in `just ci`) cover the build.
+`branch_prefix`, `base_branch`, `reviewers`, `tracker: TrackerProvider`) under `Config.forge`;
+tokens env-only (`#[serde(skip)]`). `just lint-forge`/`test-forge` (in `just ci`) cover the build.
 
-**Credential storage + device-flow auth (`keychain` feature).** Tokens (forge + the anthropic
-key) go through one seam — `config::load_credential`/`store_credential` — over a
-`CredentialBackend` chain: the **OS keychain** (`keyring` crate's pure-Rust backends — macOS /
-Windows / Linux keyutils, no C deps) first, then the `0600` `FileBackend`. The `keychain`
-feature is enabled by **both** `ai` and `forge`; the bare core
-stays file-only. `ADROIT_CREDENTIAL_STORE=auto|file|keychain` overrides the chain (pins
-`file` for tests); `cmd_auth` never echoes the token. `adroit auth github`/`gitlab` with no
-`--token` runs an **OAuth device-flow** login (`src/forge/oauth.rs`, a pure core over
-`HttpTransport` using `forge.oauth_client_id`), falling back to a manual prompt with no client
-id; `jira`/`linear`/`monday` are token-only. `cmd_auth` also accepts `anthropic` — stores the
-AI key in the same store (read by `config::anthropic_key`).
+**Credential storage + device-flow auth (`keychain` feature).** Tokens (forge + anthropic key)
+go through one seam — `config::load_credential`/`store_credential` — over a `CredentialBackend`
+chain: the **OS keychain** (`keyring` pure-Rust backends, no C deps) first, then the `0600`
+`FileBackend`. `keychain` is enabled by **both** `ai` and `forge`; the bare core is file-only.
+`ADROIT_CREDENTIAL_STORE=auto|file|keychain` overrides (pins `file` for tests); `cmd_auth` never
+echoes the token. `adroit auth github`/`gitlab` with no `--token` runs an **OAuth device-flow**
+login (`src/forge/oauth.rs`, pure core over `HttpTransport`, `forge.oauth_client_id`;
+manual-prompt fallback with no client id); `jira`/`linear`/`monday` token-only. `cmd_auth` also
+accepts `anthropic` (stores the AI key in the same store, read by `config::anthropic_key`).
 
 ## AI authoring (`ai` feature)
 

@@ -380,6 +380,11 @@ pub enum Command {
         #[cfg(feature = "forge")]
         #[arg(long)]
         yes: bool,
+        /// Required approvals to merge on `accepted --forge`
+        /// (default: config `review_quorum`).
+        #[cfg(feature = "forge")]
+        #[arg(long)]
+        quorum: Option<u32>,
     },
     /// Mark an older ADR as superseded by a newer one.
     Supersede {

@@ -24,7 +24,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition, UreqTransport};
+use super::{
+    ForgeComment, ForgeError, HttpTransport, IssueRef, IssueState, Tracker, Transition,
+    UreqTransport,
+};
 
 const API: &str = "https://api.monday.com/v2";
 
@@ -114,6 +117,8 @@ mutation($board: ID!, $item: ID!, $col: String!, $val: String!) {
 
 const ITEM_STATUS: &str =
     "query($ids: [ID!]) { items(ids: $ids) { column_values { id type text } } }";
+
+const ITEM_UPDATES: &str = "query($ids: [ID!]) { items(ids: $ids) { updates { id body } } }";
 
 /// Construct a monday tracker, or `None` if inactive (missing `tracker_project`,
 /// `tracker_host`, or `ADROIT_MONDAY_TOKEN`). `tracker_project` = board id,
@@ -263,6 +268,18 @@ impl Tracker for Monday {
             open,
             url: self.item_url(issue),
         })
+    }
+
+    fn comments_on_issue(&self, issue: &str) -> Result<Vec<ForgeComment>, ForgeError> {
+        // An item's "comments" are its updates. monday has no edit-update mutation,
+        // so `update_issue_comment` stays the default no-op: the upsert still finds
+        // adroit's tagged update and avoids posting a duplicate (it just can't
+        // refresh a changed body in place — best-effort, unlike GitHub/GitLab).
+        let data = self.gql(ITEM_UPDATES, json!({ "ids": [issue] }))?;
+        Ok(super::parse_rest_comments(
+            &data["items"][0]["updates"],
+            "body",
+        ))
     }
 
     fn set_due_date(&self, issue: &str, date: Option<&str>) -> Result<(), ForgeError> {
@@ -429,5 +446,34 @@ mod tests {
         let bodies = f.bodies.lock().unwrap();
         assert!(bodies[1].contains("date4"), "got: {}", bodies[1]);
         assert!(bodies[1].contains("2026-06-20"), "got: {}", bodies[1]);
+    }
+
+    #[test]
+    fn upsert_issue_comment_creates_an_update_when_none_is_marked() {
+        let marker = "<!-- adroit:review-deadline -->";
+        let (m, f) = monday(vec![
+            (200, r#"{"data":{"items":[{"updates":[]}]}}"#.into()), // list: none
+            (200, r#"{"data":{"create_update":{"id":"u1"}}}"#.into()), // create
+        ]);
+        m.upsert_issue_comment("42", marker, "deadline").unwrap();
+        let bodies = f.bodies.lock().unwrap();
+        assert!(bodies[1].contains("create_update"), "got: {}", bodies[1]);
+    }
+
+    #[test]
+    fn upsert_issue_comment_does_not_duplicate_an_existing_marked_update() {
+        let marker = "<!-- adroit:review-deadline -->";
+        // monday has no edit-update mutation, so a changed body is a no-op — but
+        // crucially it must NOT post a duplicate. Only the list call should run.
+        let listing = format!(
+            r#"{{"data":{{"items":[{{"updates":[{{"id":"u9","body":"old\n\n{marker}"}}]}}]}}}}"#
+        );
+        let (m, f) = monday(vec![(200, listing)]);
+        assert!(m.upsert_issue_comment("42", marker, "new deadline").is_ok());
+        assert_eq!(
+            f.bodies.lock().unwrap().len(),
+            1,
+            "must not create a duplicate update"
+        );
     }
 }

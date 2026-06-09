@@ -382,8 +382,13 @@ file** to the matching status directory and rewrites the `## Status` section
 
 Valid statuses: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
 
+With `--forge` it also drives the PR/issue (on `accepted`: verify approvals + CI,
+merge, close); `--quorum <N>` overrides the required approval count for that run
+(default: config `review_quorum`). See [Forge Integration](../usage/forge.md).
+
 ```sh
 adroit set-status 1 accepted
+adroit set-status 1 accepted --forge --quorum 1 --yes   # solo repo: 1 approval
 ```
 
 #### `adroit supersede <NEW> <OLD>`
