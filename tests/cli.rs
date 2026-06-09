@@ -199,6 +199,13 @@ fn status_getter_prints_lowercase_and_round_trips_into_set_status() {
         .assert()
         .success()
         .stdout("accepted\n");
+
+    // `-o json` emits a valid JSON string (the typed `Status`), cased to match
+    // `show`/`list -o json` — not the bare lowercase word, which isn't valid JSON.
+    assert_eq!(
+        json_ok(&dir, &["status", "1", "-o", "json"]),
+        serde_json::json!("Accepted")
+    );
 }
 
 #[test]

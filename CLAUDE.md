@@ -125,9 +125,11 @@ Writes stay in the `Store` write path (CLI + TUI); the query layer never writes.
 is deferred to the web surface (`AdrDetail::body_html` stays `None`).
 
 **CLI emits the same JSON (`-o`/`--output json`).** A global `cli::OutputFormat`
-(`human` default, `json`) is honored by read verbs `list`/`show`/`search`/`stats`/
-`graph`/`check` (`docs/src/usage/automation.md`). `check -o json` still exits non-zero
-on an Error-severity problem (the CI gate).
+(`human` default, `json`) is honored by read verbs `list`/`show`/`status`/`search`/
+`stats`/`graph`/`check` (`docs/src/usage/automation.md`). `check -o json` still exits
+non-zero on an Error-severity problem (the CI gate). `status -o json` is the scalar
+case — the typed `Status` as a JSON string (`"Accepted"`); its human form stays the
+bare lowercase word.
 
 **Agent discovery — `adroit manifest`** (`src/manifest.rs`, default-on `manifest` feature =
 `dep:schemars`): a machine-readable JSON catalog of the CLI surface, three drift-proof layers:

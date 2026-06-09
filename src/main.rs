@@ -267,7 +267,7 @@ fn main() -> Result<()> {
         Some(Command::Summarize { id, out }) => {
             cmd_summarize(&store, &cfg, &resolve_ref(&cfg, &id)?, out.as_deref())?
         }
-        Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id)?,
+        Some(Command::Status { id }) => cmd_get_status(&store, &cfg, &id, output)?,
         Some(Command::SetStatus {
             id,
             status,
@@ -1170,10 +1170,17 @@ fn cmd_show(store: &Store, r: &AdrRef, output: OutputFormat) -> Result<()> {
 /// so it's scriptable — it round-trips into `set-status` and matches the
 /// by_status directory names (e.g. `[ "$(adroit status 7)" = accepted ]`). The
 /// capitalized form is display-only (`show`, `list`).
-fn cmd_get_status(store: &Store, cfg: &Config, id: &str) -> Result<()> {
+///
+/// Under `-o json` it emits the typed `Status` as a JSON string (`"Proposed"`) —
+/// a valid JSON value (RFC 8259), cased to match `show`/`list -o json`. `status`
+/// is the scalar read verb, so its JSON projection is a scalar, not an object.
+fn cmd_get_status(store: &Store, cfg: &Config, id: &str, output: OutputFormat) -> Result<()> {
     let r = resolve_ref(cfg, id)?;
     let path = store.find_path_by_ref(&r)?;
     let detail = query::detail_at(store, &path)?;
+    if output == OutputFormat::Json {
+        return print_json(&detail.summary.status);
+    }
     println!("{}", detail.summary.status.to_string().to_lowercase());
     Ok(())
 }

@@ -158,7 +158,7 @@ fn classified(name: &str) -> Option<Meta> {
         // Explore the corpus
         "list"       => m!("explore", true,  false, true,  "local",   Some("AdrSummary[]"), &[],            Some("0 (read-only)")),
         "show"       => m!("explore", true,  false, true,  "local",   Some("AdrDetail"),    &[],            None),
-        "status"     => m!("explore", true,  false, true,  "local",   None,                 &[],            None),
+        "status"     => m!("explore", true,  false, true,  "local",   Some("Status"),       &[],            None),
         "search"     => m!("explore", true,  false, true,  "local",   Some("AdrSummary[]"), &[],            None),
         "stats"      => m!("explore", true,  false, true,  "local",   Some("Stats"),        &[],            None),
         "graph"      => m!("explore", true,  false, true,  "local",   Some("Graph"),        &[],            None),
@@ -269,7 +269,12 @@ fn type_schemas() -> serde_json::Map<String, Value> {
         to_val(schemars::schema_for!(crate::view::CheckReport)),
     );
     // The ad-hoc read shapes, registered so every `json_output` name resolves:
-    // `lint` (LintFinding[]), `dedupe` / `related` (Match[]), `ask` (AskAnswer).
+    // `status` (Status), `lint` (LintFinding[]), `dedupe` / `related` (Match[]),
+    // `ask` (AskAnswer).
+    m.insert(
+        "Status".into(),
+        to_val(schemars::schema_for!(crate::adr::Status)),
+    );
     m.insert(
         "LintFinding".into(),
         to_val(schemars::schema_for!(crate::lint::LintFinding)),

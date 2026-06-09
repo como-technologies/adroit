@@ -7,12 +7,13 @@ integration surface — there's no separate API to learn.
 ## `-o json` on the read verbs
 
 Pass `-o` / `--output json` (it's global, so it works before or after the verb)
-to get machine-readable output from `list`, `show`, `search`, `stats`, `graph`,
-and `check`:
+to get machine-readable output from `list`, `show`, `status`, `search`, `stats`,
+`graph`, and `check`:
 
 ```sh
 adroit list -o json
 adroit show 21 -o json
+adroit status 21 -o json
 adroit search "postgres" -o json
 adroit stats -o json
 adroit graph -o json
@@ -27,6 +28,7 @@ running `serve`, and get identical shapes. Key types:
 |---|---|
 | `list` / `search` | array of `AdrSummary` (`reference`, `address`, `title`, `status`, `supersedes`, `review_due`, …) |
 | `show` | `AdrDetail` — the summary fields flattened to the top level, plus `body`, `related`, `history`, `last_modified` |
+| `status` | `Status` — the ADR's status as a JSON string (e.g. `"Accepted"`); the human form is the bare lowercase word |
 | `stats` | `Stats` — `total`, `by_status`, `proposed_age`, `review_due`, `created_over_time` |
 | `graph` | `Graph` — `nodes` + directed `edges` (supersession + typed links) |
 | `check` | `CheckReport` — `checked`, `problems[]` (each with `severity`, `kind`, `message`, `file`) |
@@ -71,9 +73,9 @@ Three parts, none of which can drift from the binary:
   consumer can validate an output before consuming it. Every command's
   `json_output` name resolves here: the `view` types (`AdrSummary` / `AdrDetail` /
   `Stats` / `Graph` / `CheckReport`) for `list` / `show` / `stats` / `graph` /
-  `check`, plus `LintFinding` (`lint`), `Match` (`dedupe` / `related`), and
-  `AskAnswer` (`ask`). A `[]` suffix on a `json_output` name means an array of that
-  type.
+  `check`, plus `Status` (`status`), `LintFinding` (`lint`), `Match` (`dedupe` /
+  `related`), and `AskAnswer` (`ask`). A `[]` suffix on a `json_output` name means
+  an array of that type.
 - **`global_options`** + `tool` / `version` / `manifest_schema` (the version of the
   manifest's own shape — bumped on a breaking change).
 
