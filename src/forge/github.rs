@@ -225,6 +225,7 @@ impl Forge for Github {
     fn pr_state(&self, pr: &str) -> Result<PrState, ForgeError> {
         let pull = self.call("GET", &format!("repos/{}/pulls/{pr}", self.repo), None)?;
         let merged = pull["merged"].as_bool().unwrap_or(false);
+        let closed = !merged && pull["state"].as_str() == Some("closed");
         let draft = pull["draft"].as_bool().unwrap_or(false);
         let sha = pull["head"]["sha"].as_str().unwrap_or_default().to_string();
 
@@ -275,6 +276,7 @@ impl Forge for Github {
             approvals,
             ci,
             merged,
+            closed,
             draft,
         })
     }

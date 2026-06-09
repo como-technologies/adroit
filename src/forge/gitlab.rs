@@ -229,6 +229,7 @@ impl Forge for Gitlab {
             None,
         )?;
         let merged = mr["state"].as_str() == Some("merged");
+        let closed = mr["state"].as_str() == Some("closed");
         let draft = mr["draft"].as_bool().unwrap_or(false);
         let ci = match mr["head_pipeline"]["status"].as_str() {
             Some("success") => CiStatus::Success,
@@ -249,6 +250,7 @@ impl Forge for Gitlab {
             approvals,
             ci,
             merged,
+            closed,
             draft,
         })
     }

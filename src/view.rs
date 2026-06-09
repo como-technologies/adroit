@@ -70,6 +70,10 @@ pub struct ForgeData {
     pub pr_ci: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_merged: Option<bool>,
+    /// The PR/MR is **closed without merging** (distinct from `pr_merged`); lets a
+    /// row show `PR closed` instead of an open PR's approvals/CI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_closed: Option<bool>,
     /// The linked tracker issue's lifecycle — `"open"` / `"closed"` (the tracker's
     /// native state), attached read-only by `list --forge` + the dashboard. A
     /// non-mutating probe of the `read_refs` → resolve path for split trackers.
@@ -86,6 +90,8 @@ impl ForgeData {
         if self.pr_url.is_some() {
             let state = if self.pr_merged == Some(true) {
                 "merged".to_string()
+            } else if self.pr_closed == Some(true) {
+                "closed".to_string()
             } else {
                 match (self.pr_approvals, &self.pr_ci) {
                     (Some(a), Some(ci)) => format!("{a} approvals, ci {ci}"),
@@ -113,6 +119,7 @@ mod forge_data_tests {
             pr_approvals: None,
             pr_ci: None,
             pr_merged: None,
+            pr_closed: None,
             issue_state: None,
         }
     }
@@ -145,6 +152,19 @@ mod forge_data_tests {
             ..data()
         };
         assert_eq!(h.status_parts(), vec!["PR 2 approvals, ci ok"]);
+
+        // Closed-without-merge (e.g. a rejected ADR's PR) reads `closed`, not its
+        // approvals/CI — and `merged` still wins over `closed` if both were set.
+        let k = ForgeData {
+            pr_url: Some("…/pull/14".into()),
+            pr_approvals: Some(0),
+            pr_ci: Some("none".into()),
+            pr_closed: Some(true),
+            issue_url: Some("…/COM-6".into()),
+            issue_state: Some("closed".into()),
+            ..data()
+        };
+        assert_eq!(k.status_parts(), vec!["PR closed", "issue closed"]);
     }
 }
 

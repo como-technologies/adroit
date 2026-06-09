@@ -22,6 +22,7 @@ impl Forge for NoopForge {
             approvals: 0,
             ci: CiStatus::None,
             merged: false,
+            closed: false,
             draft: true,
         })
     }

@@ -433,9 +433,10 @@ dirty/diverged push stays local with a warning). `set-status
 rejected`/`deprecated` close the PR + mark the issue won't-fix; `supersede` closes the old
 ADR's issue/PR (each orchestration has a testable core with mock/noop adapters). Read-side:
 `check --forge` appends `ProblemKind::ForgeIntegration` warnings; `list --forge` enriches rows
-(`AdrSummary.forge_data` — PR review/CI/merge state **and** the split tracker issue's native
-`issue_state` open/closed, `enrich` reading both `forge` + `tracker`; `ForgeData::status_parts`
-renders both, so a split setup shows `PR merged, issue closed`); `review --forge`
+(`AdrSummary.forge_data` — PR review/CI/merge/`pr_closed` state **and** the split tracker
+issue's native `issue_state` open/closed, `enrich` reading both `forge` + `tracker`;
+`ForgeData::status_parts` renders both, so a split setup shows `PR merged, issue closed` — a
+closed-unmerged PR reads `PR closed`); `review --forge`
 (`forge::review_kickoff`) **un-drafts** the PR
 (`mark_ready`), upserts the kickoff comment (its relative links **absolutized** to
 `Forge::web_blob_base` URLs so they resolve in a PR/Linear comment), @-mentions

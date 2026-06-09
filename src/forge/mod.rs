@@ -65,6 +65,9 @@ pub struct PrState {
     pub approvals: u32,
     pub ci: CiStatus,
     pub merged: bool,
+    /// Closed **without** merging (GitHub `state == "closed"` && !merged; GitLab
+    /// `state == "closed"`). A merged PR is reported via `merged`, never here.
+    pub closed: bool,
     pub draft: bool,
 }
 
@@ -1492,6 +1495,7 @@ pub fn enrich_with(
             pr_approvals: None,
             pr_ci: None,
             pr_merged: None,
+            pr_closed: None,
             issue_state: None,
         };
         if let (Some(forge), Some((pr, _))) = (&forge, &refs.pr) {
@@ -1500,6 +1504,7 @@ pub fn enrich_with(
                     data.pr_approvals = Some(st.approvals);
                     data.pr_ci = Some(format!("{:?}", st.ci).to_lowercase());
                     data.pr_merged = Some(st.merged);
+                    data.pr_closed = Some(st.closed);
                 }
                 Err(e) if e.is_offline() => {
                     if !warned {
@@ -1981,6 +1986,7 @@ mod tests {
             approvals,
             ci,
             merged: false,
+            closed: false,
             draft: true,
         }
     }
@@ -2076,6 +2082,7 @@ mod tests {
                 approvals: 0,
                 ci: CiStatus::None,
                 merged: true,
+                closed: false,
                 draft: false,
             },
             merged: false.into(),
