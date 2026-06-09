@@ -199,13 +199,23 @@ fn canonical_url(url: &str, identifier: &str) -> String {
 }
 
 /// The Linear workflow-state `type` for a [`Transition`]. Linear states have a
-/// `type` ∈ {triage, backlog, unstarted, started, completed, canceled}.
+/// `type` ∈ {triage, backlog, unstarted, started, completed, canceled, duplicate}
+/// — the live API surfaced `duplicate` (a terminal/closed category) beyond the
+/// originally-assumed set; see [`is_closed_type`].
 fn target_type(to: Transition) -> &'static str {
     match to {
         Transition::Done => "completed",
         Transition::WontFix => "canceled",
         Transition::Reopen => "unstarted",
     }
+}
+
+/// Whether a Linear workflow-state `type` is **terminal/closed** (an issue in it
+/// is resolved, not actionable). Linear's closed categories are `completed`,
+/// `canceled`, and `duplicate`. `duplicate` was missing from the original
+/// cassette assumptions — dogfood-found drift against a live workspace (issue 25).
+fn is_closed_type(ty: &str) -> bool {
+    matches!(ty, "completed" | "canceled" | "duplicate")
 }
 
 impl Tracker for Linear {
@@ -286,7 +296,7 @@ impl Tracker for Linear {
             .map(|u| canonical_url(u, issue))
             .unwrap_or_default();
         Ok(IssueState {
-            open: !matches!(ty, "completed" | "canceled"),
+            open: !is_closed_type(ty),
             url,
         })
     }
@@ -424,7 +434,9 @@ mod tests {
         let (l, f) = linear(&[
             (
                 200,
-                r#"{"data":{"issues":{"nodes":[{"id":"issue-uuid","url":"u","state":{"type":"started"},"team":{"states":{"nodes":[{"id":"s-todo","type":"unstarted"},{"id":"s-done","type":"completed"},{"id":"s-cancel","type":"canceled"}]}}}]}}}"#,
+                // States mirror a live workspace: includes the `duplicate` type
+                // surfaced during dogfooding (issue 25), beyond the original set.
+                r#"{"data":{"issues":{"nodes":[{"id":"issue-uuid","url":"u","state":{"type":"started"},"team":{"states":{"nodes":[{"id":"s-todo","type":"unstarted"},{"id":"s-done","type":"completed"},{"id":"s-cancel","type":"canceled"},{"id":"s-dupe","type":"duplicate"}]}}}]}}}"#,
             ),
             (200, r#"{"data":{"issueUpdate":{"success":true}}}"#),
         ]);
@@ -453,6 +465,18 @@ mod tests {
         let st = l.issue_state("ENG-7").unwrap();
         assert!(!st.open);
         assert_eq!(st.url, "https://linear.app/acme/issue/ENG-7");
+    }
+
+    #[test]
+    fn issue_state_treats_duplicate_as_closed() {
+        // Drift caught live (issue 25): a real Linear workspace exposes a
+        // `duplicate` workflow-state type — a terminal/closed category the
+        // cassette had missed. An issue in it must read closed, not open.
+        let (l, _f) = linear(&[(
+            200,
+            r#"{"data":{"issues":{"nodes":[{"id":"u","url":"https://linear.app/acme/issue/ENG-7/x","state":{"type":"duplicate"}}]}}}"#,
+        )]);
+        assert!(!l.issue_state("ENG-7").unwrap().open);
     }
 
     #[test]
