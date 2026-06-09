@@ -73,6 +73,7 @@ fn hammer_forge(f: &dyn Forge) {
     let _ = f.comments_on_pr("1");
     let _ = f.update_pr_comment("1", "10", "edited");
     let _ = f.upsert_pr_comment("1", "<!-- adroit:review-kickoff -->", "kickoff");
+    let _ = f.web_blob_base("main");
     let _ = f.describe();
 }
 

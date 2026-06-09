@@ -106,7 +106,8 @@ just run <args>  # run the binary
 - `src/query.rs` — shared read API over `Store`
   (`summaries`/`detail`/`search`/`stats`/`graph`), builds the view types
 - `src/history.rs` — git-derived ADR dates + lifecycle (shells `git log`)
-- `src/links.rs` — cross-ADR relative-link parsing + rewriting (pure)
+- `src/links.rs` — cross-ADR relative-link parsing/rewriting + `absolutize_links`
+  (rel→blob URL for forge comments); pure
 - `tests/` — `cli.rs` (binary + regressions), `model.rs` (model-based oracle over the
   format×layout×scheme×relink_scope matrix), `parsers.rs` + `fuzz_parsers.rs`
   (properties / bolero fuzz), `config_precedence.rs`, `date_source_git.rs`,
@@ -343,21 +344,19 @@ external URLs / anchors / non-ADR links untouched. The engine is **scheme-agnost
 writing only changed files; `relink(apply=false)` is the dry-run.
 
 **Relink scope on a status move (`relink_scope` on `StoreOptions`).** After a move,
-`set_status_at` dispatches on `config::RelinkScope`: `all` (default) heals every inbound
-link (best for a single author); `self` fixes only the moved file's outbound links, leaving
-neighbors for later; `none` does nothing. `self`/`none` make a status-change PR touch only
-the ADR it's about, so concurrent decision PRs never collide — inbound links are
-canonicalized by a post-merge `adroit relink` on `main` (the "heal-on-main" /
-propose-on-branch workflow; see `templates/ci/` + the "Concurrent contributors" page).
-**`adroit relink`, `renumber`, and `migrate` are always full-scope** — only `set_status_at`
-consults `relink_scope`.
+`set_status_at` dispatches on `config::RelinkScope`: `all` (default) heals every inbound link;
+`self` fixes only the moved file's outbound links; `none` does nothing. `self`/`none` make a
+status-change PR touch only its own ADR, so concurrent decision PRs never collide — inbound
+links are canonicalized by a post-merge `adroit relink` on `main` (the "heal-on-main"/
+propose-on-branch workflow; `templates/ci/` + the "Concurrent contributors" page).
+**`relink`, `renumber`, `migrate` are always full-scope** — only `set_status_at` consults
+`relink_scope`.
 
 `adroit relink` exposes the full relink on demand (repairs repos edited outside adroit, or
 the post-merge bot). `cmd_check`'s link check is **identity-based**: a missing-target link
 that still names an existing ADR is **stale** (`Severity::Warning` — `relink` heals it); a
 link naming no existing ADR is **broken** (`Severity::Error`). `cmd_check` exits non-zero
-only on an Error-severity problem (duplicate number, broken link, status/dir mismatch,
-unparseable, broken supersession); a warning-only report exits 0. `query.rs` resolves graph
+only on an Error-severity problem; a warning-only report exits 0. `query.rs` resolves graph
 link targets through `scheme.ref_in_link`.
 
 `Store::renumber` (`adroit renumber <old> <new> [--file]`) resolves a duplicate number:
@@ -422,20 +421,22 @@ behind the `HttpTransport` seam (tested with `FakeTransport`).
 the local write): `new` creates the issue + a draft PR off an `adr/NNNN-…` branch (`src/git.rs`)
 and records both URLs in a format-preserving `## References` section; `set-status accepted`
 verifies `review_quorum` approvals + CI then merges the PR + closes the issue (refuses if
-blocked; previews unless `--yes`), then **pushes the relink commit**: `before_status_change`
-fast-forwards the base, the local move relocates `proposed/ → accepted/` + relinks,
-`after_status_change` commits + pushes — so `accepted/` lands on `main` in one command (a
-dirty/diverged/rejected push leaves the move local with a warning). `set-status
+blocked; previews unless `--yes`), then **pushes the relink commit** (`before_status_change`
+fast-forwards the base, the local `proposed/ → accepted/` move + relink lands via
+`after_status_change` commit + push — so `accepted/` reaches `main` in one command; a
+dirty/diverged push stays local with a warning). `set-status
 rejected`/`deprecated` close the PR + mark the issue won't-fix; `supersede` closes the old
 ADR's issue/PR (each orchestration has a testable core with mock/noop adapters). Read-side:
 `check --forge` appends `ProblemKind::ForgeIntegration` warnings; `list --forge` enriches rows
 (`AdrSummary.forge_data`); `review --forge` (`forge::review_kickoff`) **un-drafts** the PR
-(`mark_ready`), upserts the kickoff comment, @-mentions `forge.reviewers`, tags a
-`review-by:<date>` label; `set-review --forge` upserts a comment + sets the tracker's native
-due date. All via default-no-op trait methods (`add_label`/`mark_ready`/`set_due_date`; comment
-upsert = `upsert_{pr,issue}_comment` over `plan_upsert` + `comments_on_*`/`update_*_comment`;
-GitHub Issues have no due date, monday no edit API → no-dup, no-refresh). `accepted` un-drafts
-before merge + takes `--quorum` (overrides `review_quorum`).
+(`mark_ready`), upserts the kickoff comment (its relative links **absolutized** to
+`Forge::web_blob_base` URLs so they resolve in a PR/Linear comment), @-mentions
+`forge.reviewers`, tags a `review-by:<date>` label; `set-review --forge` upserts a comment +
+sets the tracker's native due date. All via default-no-op trait methods
+(`add_label`/`mark_ready`/`set_due_date`; comment upsert = `upsert_{pr,issue}_comment` over
+`plan_upsert` + `comments_on_*`/`update_*_comment`; GitHub Issues have no due date, monday no
+edit API → no-dup, no-refresh). `accepted` un-drafts before merge + takes `--quorum` (overrides
+`review_quorum`).
 
 **Providers.** `github` + `gitlab` (same-system Forge+Tracker); `jira` (REST v2), `linear`,
 `monday` are split **Tracker**-only adapters (no `Forge`) chosen by `forge.tracker`. **Linear +

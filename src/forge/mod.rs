@@ -181,6 +181,13 @@ pub trait Forge {
             UpsertAction::Create => self.comment_pr(pr, &tagged),
         }
     }
+    /// Web base for linking repo files at `base_branch`
+    /// (`https://github.com/owner/repo/blob/main`), so relative links in a forge
+    /// comment can be absolutized to resolve cross-application (a PR/Linear comment
+    /// is outside the repo file tree). Default `None` — leave links relative.
+    fn web_blob_base(&self, _base_branch: &str) -> Option<String> {
+        None
+    }
     /// Short label for diagnostics (e.g. `github:owner/repo`).
     fn describe(&self) -> String;
 }
@@ -1061,6 +1068,33 @@ fn upsert_both(
     }
 }
 
+/// The ADR file's directory relative to the repo root (POSIX `/`-separated), for
+/// resolving its relative links to absolute blob URLs. `None` when undeterminable
+/// (not a work tree, path outside it) — callers then skip the rewrite.
+fn repo_rel_dir(path: &std::path::Path) -> Option<String> {
+    let dir = path.parent()?;
+    let top = crate::git::toplevel(dir).ok()?.canonicalize().ok()?;
+    let dir_abs = dir.canonicalize().ok()?;
+    let rel = dir_abs.strip_prefix(&top).ok()?;
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
+/// Absolutize a comment body's relative links to the forge's web blob URLs so they
+/// resolve when posted to a PR/issue comment (cross-application — a relative `.md`
+/// link dangles outside the repo file tree). A no-op when the forge has no known
+/// web base or the repo-relative dir can't be resolved.
+fn forge_comment_body(
+    forge: &dyn Forge,
+    base_branch: &str,
+    path: &std::path::Path,
+    body: &str,
+) -> String {
+    match (forge.web_blob_base(base_branch), repo_rel_dir(path)) {
+        (Some(base), Some(dir)) => crate::links::absolutize_links(body, &dir, &base),
+        _ => body.to_string(),
+    }
+}
+
 /// A ` @handle` mention suffix for each configured reviewer (a missing `@` is
 /// added); empty when no reviewers are configured.
 fn mention_suffix(reviewers: &[String]) -> String {
@@ -1132,6 +1166,9 @@ pub fn review_kickoff(
     } else {
         format!("{body}\n\ncc:{mentions}")
     };
+    // Absolutize the doc's relative links so they resolve in the comment context
+    // (a PR/Linear comment is outside the repo file tree).
+    let full = forge_comment_body(forge.as_ref(), &fcfg.base_branch, path, &full);
     upsert_both(
         forge.as_ref(),
         tracker.as_ref(),

@@ -113,6 +113,75 @@ pub fn rewrite_links(
     (out, changed)
 }
 
+/// Resolve a relative POSIX `target` against `base_dir` (both repo-root-relative,
+/// `/`-separated), collapsing `.`/`..`. `None` if `..` escapes above the repo root
+/// (can't be a blob path).
+fn join_normalize(base_dir: &str, target: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in base_dir.split('/').chain(target.split('/')) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Whether `target` is a *local relative* link (a repo file path) — not an
+/// external URL/scheme (`http:`, `mailto:`…), an in-page anchor (`#…`), or a
+/// root-absolute path (`/…`).
+fn is_local_relative(target: &str) -> bool {
+    if target.is_empty() || target.starts_with('#') || target.starts_with('/') {
+        return false;
+    }
+    // A scheme has a `:` before the first `/` or `#` (so `foo.md#a:b` stays local).
+    !target
+        .split(['/', '#'])
+        .next()
+        .unwrap_or(target)
+        .contains(':')
+}
+
+/// Rewrite every *relative* markdown link target in `content` to an absolute
+/// `blob_base/<path>` URL, so the links resolve outside the repo file tree — e.g.
+/// when an ADR's review-kickoff doc is posted as a GitHub PR or Linear issue
+/// **comment**, where relative `.md` links would otherwise dangle. `source_dir` is
+/// the doc's directory relative to the repo root; `blob_base` is the provider's web
+/// blob URL at the base branch (`https://github.com/owner/repo/blob/main`).
+/// External URLs, `mailto:`, in-page `#anchors`, and root-absolute `/paths` are left
+/// untouched, as is any `..` that escapes the repo root. Pure (the I/O — resolving
+/// the repo root + web base — is the forge caller's).
+pub fn absolutize_links(content: &str, source_dir: &str, blob_base: &str) -> String {
+    let base = blob_base.trim_end_matches('/');
+    let mut out = String::with_capacity(content.len());
+    let mut last = 0;
+    for_each_link(content, |target, start, end| {
+        if !is_local_relative(target) {
+            return;
+        }
+        let (path, anchor) = match target.split_once('#') {
+            Some((p, a)) => (p, Some(a)),
+            None => (target, None),
+        };
+        let Some(norm) = join_normalize(source_dir, path) else {
+            return; // escapes the repo root → leave it
+        };
+        let mut newt = format!("{base}/{norm}");
+        if let Some(a) = anchor {
+            newt.push('#');
+            newt.push_str(a);
+        }
+        out.push_str(&content[last..start]);
+        out.push_str(&newt);
+        last = end;
+    });
+    out.push_str(&content[last..]);
+    out
+}
+
 /// Rewrite every cross-ADR link `[label](target)` whose target **basename**
 /// equals `old_base` so it points at `new_base` and its label's `old_label`
 /// becomes `new_label`. Used by `adroit renumber` to retarget *and* relabel the
@@ -267,6 +336,49 @@ mod tests {
             relative_md_targets(doc),
             vec!["../accepted/0003-x.md", "0006-z.md"]
         );
+    }
+
+    #[test]
+    fn absolutize_makes_relative_links_blob_urls() {
+        let base = "https://github.com/o/r/blob/main";
+        let doc = "[ADR](0004-x.md) [readme](../README.md) [guide](../../guides/g.md) \
+                   [ext](https://x/y) [anchor](#s) [root](/etc/x)";
+        let out = absolutize_links(doc, "docs/adr/proposed", base);
+        assert!(
+            out.contains("[ADR](https://github.com/o/r/blob/main/docs/adr/proposed/0004-x.md)")
+        );
+        assert!(out.contains("[readme](https://github.com/o/r/blob/main/docs/adr/README.md)"));
+        assert!(out.contains("[guide](https://github.com/o/r/blob/main/docs/guides/g.md)"));
+        // External / anchor / root-absolute left untouched.
+        assert!(out.contains("[ext](https://x/y)"));
+        assert!(out.contains("[anchor](#s)"));
+        assert!(out.contains("[root](/etc/x)"));
+    }
+
+    #[test]
+    fn absolutize_preserves_anchor_and_skips_escaping_paths() {
+        let base = "https://github.com/o/r/blob/main";
+        assert_eq!(
+            absolutize_links("[a](0004-x.md#decision)", "adr", base),
+            "[a](https://github.com/o/r/blob/main/adr/0004-x.md#decision)"
+        );
+        // `..` above the repo root can't be represented → left untouched.
+        assert_eq!(
+            absolutize_links("[a](../../outside.md)", "adr", base),
+            "[a](../../outside.md)"
+        );
+        // mailto: is a scheme, not a local path.
+        assert_eq!(
+            absolutize_links("[m](mailto:x@y.z)", "adr", base),
+            "[m](mailto:x@y.z)"
+        );
+    }
+
+    #[test]
+    fn absolutize_is_a_noop_when_nothing_is_relative() {
+        let base = "https://github.com/o/r/blob/main";
+        let doc = "[ext](https://x/y) text [anchor](#s) no links here";
+        assert_eq!(absolutize_links(doc, "adr", base), doc);
     }
 
     #[test]

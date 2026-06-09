@@ -151,7 +151,10 @@ adroit set-status 21 accepted --forge --yes   # verify approvals + CI, merge the
   PR/MR ready for review** (un-drafts it), posts the review-kickoff doc as a
   comment, **@-mentions the reviewer pool** (`forge.reviewers`), and tags the PR/MR
   with a `review-by:<deadline>` label (the deadline is the review window's last
-  day). (`set-status accepted` also un-drafts before merging, as a safety.)
+  day). (`set-status accepted` also un-drafts before merging, as a safety.) The
+  doc's **relative links are rewritten to absolute repo URLs** (e.g.
+  `https://github.com/<repo>/blob/<base>/…`) so the "Read the ADR / README / guide"
+  links resolve when read in a PR or Linear comment, outside the repo file tree.
 - **`set-review N <date> --forge`** comments the deadline **and** sets the
   tracker's **native due/target date** — Jira due date, GitLab issue due date,
   Linear target date, or monday's first date column (GitHub Issues have no due

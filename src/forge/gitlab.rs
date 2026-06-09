@@ -348,6 +348,15 @@ impl Forge for Gitlab {
         .map(drop)
     }
 
+    fn web_blob_base(&self, base_branch: &str) -> Option<String> {
+        // GitLab's host is the web host; repo files live under `/-/blob/`. Use the
+        // human slug (`group/project`), not the URL-encoded API form.
+        Some(format!(
+            "https://{}/{}/-/blob/{base_branch}",
+            self.host, self.project
+        ))
+    }
+
     fn describe(&self) -> String {
         format!("gitlab:{}", self.project)
     }
@@ -489,6 +498,21 @@ mod tests {
             r#"{"draft":false,"title":"ADR-0007"}"#,
         )]);
         assert!(gl.mark_ready("42").is_ok());
+    }
+
+    #[test]
+    fn web_blob_base_uses_the_host_and_dash_blob() {
+        let gl = gitlab(&[]);
+        assert_eq!(
+            gl.web_blob_base("main").as_deref(),
+            Some("https://gitlab.com/grp/proj/-/blob/main")
+        );
+        // Self-managed host carries through.
+        let sm = Gitlab::new(Some("gitlab.acme.com".into()), "g/p".into(), "t".into());
+        assert_eq!(
+            sm.web_blob_base("trunk").as_deref(),
+            Some("https://gitlab.acme.com/g/p/-/blob/trunk")
+        );
     }
 
     #[test]

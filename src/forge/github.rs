@@ -384,6 +384,17 @@ impl Forge for Github {
         Ok(())
     }
 
+    fn web_blob_base(&self, base_branch: &str) -> Option<String> {
+        // API host → web host: `api.github.com` → `github.com`; GitHub Enterprise
+        // `<host>/api/v3` → `<host>`.
+        let web = if self.host == "api.github.com" {
+            "github.com"
+        } else {
+            self.host.trim_end_matches("/api/v3").trim_end_matches('/')
+        };
+        Some(format!("https://{web}/{}/blob/{base_branch}", self.repo))
+    }
+
     fn describe(&self) -> String {
         format!("github:{}", self.repo)
     }
@@ -490,6 +501,26 @@ mod tests {
 
     // For the upsert tests below, route-presence proves which call ran: a missing
     // route 404s → Err, so `is_ok()` confirms the expected create/update/no-op path.
+
+    #[test]
+    fn web_blob_base_maps_api_host_to_web_host() {
+        // Default host → github.com.
+        let gh = github(&[]);
+        assert_eq!(
+            gh.web_blob_base("main").as_deref(),
+            Some("https://github.com/owner/repo/blob/main")
+        );
+        // GitHub Enterprise `<host>/api/v3` → `<host>`.
+        let ghe = Github::new(
+            Some("ghe.acme.com/api/v3".into()),
+            "owner/repo".into(),
+            "t".into(),
+        );
+        assert_eq!(
+            ghe.web_blob_base("trunk").as_deref(),
+            Some("https://ghe.acme.com/owner/repo/blob/trunk")
+        );
+    }
 
     #[test]
     fn upsert_pr_comment_edits_the_existing_marked_comment() {
