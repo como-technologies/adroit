@@ -8,7 +8,7 @@
 //! adapters in `src/forge/mod.rs`. The happy-path live wiring — issue+PR created
 //! against a mock HTTP server with a git remote — is the remaining heavier piece.)
 //!
-//! Runs under `--features forge` (`just test-forge`, folded into `just ci`).
+//! `forge` is a default feature, so this runs under `just test` (and `just ci`).
 
 #![cfg(feature = "forge")]
 

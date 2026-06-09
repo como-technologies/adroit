@@ -30,17 +30,9 @@ lint:
 lint-core:
     cargo clippy --no-default-features -- -D warnings
 
-# Run clippy with the forge feature (GitHub/GitLab adapters)
-lint-forge:
-    cargo clippy --features forge -- -D warnings
-
 # Run clippy with the web feature (read-only Axum dashboard)
 lint-web:
     cargo clippy --features web -- -D warnings
-
-# Run clippy with the ai feature (rig-backed Anthropic/Ollama adapter)
-lint-ai:
-    cargo clippy --features ai -- -D warnings
 
 # Build the bare core: no tui/ai/forge (the minimal, tokio-free CLI).
 build-core:
@@ -55,19 +47,10 @@ test *ARGS:
 test-core *ARGS:
     cargo test --no-default-features {{ARGS}}
 
-# Run tests with the forge feature enabled
-test-forge *ARGS:
-    cargo test --features forge {{ARGS}}
-
 # Run tests with the web feature enabled (JSON API + markdown-render security).
 # Builds without a Vue SPA present (the embed dir has a .gitkeep).
 test-web *ARGS:
     cargo test --features web {{ARGS}}
-
-# Run tests with the ai feature enabled (rig-backed adapter compiles + the
-# always-on interview flow). Live calls still need a key/Ollama at runtime.
-test-ai *ARGS:
-    cargo test --features ai {{ARGS}}
 
 # Run only unit tests (skip integration tests)
 unit:
@@ -102,13 +85,11 @@ web-build:
     # the rust-embed dir present on a clean checkout — recreate it.
     @touch web/dist/.gitkeep
 
-# Build the SPA, then run the read-only web dashboard with live-reload
+# Build the SPA, then run the read-only web dashboard with live-reload. `forge` is
+# a default feature, so the dashboard's read-only forge panel is live too (needs
+# forge.* configured + a token).
 serve *ARGS: web-build
     cargo run --features web -- serve {{ARGS}}
-
-# Like `serve` but with `forge` too, so the dashboard's read-only forge panel is live (needs forge.* configured + a token)
-serve-forge *ARGS: web-build
-    cargo run --features web,forge -- serve {{ARGS}}
 
 # Check for outdated dependencies (skipped if cargo-outdated isn't installed;
 # `just init` installs it and GitHub CI always runs it)

@@ -484,7 +484,7 @@ Undeterminable cases (no `repo`/no recognizable remote) apply.
 
 **Config.** `config::ForgeConfig` (`Provider`, `repo`, `host`, `oauth_client_id`,
 `branch_prefix`, `base_branch`, `reviewers`, `tracker: TrackerProvider`) under `Config.forge`;
-tokens env-only (`#[serde(skip)]`). `just lint-forge`/`test-forge` (in `just ci`) cover the build.
+tokens env-only (`#[serde(skip)]`). `forge` is a default feature, so `just lint`/`test` cover the build.
 
 **Credential storage + device-flow auth (`keychain` feature).** Tokens (forge + anthropic key)
 go through one seam — `config::load_credential`/`store_credential` — over a `CredentialBackend`
@@ -552,8 +552,8 @@ kill-switch, `host`) under `Config.ai` (`Option`, absent by default).
 `config::resolve_ai(cfg.ai)` overlays `ADROIT_AI_*` env overrides
 (`ENABLED`/`PROVIDER`/`MODEL`/`HOST`), so AI is enablable via env/`.env` with no `config.yaml`
 edit. Key is env-only (`config::anthropic_key()` → `ADROIT_ANTHROPIC_KEY` / credential store).
-`serde_json` is a core dep; `rig`+`tokio` are `ai`-only. `just lint-ai`/`test-ai` (in `just
-ci`) cover the build.
+`serde_json` is a core dep; `rig`+`tokio` are `ai`-only. `ai` is a default feature, so `just
+lint`/`test` cover the build.
 
 ## Design principles & conventions (SOLID / DRY / Rust)
 

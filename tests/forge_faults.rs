@@ -10,8 +10,8 @@
 //! well-formed `Result` — a garbage response must become a clean `Err`, never a
 //! crash or a bogus `Ok`.
 //!
-//! The file is empty without the `forge` feature; it runs under `just test-forge`
-//! (folded into `just ci`).
+//! The file is empty without the `forge` feature, which is on by default, so it
+//! runs under `just test` (and `just ci`).
 //!
 //! See the book's Hardening & Quality page (docs/src/dev/hardening.md).
 

@@ -50,8 +50,6 @@ parseable.
 just ci          # the full gate (see below)
 just test        # default features (tui + ai + forge): unit + CLI + oracle + parsers
 just test-core   # the bare core (--no-default-features): the cfg(not(feature)) paths
-just test-ai     # the `ai` feature explicitly (rig adapter compiles; interview/compose)
-just test-forge  # the `forge` adapters (tests/forge_faults.rs, forge_cli.rs)
 just test-web    # the `web` dashboard (serve security tests; builds without the SPA)
 just unit        # unit tests only (--lib)
 
@@ -61,14 +59,13 @@ cargo test --test cli supersede    # CLI tests whose name contains "supersede"
 # clippy across the feature matrix:
 just lint        # default features (tui + ai + forge)
 just lint-core   # --no-default-features — guards the core pulls in NO surface deps
-just lint-ai     # the `ai` feature; also: just lint-forge, just lint-web
+just lint-web    # the `web` feature
 ```
 
 `just ci` runs `fmt-check → lint-core → lint → lint-web → test-core → test →
 test-web → book → crate-outdated → crate-audit`. Because **`ai` and `forge` are in
-the default build**, `lint` / `test` already exercise them — so `lint-ai` /
-`test-ai` / `lint-forge` / `test-forge` are explicit single-feature checks you run
-by hand, not separate CI steps.
+the default build**, `lint` / `test` already exercise them — there are no separate
+per-feature recipes for `ai` or `forge`.
 
 ### Soaking
 

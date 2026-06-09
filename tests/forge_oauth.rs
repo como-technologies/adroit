@@ -2,7 +2,7 @@
 //! against a local mock HTTP server (closes the gap the fake-transport unit tests
 //! in `src/forge/oauth.rs` leave: that `cmd_auth`'s actual HTTP path works).
 //!
-//! Runs under `--features forge` (`just test-forge`, folded into `just ci`).
+//! `forge` is a default feature, so this runs under `just test` (and `just ci`).
 
 #![cfg(feature = "forge")]
 
