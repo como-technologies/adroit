@@ -124,7 +124,9 @@ auth:
 
 ```sh
 adroit check --forge      # appends any forge drift; 401 surfaces as an auth error
-adroit list --forge       # rows are enriched with linked issue/PR state
+adroit list --forge       # rows enriched with PR state + the tracker issue's open/closed
+                          # state (e.g. "PR merged, issue closed") — read-only, no mutation
+
 ```
 
 If you see an authentication error, the token didn't have the needed scope
@@ -215,3 +217,21 @@ The same verbs run in a pipeline — `adroit check` / `adroit index --check` gat
 the repo, and `adroit review --forge` / `set-status --forge` drive the decision
 PR. See [CI Integration](./ci-integration.md) for ready-to-copy GitHub/GitLab
 templates.
+
+## Debugging the wire
+
+Set `ADROIT_FORGE_WIRE=1` to echo every forge HTTP request and response to
+**stderr** — useful when dogfooding a provider against a real account and you want
+to confirm its live request/response shapes match what adroit expects:
+
+```sh
+ADROIT_FORGE_WIRE=1 adroit set-review 12 2026-07-01 --forge --yes
+# [forge:Linear] → POST https://api.linear.app/graphql
+#   req: {"query":"…issues(filter:{team:{key:{eq:$key}},number:{eq:$num}})…","variables":{"key":"ENG","num":7}}
+# [forge:Linear] ← 200
+#   resp: {"data":{"issues":{"nodes":[{"id":"<uuid>","url":"…/issue/ENG-7","state":{"type":"completed"}…}]}}}
+```
+
+Request **headers are never logged** (they carry your token); only the
+method/url/body and the response status/body — which are ADR/issue data. It's a
+read-only diagnostic: it changes nothing about what the verb does.

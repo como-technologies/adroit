@@ -77,6 +77,26 @@ fn adr_count(root: &Path) -> usize {
     n
 }
 
+/// The single ADR `.md` under `root` (the tests create exactly one).
+fn find_one_md(root: &Path) -> PathBuf {
+    fn walk(dir: &Path, hit: &mut Option<PathBuf>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, hit);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if !name.eq_ignore_ascii_case("README.md") {
+                    *hit = Some(p);
+                }
+            }
+        }
+    }
+    let mut hit = None;
+    walk(root, &mut hit);
+    hit.expect("one ADR .md")
+}
+
 const GITHUB: &str = "forge:\n  provider: github\n  repo: owner/repo\n";
 const GITHUB_OFFLINE: &str =
     "forge:\n  provider: github\n  repo: owner/repo\n  host: 127.0.0.1:9\n";
@@ -118,6 +138,40 @@ fn new_forge_offline_keeps_local_write() {
         adr_count(&s.adr_dir),
         1,
         "ADR written locally despite forge down"
+    );
+}
+
+/// `list --forge` while offline enriches gracefully: an ADR carrying forge refs
+/// still lists (exit 0) and the unreachable forge is warned once. Exercises the
+/// read-side `issue_state` tracker read added alongside the PR-state read — it
+/// must degrade identically (warn + links only), never panic or fail the command.
+#[test]
+fn list_forge_offline_enriches_gracefully() {
+    let s = setup(GITHUB_OFFLINE);
+    // A valid local ADR, then inject forge refs so enrichment has something to read.
+    let out = run(&s, None, &["new", "Offline list", "--no-edit"]);
+    assert!(out.status.success());
+    let adr = find_one_md(&s.adr_dir);
+    let mut body = fs::read_to_string(&adr).unwrap();
+    body.push_str(
+        "\n## References\n\n- Issue: https://github.com/owner/repo/issues/1\n\
+         - Pull Request: https://github.com/owner/repo/pull/2\n",
+    );
+    fs::write(&adr, body).unwrap();
+
+    let out = run(&s, Some("token"), &["list", "--forge"]);
+    assert!(
+        out.status.success(),
+        "list --forge offline should still succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Offline list"),
+        "the ADR still lists despite the forge being down"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unreachable"),
+        "the unreachable forge is warned"
     );
 }
 

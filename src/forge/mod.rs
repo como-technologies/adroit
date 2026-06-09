@@ -324,7 +324,17 @@ pub(crate) fn rest_call(
     extract_error: fn(&[u8]) -> String,
 ) -> Result<Value, ForgeError> {
     let bytes = body.map(|b| serde_json::to_vec(&b).expect("serialize JSON body"));
+    let wire = wire_enabled();
+    if wire {
+        eprintln!(
+            "{}",
+            wire_request_line(label, method, url, bytes.as_deref())
+        );
+    }
     let resp = transport.request(method, url, headers, bytes.as_deref())?;
+    if wire {
+        eprintln!("{}", wire_response_line(label, resp.status, &resp.body));
+    }
     match resp.status {
         200..=299 => {}
         401 | 403 => return Err(ForgeError::Auth(extract_error(&resp.body))),
@@ -342,6 +352,32 @@ pub(crate) fn rest_call(
         status: resp.status,
         message: format!("invalid JSON from {label}: {e}"),
     })
+}
+
+/// `ADROIT_FORGE_WIRE` (any non-empty value) logs every forge HTTP request +
+/// response to **stderr** — a debugging/dogfooding aid for diffing a live
+/// provider's real wire shapes against the `FakeTransport` cassette assumptions.
+/// Request **headers are never logged** (they carry the token); only the
+/// method/url/body and the response status/body, which are ADR/issue data.
+fn wire_enabled() -> bool {
+    std::env::var_os("ADROIT_FORGE_WIRE").is_some_and(|v| !v.is_empty())
+}
+
+/// Format the outbound request line for [`wire_enabled`] logging (no headers).
+fn wire_request_line(label: &str, method: &str, url: &str, body: Option<&[u8]>) -> String {
+    let body = match body {
+        Some(b) => String::from_utf8_lossy(b).into_owned(),
+        None => "(none)".to_string(),
+    };
+    format!("[forge:{label}] → {method} {url}\n  req: {body}")
+}
+
+/// Format the inbound response line for [`wire_enabled`] logging.
+fn wire_response_line(label: &str, status: u16, body: &[u8]) -> String {
+    format!(
+        "[forge:{label}] ← {status}\n  resp: {}",
+        String::from_utf8_lossy(body)
+    )
 }
 
 /// Require a string field from a JSON response, else an `Api` error naming the
@@ -1433,10 +1469,10 @@ pub fn enrich_with(
     if skip_dir_mismatch(fcfg, store.root()) {
         return Ok(());
     }
-    let (forge, _tracker) = open(fcfg);
-    let Some(forge) = forge else {
+    let (forge, tracker) = open(fcfg);
+    if forge.is_none() && tracker.is_none() {
         return Ok(());
-    };
+    }
     let naming = store.options().naming;
     let mut warned = false;
     for s in summaries.iter_mut() {
@@ -1456,14 +1492,29 @@ pub fn enrich_with(
             pr_approvals: None,
             pr_ci: None,
             pr_merged: None,
+            issue_state: None,
         };
-        if let Some((pr, _)) = &refs.pr {
+        if let (Some(forge), Some((pr, _))) = (&forge, &refs.pr) {
             match forge.pr_state(pr) {
                 Ok(st) => {
                     data.pr_approvals = Some(st.approvals);
                     data.pr_ci = Some(format!("{:?}", st.ci).to_lowercase());
                     data.pr_merged = Some(st.merged);
                 }
+                Err(e) if e.is_offline() => {
+                    if !warned {
+                        eprintln!("adroit: forge unreachable ({e}); showing links only");
+                        warned = true;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        // The tracker issue's native state — read-only, so `list --forge` surfaces
+        // it for a split tracker (and exercises the read_refs → resolve path).
+        if let (Some(tracker), Some((issue, _))) = (&tracker, &refs.issue) {
+            match tracker.issue_state(issue) {
+                Ok(st) => data.issue_state = Some(if st.open { "open" } else { "closed" }.into()),
                 Err(e) if e.is_offline() => {
                     if !warned {
                         eprintln!("adroit: forge unreachable ({e}); showing links only");
@@ -1637,6 +1688,18 @@ mod tests {
     fn open_disabled_provider_yields_no_adapters() {
         let (f, t) = open(&ForgeConfig::default()); // provider = none
         assert!(f.is_none() && t.is_none());
+    }
+
+    #[test]
+    fn wire_log_lines_carry_payload_but_no_headers() {
+        // The request-line helper takes no `headers` argument by construction —
+        // the token can never reach the log. Body/method/url/status are shown.
+        let req = wire_request_line("Linear", "POST", "https://api/x", Some(b"{\"q\":1}"));
+        assert!(req.contains("POST") && req.contains("https://api/x") && req.contains("{\"q\":1}"));
+        let none = wire_request_line("GitHub", "GET", "https://api/y", None);
+        assert!(none.contains("(none)"));
+        let resp = wire_response_line("Linear", 200, b"{\"data\":{}}");
+        assert!(resp.contains("200") && resp.contains("{\"data\":{}}"));
     }
 
     #[test]

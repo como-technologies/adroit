@@ -70,6 +70,82 @@ pub struct ForgeData {
     pub pr_ci: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_merged: Option<bool>,
+    /// The linked tracker issue's lifecycle — `"open"` / `"closed"` (the tracker's
+    /// native state), attached read-only by `list --forge` + the dashboard. A
+    /// non-mutating probe of the `read_refs` → resolve path for split trackers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_state: Option<String>,
+}
+
+impl ForgeData {
+    /// Compact, color-free status fragments for a `list --forge` row or a panel —
+    /// e.g. `["PR merged", "issue closed"]`. A PR and a tracker issue are
+    /// independent, so a split setup (forge PR + tracker issue) yields **both**.
+    pub fn status_parts(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if self.pr_url.is_some() {
+            let state = if self.pr_merged == Some(true) {
+                "merged".to_string()
+            } else {
+                match (self.pr_approvals, &self.pr_ci) {
+                    (Some(a), Some(ci)) => format!("{a} approvals, ci {ci}"),
+                    _ => "open".to_string(),
+                }
+            };
+            parts.push(format!("PR {state}"));
+        }
+        if self.issue_url.is_some() {
+            let state = self.issue_state.as_deref().unwrap_or("linked");
+            parts.push(format!("issue {state}"));
+        }
+        parts
+    }
+}
+
+#[cfg(test)]
+mod forge_data_tests {
+    use super::*;
+
+    fn data() -> ForgeData {
+        ForgeData {
+            issue_url: None,
+            pr_url: None,
+            pr_approvals: None,
+            pr_ci: None,
+            pr_merged: None,
+            issue_state: None,
+        }
+    }
+
+    #[test]
+    fn status_parts_shows_pr_and_tracker_issue_independently() {
+        // Split setup: a merged forge PR alongside a closed tracker issue → both.
+        let f = ForgeData {
+            pr_url: Some("…/pull/13".into()),
+            pr_merged: Some(true),
+            issue_url: Some("…/issue/COM-5".into()),
+            issue_state: Some("closed".into()),
+            ..data()
+        };
+        assert_eq!(f.status_parts(), vec!["PR merged", "issue closed"]);
+
+        // Issue-only (tracker, no PR), state known then unknown.
+        let mut g = data();
+        g.issue_url = Some("…/COM-5".into());
+        g.issue_state = Some("open".into());
+        assert_eq!(g.status_parts(), vec!["issue open"]);
+        g.issue_state = None;
+        assert_eq!(g.status_parts(), vec!["issue linked"]);
+
+        // PR with live review state, no tracker issue.
+        let h = ForgeData {
+            pr_url: Some("…/pull/1".into()),
+            pr_approvals: Some(2),
+            pr_ci: Some("ok".into()),
+            ..data()
+        };
+        assert_eq!(h.status_parts(), vec!["PR 2 approvals, ci ok"]);
+    }
 }
 
 /// Full detail for a single ADR: the summary fields plus the raw markdown body

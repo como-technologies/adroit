@@ -1490,25 +1490,14 @@ fn print_summary_row(row: &AdrSummary, id_w: usize) {
     );
 }
 
-/// A compact " · PR merged/2 approvals, ci ok" suffix for `list --forge` rows.
+/// A compact "  · PR merged, issue closed" suffix for `list --forge` rows, from
+/// the pure [`view::ForgeData::status_parts`] projection (PR + tracker issue are
+/// independent, so a split setup shows both).
 fn forge_suffix(row: &AdrSummary) -> String {
-    let Some(f) = &row.forge_data else {
-        return String::new();
+    let parts = match &row.forge_data {
+        Some(f) => f.status_parts(),
+        None => return String::new(),
     };
-    let mut parts = Vec::new();
-    if f.pr_url.is_some() {
-        let state = if f.pr_merged == Some(true) {
-            "merged".to_string()
-        } else {
-            match (f.pr_approvals, &f.pr_ci) {
-                (Some(a), Some(ci)) => format!("{a} approvals, ci {ci}"),
-                _ => "open".to_string(),
-            }
-        };
-        parts.push(format!("PR {state}"));
-    } else if f.issue_url.is_some() {
-        parts.push("issue".to_string());
-    }
     if parts.is_empty() {
         String::new()
     } else {
