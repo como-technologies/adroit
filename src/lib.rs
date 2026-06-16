@@ -30,6 +30,9 @@ pub mod manifest;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod naming;
+// Persisted implementation plans (ADR-0008): the pure splice/extract engine
+// behind `plan --save` and the deterministic stored-plan read.
+pub mod plan;
 pub mod publish;
 pub mod query;
 pub mod similar;

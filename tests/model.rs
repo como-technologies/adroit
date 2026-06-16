@@ -175,6 +175,15 @@ enum Op {
         dom_idx: usize,
         ai: bool,
     },
+    /// `plan <which> --save` with the AI fake seam (ADR-0008) — exercises the
+    /// plan-persistence write path across the matrix: the canned plan is
+    /// spliced into the document as the marked `## Implementation` section
+    /// (replacing the template placeholder, with `--force` once a plan is
+    /// already stored). The model tracks `has_plan`; the invariants verify the
+    /// stored plan reads back verbatim and the repo stays valid.
+    PlanSave {
+        which: usize,
+    },
 }
 
 /// The three typed-link relations `link` accepts.
@@ -185,6 +194,14 @@ const LINK_RELS: [&str; 3] = ["--relates-to", "--depends-on", "--refines"];
 const FAKE_DRAFT: &str = "## Context and Problem Statement\n\nA fake-drafted context.\n\n\
 ## Considered Options\n\n1. One\n2. Two\n\n## Decision Outcome\n\nChosen: one, because reasons.\n\n\
 ### Negative Consequences\n\n- A genuine trade-off.";
+
+/// Canned plan for the `PlanSave` op's `ADROIT_AI_FAKE` seam. Carries its own
+/// `## ` sub-heading on purpose: the stored section is end-marker-bracketed, so
+/// free-form plan markdown must round-trip verbatim (no truncation at the next
+/// heading). No relative ADR links — those would (correctly) be rewritten by
+/// relink and break the verbatim read-back assertion.
+const FAKE_PLAN: &str = "1. Stand up the schema.\n2. Wire the adapter.\n\n\
+## Rollout\n\n- [ ] Flag on in staging.";
 
 // ---------------------------------------------------------------------------
 // Oracle
@@ -202,6 +219,10 @@ struct ModelAdr {
     superseded_by: Option<String>,
     review_by: Option<String>,
     category: Option<String>,
+    /// Whether a `plan --save` persisted the canned plan into the document
+    /// (ADR-0008). `Draft` resets it — the AI body splice replaces all prose,
+    /// the stored plan section included.
+    has_plan: bool,
 }
 
 struct Harness {
@@ -316,6 +337,7 @@ impl Harness {
                     superseded_by: None,
                     review_by: None,
                     category: category.map(str::to_string),
+                    has_plan: false,
                 });
             }
             Op::SetStatus { which, status } => {
@@ -433,7 +455,9 @@ impl Harness {
                     self.profile,
                     String::from_utf8_lossy(&out.stderr)
                 );
-                // No model change — draft rewrites only the prose body.
+                // No model change — draft rewrites only the prose body. A
+                // stored plan (ADR-0008) is adroit-managed content the splice
+                // preserves, so `has_plan` stands.
             }
             Op::Import {
                 nonce,
@@ -489,8 +513,36 @@ impl Harness {
                         superseded_by: None,
                         review_by: None,
                         category: adr.category.clone(),
+                        has_plan: false,
                     });
                 }
+            }
+            Op::PlanSave { which } => {
+                let Some(i) = self.find(*which) else {
+                    return Ok(());
+                };
+                let addr = self.model[i].addr.clone();
+                let mut args = vec!["plan", addr.as_str(), "--save"];
+                if self.model[i].has_plan {
+                    // A stored plan refuses a plain `--save` (cli.rs covers the
+                    // refusal); the oracle exercises the explicit overwrite.
+                    args.push("--force");
+                }
+                let out = self
+                    .cmd()
+                    .args(&args)
+                    .env("ADROIT_AI_FAKE", FAKE_PLAN)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .expect("spawn adroit");
+                prop_assert!(
+                    out.status.success(),
+                    "`adroit {}` failed in {:?}: {}",
+                    args.join(" "),
+                    self.profile,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                self.model[i].has_plan = true;
             }
         }
         Ok(())
@@ -561,6 +613,12 @@ impl Harness {
                 "{} review_by mismatch",
                 &m.addr
             );
+
+            // (ADR-0008) A saved plan reads back verbatim from the document —
+            // sub-heading included — and no document grows one unasked.
+            let disk_plan = adroit::plan::extract(&adr.body);
+            let expected_plan = m.has_plan.then_some(FAKE_PLAN);
+            prop_assert_eq!(disk_plan, expected_plan, "{} stored-plan mismatch", &m.addr);
 
             if matches!(self.profile.layout, Layout::ByCategory) {
                 prop_assert_eq!(
@@ -774,6 +832,7 @@ fn arb_op() -> impl Strategy<Value = Op> {
         2 => any::<usize>().prop_map(|which| Op::Draft { which }),
         1 => (any::<u64>(), 1usize..4, any::<usize>(), any::<bool>())
             .prop_map(|(nonce, n, dom_idx, ai)| Op::Import { nonce, n, dom_idx, ai }),
+        2 => any::<usize>().prop_map(|which| Op::PlanSave { which }),
     ]
 }
 

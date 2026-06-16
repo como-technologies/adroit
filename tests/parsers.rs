@@ -19,6 +19,7 @@ use adroit::format;
 use adroit::import::{self, SEED_MARKER, parse_assessment, seed_drafts, seed_fragment};
 use adroit::links;
 use adroit::naming::{AdrRef, NamingScheme};
+use adroit::plan;
 use adroit::publish;
 
 use proptest::prelude::*;
@@ -197,6 +198,7 @@ proptest! {
             let _ = format::rewrite_status(&text, st, Some((&token, &token)));
         }
         let _ = format::rewrite_review_by(&text, None);
+        let _ = format::rewrite_created(&text, None);
         let _ = format::upsert_reference(&text, &token, &token);
         let _ = adroit::frontmatter::deserialize(&text);
     }
@@ -355,6 +357,33 @@ proptest! {
         prop_assert_eq!(&once, &twice, "rewrite_review_by(None) not idempotent");
     }
 
+    /// The `Created:` stamp (ADR-0011) obeys the same algebra as `Review by:`:
+    /// upserting a date is idempotent, the stamped document parses the date
+    /// back (round-trip on any document that parses as a markdown ADR), and
+    /// clearing twice equals clearing once.
+    #[test]
+    fn rewrite_created_round_trips_and_is_idempotent(text in arb_text(), y in 2000i32..2100, o in 1u8..13, d in 1u8..29) {
+        let date = time::Date::from_calendar_date(y, time::Month::try_from(o).unwrap(), d).unwrap();
+        let stamp = adroit::adr::CreatedOn::new(date);
+        let once = format::rewrite_created(&text, Some(stamp));
+        let twice = format::rewrite_created(&once, Some(stamp));
+        prop_assert_eq!(&once, &twice, "rewrite_created not idempotent");
+        // Round-trip: a stamped document parses the date back verbatim. Mixed
+        // `\r\n`/`\n` documents are excluded — the rewriters pick one newline
+        // convention per document (the same documented limitation
+        // `rewrite_review_by` has; adroit never writes mixed-newline files).
+        if !text.contains('\r') {
+            let doc = format!("# ADR-0001: T\n\n## Status\n\nProposed\n\n{text}");
+            let stamped = format::rewrite_created(&doc, Some(stamp));
+            if let Ok(adr) = format::parse_markdown(&stamped, None, NamingScheme::Sequential) {
+                prop_assert_eq!(adr.created_on, Some(stamp), "{}", stamped);
+            }
+        }
+        let cleared_once = format::rewrite_created(&text, None);
+        let cleared_twice = format::rewrite_created(&cleared_once, None);
+        prop_assert_eq!(&cleared_once, &cleared_twice, "rewrite_created(None) not idempotent");
+    }
+
     /// Upserting the same `label: url` reference twice is byte-identical to once.
     #[test]
     fn upsert_reference_is_idempotent(
@@ -392,5 +421,66 @@ proptest! {
                 prop_assert_eq!(a.status, b.status, "status not stable across body round-trip");
             }
         }
+    }
+
+    /// The plan-persistence helpers (ADR-0008) tolerate arbitrary bodies
+    /// without panicking — they scan untrusted ADR documents.
+    #[test]
+    fn plan_helpers_never_panic(text in arb_text()) {
+        let _ = plan::extract(&text);
+        let _ = plan::has_hand_written_section(&text);
+        let _ = plan::splice(&text, &text);
+    }
+
+    /// Splicing a (marker-free) plan into any body stores it verbatim: the
+    /// stored read returns exactly the trimmed plan, and a second identical
+    /// splice is byte-identical (the converge property `--save --force` rides).
+    #[test]
+    fn plan_splice_round_trips_and_is_idempotent(body in arb_text(), p in arb_text()) {
+        // A plan carrying its own begin/end marker line is not representable
+        // verbatim (documented limitation) — keep the law to marker-free plans.
+        prop_assume!(!p.contains("<!-- adroit:plan -->") && !p.contains("<!-- /adroit:plan -->"));
+        prop_assume!(!p.trim().is_empty());
+        let once = plan::splice(&body, &p);
+        prop_assert_eq!(plan::extract(&once), Some(p.trim()), "stored plan must read back verbatim");
+        let twice = plan::splice(&once, &p);
+        prop_assert_eq!(&once, &twice, "splice not idempotent");
+    }
+
+    /// An AI draft can never read as a hand-written `## Implementation`
+    /// section — the M5 dogfood-rehearsal regression: a model-emitted bare
+    /// heading with real content would block `plan --save` forever. The draft
+    /// sanitizer (shared by every AI splice flow) holds this for arbitrary
+    /// model output. Plan-marker lines are excluded: a full echoed span is
+    /// managed content (covered by unit tests), and a *partial* marker pair is
+    /// plan.rs's documented non-representable limitation.
+    #[test]
+    fn ai_drafts_never_block_plan_save(text in arb_text()) {
+        prop_assume!(!text.contains("<!-- adroit:plan -->") && !text.contains("<!-- /adroit:plan -->"));
+        prop_assume!(text != "__ERROR__"); // the FakeProvider failure hook
+        let fake = adroit::ai::FakeProvider { canned: text };
+        let draft = adroit::ai::draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        prop_assert!(!plan::has_hand_written_section(&draft), "{}", draft);
+    }
+
+    /// An AI draft can never re-introduce the mechanical preamble the splice
+    /// preserves — the run-1 skeleton-echo regression generalized: whatever the
+    /// model emits (plan spans excluded, as above), the sanitized draft carries
+    /// no `## Status` / `## Stakeholders` section heading and exactly the one
+    /// ai-suggested marker the wrapper prepends (no seeded-from-assessment
+    /// echo either).
+    #[test]
+    fn ai_drafts_never_duplicate_the_mechanical_preamble(text in arb_text()) {
+        prop_assume!(!text.contains("<!-- adroit:plan -->") && !text.contains("<!-- /adroit:plan -->"));
+        prop_assume!(text != "__ERROR__"); // the FakeProvider failure hook
+        let fake = adroit::ai::FakeProvider { canned: text };
+        let draft = adroit::ai::draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        for line in draft.lines() {
+            let t = line.trim();
+            prop_assert!(!t.eq_ignore_ascii_case("## Status"), "{}", draft);
+            prop_assert!(!t.eq_ignore_ascii_case("## Stakeholders"), "{}", draft);
+        }
+        prop_assert_eq!(draft.matches("<!-- adroit:ai-suggested -->").count(), 1, "{}", draft);
+        prop_assert_eq!(draft.matches("<!-- adroit:seeded-from-assessment -->").count(), 0, "{}", draft);
     }
 }

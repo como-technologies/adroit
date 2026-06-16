@@ -1,0 +1,49 @@
+# Vendored cross-repo contract fixture — DO NOT hand-edit.
+#
+# Provenance: the `assessments` app's contract/golden-assessment.yaml, generated
+# by its REAL exporter (CLI `export`) from the committed fixture project at
+# tests/fixtures/golden/ in that repo. Regenerate THERE via `just golden`, then
+# re-copy the file here verbatim below this comment header.
+#
+# adroit's contract test (`import_golden_assessment_contract` in tests/cli.rs)
+# pins `import --from-assessment <this file> --dry-run` to the expected seed
+# summary, so drift in the assessments export contract fails adroit's CI
+# instead of silently changing what `import` seeds.
+id: a55e55ed-0000-4000-8000-0000000000a0
+name: Release Readiness Sample
+description: A minimal sample assessment of software release readiness
+goal: Exercise every level of the export contract with one example
+domains:
+- id: a55e55ed-0000-4000-8000-0000000000d0
+  name: Delivery
+  context: How changes get from a developer's machine to production
+  value: Predictable, low-friction releases
+  risk: Slow, error-prone releases that block the business
+  practices:
+  - id: a55e55ed-0000-4000-8000-0000000000c0
+    name: Continuous Integration
+    context: Every change is built and tested automatically
+    value: Defects surface minutes after they are introduced
+    risk: Broken builds discovered at release time
+    questions:
+    - id: a55e55ed-0000-4000-8000-0000000000e1
+      text: Does every change build and run the test suite in CI before merge?
+      polarity: positive
+      guidance: null
+      evidence: null
+      remediation: null
+    - id: a55e55ed-0000-4000-8000-0000000000e2
+      text: Are releases routinely delayed by manual verification?
+      polarity: negative
+      guidance: Ask the team when the last release slipped and why
+      evidence: Release calendar versus actual ship dates
+      remediation: Automate the manual checks that block releases most often
+    guidance: Start with a single pipeline that gates merges
+    roles:
+    - Engineer
+    - Tech Lead
+    effort: medium
+    terminology: null
+  terminology: null
+created_at: 2026-01-01T00:00:00Z
+updated_at: 2026-01-01T00:00:00Z

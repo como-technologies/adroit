@@ -1498,6 +1498,20 @@ fn dry_run_changes_nothing() {
         .stdout(predicate::str::contains("Dry run: would create"));
     // The repo is still three ADRs — `new --dry-run` allocated nothing.
     assert_eq!(before, snapshot(dir.path()));
+
+    // `plan --save --dry-run` (ADR-0008 write path) previews the generated
+    // plan + target without splicing it (needs the fake provider to generate).
+    adroit(&dir)
+        .args(["plan", "1", "--save", "--dry-run"])
+        .env("ADROIT_AI_FAKE", "1. A plan that must not land.")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+    assert_eq!(
+        before,
+        snapshot(dir.path()),
+        "plan --save --dry-run must leave the repo byte-for-byte unchanged"
+    );
 }
 
 #[test]
@@ -2631,6 +2645,287 @@ fn plan_without_a_provider_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// `adroit plan --save` — plan persistence (ADR-0008)
+// ---------------------------------------------------------------------------
+
+/// Seed one accepted ADR and persist a fake-generated plan into it.
+fn seed_saved_plan(dir: &TempDir, plan: &str) {
+    adroit(dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    adroit(dir)
+        .args(["set-status", "1", "accepted"])
+        .assert()
+        .success();
+    adroit(dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", plan)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Saved implementation plan"));
+}
+
+#[test]
+fn plan_save_persists_a_marked_implementation_section() {
+    let dir = TempDir::new().unwrap();
+    seed_saved_plan(&dir, "1. Create the schema.\n2. Add tests.");
+    let body = fs::read_to_string(dir.path().join("accepted/0001-use-postgresql.md")).unwrap();
+    assert!(body.contains("## Implementation"), "{body}");
+    assert!(body.contains("<!-- adroit:plan -->"), "{body}");
+    assert!(body.contains("<!-- /adroit:plan -->"), "{body}");
+    assert!(body.contains("1. Create the schema."), "{body}");
+    // The document is still a valid corpus member.
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn plan_reads_the_stored_plan_deterministically_without_a_provider() {
+    let dir = TempDir::new().unwrap();
+    seed_saved_plan(&dir, "1. Create the schema.\n2. Add tests.");
+    let before = snapshot(dir.path());
+
+    // No AI env at all (the `adroit` helper scrubs it): the stored plan comes
+    // back, exit 0, and the read indicates it is stored.
+    let assert = adroit(&dir).args(["plan", "1"]).assert().success();
+    let out1 = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(out1.contains("1. Create the schema."), "{out1}");
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("stored"),
+        "read must say it's stored: {stderr}"
+    );
+
+    // Byte-deterministic: a second read prints identical bytes …
+    let assert = adroit(&dir).args(["plan", "1"]).assert().success();
+    let out2 = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert_eq!(out1, out2, "stored reads must be byte-identical");
+    // … and reading mutates nothing.
+    assert_eq!(before, snapshot(dir.path()), "a stored read must not write");
+}
+
+#[test]
+fn plan_o_json_carries_the_additive_stored_flag() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    // Fresh generation (nothing persisted): stored=false, shape otherwise as before.
+    let assert = adroit(&dir)
+        .args(["plan", "1", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "1. Step.")
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(v["reference"], "ADR-0001");
+    assert_eq!(v["title"], "Use PostgreSQL");
+    assert_eq!(v["plan"], "1. Step.");
+    assert_eq!(v["stored"], false);
+
+    // After --save, a provider-free read returns the stored plan with stored=true.
+    adroit(&dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", "1. Step.")
+        .assert()
+        .success();
+    let assert = adroit(&dir)
+        .args(["plan", "1", "-o", "json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(v["reference"], "ADR-0001");
+    assert_eq!(v["plan"], "1. Step.");
+    assert_eq!(v["stored"], true);
+}
+
+#[test]
+fn plan_save_refuses_to_overwrite_without_force() {
+    let dir = TempDir::new().unwrap();
+    seed_saved_plan(&dir, "1. Original plan.");
+    let before = snapshot(dir.path());
+    adroit(&dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", "1. Different plan.")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+    assert_eq!(
+        before,
+        snapshot(dir.path()),
+        "a refused save must not write"
+    );
+
+    // `--force` replaces the stored plan (and only that section).
+    adroit(&dir)
+        .args(["plan", "1", "--save", "--force"])
+        .env("ADROIT_AI_FAKE", "1. Different plan.")
+        .assert()
+        .success();
+    let body = fs::read_to_string(dir.path().join("accepted/0001-use-postgresql.md")).unwrap();
+    assert!(body.contains("1. Different plan."), "{body}");
+    assert!(!body.contains("1. Original plan."), "{body}");
+    assert_eq!(body.matches("## Implementation").count(), 1, "{body}");
+}
+
+#[test]
+fn plan_save_force_with_the_same_plan_is_byte_identical() {
+    // The converge property on the write path: re-saving the same plan over
+    // itself rewrites nothing (minimal-diff invariant, ADR-0003).
+    let dir = TempDir::new().unwrap();
+    seed_saved_plan(&dir, "1. Same plan.");
+    let before = snapshot(dir.path());
+    adroit(&dir)
+        .args(["plan", "1", "--save", "--force"])
+        .env("ADROIT_AI_FAKE", "1. Same plan.")
+        .assert()
+        .success();
+    assert_eq!(before, snapshot(dir.path()));
+}
+
+#[test]
+fn plan_regenerate_skips_the_stored_plan_without_writing() {
+    let dir = TempDir::new().unwrap();
+    seed_saved_plan(&dir, "1. The stored plan.");
+    let before = snapshot(dir.path());
+
+    // `--regenerate` is an explicit fresh AI call: stored plan ignored, output
+    // not persisted (stored=false in the envelope).
+    let assert = adroit(&dir)
+        .args(["plan", "1", "--regenerate", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "1. A fresh plan.")
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(v["plan"], "1. A fresh plan.");
+    assert_eq!(v["stored"], false);
+    assert_eq!(before, snapshot(dir.path()), "--regenerate must not write");
+
+    // Without a provider it bails like any generation (the stored plan does
+    // not satisfy an explicit regeneration request).
+    adroit(&dir)
+        .args(["plan", "1", "--regenerate"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+#[test]
+fn plan_save_refuses_a_hand_written_implementation_section() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    let path = dir.path().join("proposed/0001-use-postgresql.md");
+    let body = fs::read_to_string(&path).unwrap();
+    fs::write(&path, format!("{body}\n## Implementation\n\nBy hand.\n")).unwrap();
+    let before = snapshot(dir.path());
+    adroit(&dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", "1. Step.")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("hand-written"));
+    assert_eq!(
+        before,
+        snapshot(dir.path()),
+        "unmarked content is never touched"
+    );
+}
+
+#[test]
+fn show_o_json_carries_the_stored_plan() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    // Before a save: the additive field is null.
+    let assert = adroit(&dir)
+        .args(["show", "1", "-o", "json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert!(v["plan"].is_null(), "{v}");
+
+    adroit(&dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", "1. Create the schema.")
+        .assert()
+        .success();
+    let assert = adroit(&dir)
+        .args(["show", "1", "-o", "json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(v["plan"], "1. Create the schema.");
+}
+
+#[test]
+fn draft_preserves_a_stored_plan() {
+    // A stored plan (ADR-0008) is adroit-managed decision content, not prose:
+    // the AI body splice (`draft` / `compose` / `import --ai`) replaces the
+    // prose around it but must not silently discard it.
+    let dir = TempDir::new().unwrap();
+    seed_saved_plan(&dir, "1. The persisted plan.");
+    adroit(&dir)
+        .args(["draft", "1", "--no-edit"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "## Context and Problem Statement\n\nRedrafted.",
+        )
+        .write_stdin("")
+        .assert()
+        .success();
+    let body = fs::read_to_string(dir.path().join("accepted/0001-use-postgresql.md")).unwrap();
+    assert!(body.contains("Redrafted."), "{body}");
+    assert!(body.contains("1. The persisted plan."), "{body}");
+    let assert = adroit(&dir)
+        .args(["plan", "1", "-o", "json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(v["plan"], "1. The persisted plan.");
+    assert_eq!(v["stored"], true);
+}
+
+#[test]
+fn plan_save_round_trips_in_the_frontmatter_profile() {
+    // The splice rides `Store::set_body` → `format::serialize`, so the section
+    // must survive both profiles. Frontmatter here; markdown is covered above.
+    let dir = TempDir::new().unwrap();
+    adroit_flat(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    adroit_flat(&dir)
+        .args(["plan", "1", "--save"])
+        .env(
+            "ADROIT_AI_FAKE",
+            "1. Create the schema.\n\n## Rollout\n\n- [ ] Staging.",
+        )
+        .assert()
+        .success();
+    // Provider-free read returns the plan verbatim — sub-heading included.
+    let assert = adroit_flat(&dir)
+        .args(["plan", "1", "-o", "json"])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(
+        v["plan"],
+        "1. Create the schema.\n\n## Rollout\n\n- [ ] Staging."
+    );
+    assert_eq!(v["stored"], true);
+    // The repo stays valid and a second provider-free read is byte-stable.
+    adroit_flat(&dir).arg("check").assert().success();
+    let before = snapshot(dir.path());
+    adroit_flat(&dir).args(["plan", "1"]).assert().success();
+    assert_eq!(before, snapshot(dir.path()));
+}
+
+// ---------------------------------------------------------------------------
 // `adroit lint` (authoring-quality checks; read-only)
 // ---------------------------------------------------------------------------
 
@@ -2703,6 +2998,156 @@ fn lint_ai_without_a_provider_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("AI feature").or(predicate::str::contains("AI provider")));
+}
+
+// ---------------------------------------------------------------------------
+// Created-date provenance (markdown `Created:` line; ADR-0011)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_stamps_a_created_line_in_the_status_region() {
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let body = fs::read_to_string(&file).unwrap();
+    // The stamp sits in the `## Status` region, after the status value line.
+    let region = body
+        .split("## Status")
+        .nth(1)
+        .and_then(|r| r.split("\n## ").next())
+        .unwrap();
+    assert!(region.contains("\nCreated: "), "{body}");
+    // And it parses as the ADR's creation date.
+    let out = adroit(&dir)
+        .args(["show", "1", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let created = v["created"].as_str().unwrap();
+    let stamped = region
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Created: "))
+        .unwrap();
+    assert!(created.starts_with(stamped), "{created} vs {stamped}");
+}
+
+#[test]
+fn created_is_byte_stable_across_set_status_and_plan_save_without_git() {
+    // Run-1 regression (playbook M3 read-path rehearsal): `created` was
+    // mtime-derived on a non-git corpus, so `set-status` and `plan --save`
+    // rewrites re-stamped it to "now", misleading any consumer treating it
+    // as decision provenance. The markdown profile now persists the date in
+    // the document (ADR-0011), so rewrites can't move it. The same class of
+    // wall-clock fragility flaked the iteration-2 integration gate
+    // (`created <= last_modified` under a clock step).
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Use PostgreSQL", "--no-edit"])
+        .assert()
+        .success();
+    // Backdate the file so any mtime-derived fallback is visibly different
+    // from "now" — making a regression deterministic, not clock-dependent.
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    let backdated = std::time::SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
+    fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(backdated)
+        .unwrap();
+
+    let created_of = |dir: &TempDir| -> String {
+        let out = adroit(dir)
+            .args(["show", "1", "-o", "json"])
+            .assert()
+            .success();
+        let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["created"].as_str().unwrap().to_string()
+    };
+
+    let before = created_of(&dir);
+    adroit(&dir)
+        .args(["set-status", "1", "accepted"])
+        .assert()
+        .success();
+    assert_eq!(created_of(&dir), before, "set-status re-stamped `created`");
+    adroit(&dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", "1. Do the thing.")
+        .assert()
+        .success();
+    assert_eq!(created_of(&dir), before, "plan --save re-stamped `created`");
+}
+
+#[test]
+fn lint_accepts_h2_negative_consequences() {
+    // Run-1 regression (iteration-1 full loop): 2 of 11 seeded ADRs failed
+    // lint solely because the model wrote `## Negative Consequences` at h2
+    // where the template nests `###`. Depth is shape, not substance — both
+    // pass.
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt CI", "--no-edit"])
+        .assert()
+        .success();
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    fs::write(
+        &file,
+        "# ADR-0001: Adopt CI\n\n> State: Proposed\n\n## Status\n\nProposed\n\n\
+         ## Context and Problem Statement\n\nWe need automated builds.\n\n\
+         ## Considered Options\n\n1. Jenkins\n2. Forge-native CI\n\n\
+         ## Decision Outcome\n\nChosen: Jenkins, because plugins.\n\n\
+         ## Positive Consequences\n\n* Faster feedback loops.\n\n\
+         ## Negative Consequences\n\n* Initial investment required.\n",
+    )
+    .unwrap();
+    adroit(&dir).args(["lint", "1"]).assert().success();
+}
+
+#[test]
+fn lint_warns_on_repeated_sections_without_failing() {
+    // Run-1 regression: a duplicated `## Status`/`## Stakeholders` skeleton
+    // echo was lint-clean. It now surfaces as a warning finding — visible in
+    // human and JSON output — but does not fail the exit (warnings advise).
+    let dir = TempDir::new().unwrap();
+    adroit(&dir)
+        .args(["new", "Adopt CI", "--no-edit"])
+        .assert()
+        .success();
+    let file = adr_files(dir.path()).into_iter().next().unwrap();
+    fs::write(
+        &file,
+        "# ADR-0001: Adopt CI\n\n> State: Proposed\n\n## Status\n\nProposed\n\n\
+         ## Stakeholders\n\n- Platform team\n\n\
+         ## Status\n\nProposed\n\n## Stakeholders\n\n- Platform team\n\n\
+         ## Context and Problem Statement\n\nWe need automated builds.\n\n\
+         ## Considered Options\n\n1. Jenkins\n2. Forge-native CI\n\n\
+         ## Decision Outcome\n\nChosen: Jenkins, because plugins.\n\n\
+         ### Negative Consequences\n\n- Initial investment required.\n",
+    )
+    .unwrap();
+    adroit(&dir)
+        .args(["lint", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("## Status").and(predicate::str::contains("warning")));
+    let out = adroit(&dir)
+        .args(["lint", "1", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let findings = v.as_array().unwrap();
+    assert!(!findings.is_empty());
+    assert!(
+        findings.iter().all(|f| f["severity"] == "warning"),
+        "{text}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3446,6 +3891,282 @@ fn import_ai_degrades_to_mechanical_without_a_provider() {
     assert!(!body.contains("adroit:ai-suggested"));
 }
 
+// ---- import -o json (machine seed summary) + the golden contract fixture ----
+
+/// The vendored cross-repo contract fixture (see its comment header): the
+/// `assessments` app's real-exporter golden, regenerated THERE via `just golden`.
+fn golden_assessment() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-assessment.yaml")
+}
+
+#[test]
+fn import_golden_assessment_contract() {
+    // The cross-repo contract pin: importing the assessments app's golden export
+    // must keep seeding exactly this backlog. If the assessments export contract
+    // drifts (renamed fields, restructured nesting), the counts/titles here
+    // change and this test fails adroit's CI instead of silently seeding junk.
+    let dir = TempDir::new().unwrap();
+    let golden = golden_assessment();
+
+    // Dry-run, human: the exact seed summary (count + title + provenance).
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&golden)
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "would seed   Continuous Integration",
+        ))
+        .stderr(predicate::str::contains(
+            "Would seed 1 proposed ADR(s) from assessment \"Release Readiness Sample\".",
+        ));
+
+    // Dry-run, JSON: the machine summary, pinned field-for-field.
+    let out = adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&golden)
+        .args(["--dry-run", "-o", "json"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("import -o json did not emit valid JSON: {e}\n{text}"));
+    assert_eq!(v["assessment"], "Release Readiness Sample");
+    assert_eq!(v["dry_run"], true);
+    assert_eq!(
+        v["seeded"],
+        serde_json::json!([{
+            "reference": null,
+            "title": "Continuous Integration",
+            "status": "Proposed",
+            "domain": "Delivery",
+        }]),
+        "the golden seed summary drifted: {v}"
+    );
+    assert_eq!(v["skipped"], serde_json::json!([]));
+    assert!(adr_files(dir.path()).is_empty(), "dry-run must not write");
+
+    // Wet run: the seed lands with the golden's content mapped into the body
+    // (context → problem statement, value/risk → drivers, questions → signals).
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&golden)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Seeded 1 proposed ADR(s)"));
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 1);
+    let body = fs::read_to_string(&files[0]).unwrap();
+    assert!(body.contains("# ADR-0001: Continuous Integration"));
+    assert!(body.contains("Every change is built and tested automatically"));
+    assert!(body.contains("**Why it matters:** Defects surface minutes after they are introduced"));
+    assert!(body.contains("**Risk if unaddressed:** Broken builds discovered at release time"));
+    assert!(body.contains("**Estimated effort:** medium"));
+    assert!(body.contains("- Does every change build and run the test suite in CI before merge?"));
+    assert!(body.contains("- Are releases routinely delayed by manual verification?"));
+    assert!(body.contains(
+        "Seeded from assessment \"Release Readiness Sample\" — domain \"Delivery\" → practice \"Continuous Integration\"."
+    ));
+    adroit(&dir).arg("check").assert().success();
+}
+
+#[test]
+fn import_json_emits_a_machine_seed_summary() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    // `json_ok` parses the WHOLE stdout, so the human `seeded <path>` lines must
+    // be absent — stdout is pure JSON, human notes go to stderr.
+    let v = json_ok(
+        &dir,
+        &[
+            "import",
+            "--from-assessment",
+            export.to_str().unwrap(),
+            "-o",
+            "json",
+        ],
+    );
+    assert_eq!(v["dry_run"], false);
+    assert_eq!(v["assessment"], "Cloud Maturity");
+    assert!(
+        v["source"].as_str().unwrap().ends_with("assessment.json"),
+        "source carries the export path: {v}"
+    );
+    let seeded = v["seeded"].as_array().unwrap();
+    assert_eq!(seeded.len(), 2);
+    assert_eq!(seeded[0]["reference"], "ADR-0001");
+    assert_eq!(seeded[0]["title"], "Secrets management");
+    assert_eq!(seeded[0]["status"], "Proposed");
+    assert_eq!(seeded[0]["domain"], "Security");
+    assert_eq!(seeded[1]["reference"], "ADR-0002");
+    assert_eq!(seeded[1]["title"], "Network segmentation");
+    assert_eq!(v["skipped"], serde_json::json!([]));
+    // The writes really happened — the summary reports, it doesn't just preview.
+    assert_eq!(adr_files(dir.path()).len(), 2);
+}
+
+#[test]
+fn import_json_reports_skipped_titles() {
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .assert()
+        .success();
+    // Re-import: everything dedupes — seeded empty, the skipped titles listed.
+    let v = json_ok(
+        &dir,
+        &[
+            "import",
+            "--from-assessment",
+            export.to_str().unwrap(),
+            "-o",
+            "json",
+        ],
+    );
+    assert_eq!(v["seeded"], serde_json::json!([]));
+    assert_eq!(
+        v["skipped"],
+        serde_json::json!(["Secrets management", "Network segmentation"])
+    );
+}
+
+#[test]
+fn import_json_with_no_named_practices_is_still_valid_json() {
+    // The "nothing to seed" early return must keep stdout machine-parseable.
+    let dir = TempDir::new().unwrap();
+    let p = dir.path().join("empty.json");
+    fs::write(&p, r#"{"name":"Empty","domains":[]}"#).unwrap();
+    let v = json_ok(
+        &dir,
+        &[
+            "import",
+            "--from-assessment",
+            p.to_str().unwrap(),
+            "-o",
+            "json",
+        ],
+    );
+    assert_eq!(v["assessment"], "Empty");
+    assert_eq!(v["seeded"], serde_json::json!([]));
+    assert_eq!(v["skipped"], serde_json::json!([]));
+}
+
+#[test]
+fn import_ai_json_keeps_stdout_pure_with_the_fake_provider() {
+    // `--ai` chatter (token estimates, provider notes) goes to stderr; the JSON
+    // summary alone is stdout, so the assessments seam-check can pipe it.
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    let out = adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .args(["--ai", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "A fleshed-out proposal body.")
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("import --ai -o json stdout is not pure JSON: {e}\n{text}"));
+    assert_eq!(v["seeded"].as_array().unwrap().len(), 2);
+    // The AI pass really ran on the seeded ADRs.
+    let body = fs::read_to_string(&adr_files(dir.path())[0]).unwrap();
+    assert!(body.contains("adroit:ai-suggested"));
+}
+
+#[test]
+fn plan_save_succeeds_after_an_ai_import_drafted_an_implementation_outline() {
+    // The Adopt-slice regression, found in the M5 ollama dogfood rehearsal:
+    // `import --ai` on a small model drafted a body carrying its own `# ` H1
+    // and a bare `## Implementation` outline — the latter read as hand-written
+    // and blocked `plan --save` forever (the import instruction even *asked*
+    // for an implementation outline). The draft sanitizer drops the H1 and
+    // retitles the section to `## Implementation notes`, so the seeded backlog
+    // stays plan-ready and the slice runs end to end.
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    let canned = "# ADR-0001: Secrets management\n\n\
+        ## Context and Problem Statement\n\nReal context.\n\n\
+        ## Considered Options\n\n### Option 1: Vault\n\nManaged secrets.\n\n\
+        ### Option 2: SOPS\n\nIn-repo encryption.\n\n\
+        ## Decision Outcome\n\nChosen: Vault.\n\n\
+        ### Negative Consequences\n\n- New infrastructure to run.\n\n\
+        ## Implementation\n\n1. Stand up Vault.\n";
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .arg("--ai")
+        .env("ADROIT_AI_FAKE", canned)
+        .assert()
+        .success();
+    let body = fs::read_to_string(&adr_files(dir.path())[0]).unwrap();
+    // Exactly one H1 — the mechanical identity heading the splice preserves.
+    assert_eq!(
+        body.lines().filter(|l| l.starts_with("# ")).count(),
+        1,
+        "{body}"
+    );
+    // The model's outline no longer squats on the plan-managed heading.
+    assert!(body.contains("## Implementation notes"), "{body}");
+    assert!(body.contains("1. Stand up Vault."), "{body}");
+    // lint counts the two `###`-recorded options (no false "two options"
+    // finding) — the seeded draft passes CI-grade lint as-is.
+    adroit(&dir).args(["lint", "1"]).assert().success();
+    // … and the slice continues: accept → plan --save → the stored read.
+    adroit(&dir)
+        .args(["set-status", "1", "accepted"])
+        .assert()
+        .success();
+    adroit(&dir)
+        .args(["plan", "1", "--save"])
+        .env("ADROIT_AI_FAKE", "1. Roll out per environment.")
+        .assert()
+        .success();
+    let v = json_ok(&dir, &["plan", "1", "-o", "json"]);
+    assert_eq!(v["stored"], serde_json::json!(true));
+    assert_eq!(v["plan"], serde_json::json!("1. Roll out per environment."));
+}
+
+#[test]
+fn import_ai_fleshes_out_seeds_against_live_ollama() {
+    // Env-gated LIVE check (skipped in CI): with a local ollama serving
+    // llama3.2, `import --ai` must produce model-fleshed (not mechanical-prompt)
+    // bodies. Run via: ADROIT_LIVE_OLLAMA=1 cargo test import_ai_fleshes_out_seeds_against_live_ollama
+    if std::env::var_os("ADROIT_LIVE_OLLAMA").is_none() {
+        eprintln!("skipping live ollama check — set ADROIT_LIVE_OLLAMA=1 to run it");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .args(["--ai", "-o", "json"])
+        .env("ADROIT_AI_ENABLED", "true")
+        .env("ADROIT_AI_PROVIDER", "ollama")
+        .env("ADROIT_AI_MODEL", "llama3.2")
+        .timeout(std::time::Duration::from_secs(600))
+        .assert()
+        .success();
+    let files = adr_files(dir.path());
+    assert_eq!(files.len(), 2);
+    for f in &files {
+        let body = fs::read_to_string(f).unwrap();
+        assert!(
+            body.contains("adroit:ai-suggested"),
+            "{} lacks the AI marker — the live flesh-out did not run",
+            f.display()
+        );
+        assert!(
+            !body.contains("_List the options you actually weighed"),
+            "{} still carries the mechanical authoring prompt",
+            f.display()
+        );
+    }
+}
+
 // ---- plan -o json (structured plan artifact; #18 emit seam) ----
 
 #[test]
@@ -3533,4 +4254,59 @@ fn mcp_server_handshakes_lists_tools_and_runs_a_read_verb() {
     assert!(stdout.contains("\"name\":\"list\""), "{stdout}");
     assert!(stdout.contains("Use PostgreSQL"), "{stdout}");
     assert!(!stdout.contains("\"name\":\"set-status\""), "{stdout}");
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_projected_tools_expose_no_escalating_flags() {
+    // End-to-end pin of the read-only conformance (ADR-0005/0006/0007): over
+    // the real binary, no projected tool may carry a flag that mutates the
+    // repo, the forge, or the filesystem — and `publish` (a filesystem write)
+    // must not be projected at all.
+    let dir = TempDir::new().unwrap();
+    let input = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+    ]
+    .join("\n");
+
+    let assert = adroit(&dir)
+        .arg("mcp")
+        .write_stdin(input)
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    let mut checked = 0;
+    for line in stdout.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        let Some(tools) = v["result"]["tools"].as_array() else {
+            continue;
+        };
+        assert!(!tools.is_empty(), "{stdout}");
+        for tool in tools {
+            let name = tool["name"].as_str().unwrap();
+            assert_ne!(
+                name, "publish",
+                "publish writes an output tree and must not be projected"
+            );
+            let props = tool["inputSchema"]["properties"].as_object().unwrap();
+            for flag in [
+                "forge",
+                "yes",
+                "dry_run",
+                "out",
+                "save",
+                "force",
+                "regenerate",
+            ] {
+                assert!(
+                    !props.contains_key(flag),
+                    "MCP tool `{name}` leaks escalating flag `{flag}`: {tool}"
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no tools/list response found: {stdout}");
 }

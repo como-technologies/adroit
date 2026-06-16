@@ -39,9 +39,28 @@ fn init_repo(dir: &Path) {
     git(dir, &["config", "commit.gpgsign", "false"]);
 }
 
+/// Commit with a **pinned, strictly increasing** commit date. Wall-clock
+/// commits flake on a clock-stepping host (NTP under WSL2 stepped the clock
+/// backwards mid-gate during the iteration-2 integration merge, reordering
+/// `git log` and breaking `created <= last_modified`); pinned dates make the
+/// reconstructed timeline deterministic.
 fn commit(dir: &Path, msg: &str) {
+    static COMMIT_DAY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let day = COMMIT_DAY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let date = format!("2026-01-{:02}T00:00:00Z", day.min(28));
     git(dir, &["add", "-A"]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    let out = Command::new("git")
+        .current_dir(dir)
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .args(["commit", "-q", "-m", msg])
+        .output()
+        .expect("run git commit");
+    assert!(
+        out.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// Run an `adroit` subcommand (markdown / by_status / sequential) and require

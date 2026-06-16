@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use adroit::adr::Status;
 use adroit::naming::{AdrRef, NamingScheme};
-use adroit::{format, links, publish};
+use adroit::{format, links, plan, publish};
 
 use bolero::check;
 
@@ -47,7 +47,41 @@ fn fuzz_format_helpers() {
         let once = format::rewrite_status(input, Status::Accepted, None);
         let twice = format::rewrite_status(&once, Status::Accepted, None);
         assert_eq!(once, twice, "rewrite_status not idempotent");
+
+        // The `Created:` stamp (ADR-0011): no panic on arbitrary input, and
+        // upserting the same date is idempotent.
+        let stamp = adroit::adr::CreatedOn::new(time::macros::date!(2026 - 06 - 12));
+        let once = format::rewrite_created(input, Some(stamp));
+        let twice = format::rewrite_created(&once, Some(stamp));
+        assert_eq!(once, twice, "rewrite_created not idempotent");
+        let _ = format::rewrite_created(input, None);
     });
+}
+
+/// The plan-persistence helpers (ADR-0008) never panic on arbitrary bodies,
+/// and a marker-free splice stores the plan verbatim and idempotently.
+#[test]
+fn fuzz_plan_helpers() {
+    check!()
+        .with_type::<(String, String)>()
+        .for_each(|(body, p): &(String, String)| {
+            let _ = plan::extract(body);
+            let _ = plan::has_hand_written_section(body);
+            let once = plan::splice(body, p);
+            // The managed section survives any body; with a marker-free,
+            // non-empty plan it reads back verbatim and re-splicing converges.
+            if !p.contains("<!-- adroit:plan -->")
+                && !p.contains("<!-- /adroit:plan -->")
+                && !p.trim().is_empty()
+            {
+                assert_eq!(
+                    plan::extract(&once),
+                    Some(p.trim()),
+                    "stored plan must read back verbatim"
+                );
+                assert_eq!(plan::splice(&once, p), once, "splice not idempotent");
+            }
+        });
 }
 
 /// `links::rewrite_links` never panics and reaches a fixpoint.

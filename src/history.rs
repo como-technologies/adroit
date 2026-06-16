@@ -297,12 +297,18 @@ mod tests {
         }
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        let git = |args: &[&str]| {
+        // Commit dates are pinned (deterministic-rerun lesson): on a
+        // clock-stepping host (e.g. NTP under WSL2) two wall-clock commits can
+        // land out of order, flaking `created <= last_modified` — the
+        // iteration-2 integration gate hit exactly that.
+        let git = |args: &[&str], date: &str| {
             let ok = Command::new("git")
                 .arg("-C")
                 .arg(root)
                 // Deterministic identity so commits succeed in any environment.
                 .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
                 .args(args)
                 .output()
                 .unwrap()
@@ -310,14 +316,16 @@ mod tests {
                 .success();
             assert!(ok, "git {args:?} failed");
         };
-        git(&["init", "-q"]);
+        const T1: &str = "2026-01-01T00:00:00Z";
+        const T2: &str = "2026-01-02T00:00:00Z";
+        git(&["init", "-q"], T1);
         std::fs::create_dir_all(root.join("proposed")).unwrap();
         std::fs::write(root.join("proposed/0001-x.md"), "# ADR-0001: X\n").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "propose"]);
+        git(&["add", "."], T1);
+        git(&["commit", "-q", "-m", "propose"], T1);
         std::fs::create_dir_all(root.join("accepted")).unwrap();
-        git(&["mv", "proposed/0001-x.md", "accepted/0001-x.md"]);
-        git(&["commit", "-q", "-m", "accept"]);
+        git(&["mv", "proposed/0001-x.md", "accepted/0001-x.md"], T2);
+        git(&["commit", "-q", "-m", "accept"], T2);
 
         let repo = open(root).expect("temp dir is a git work tree");
         let h = repo

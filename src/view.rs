@@ -183,6 +183,11 @@ pub struct AdrDetail {
     /// `pulldown-cmark` server-side. Present in the contract so the web surface
     /// can fill it without a shape change.
     pub body_html: Option<String>,
+    /// The implementation plan persisted in the document (the
+    /// `<!-- adroit:plan -->`-marked `## Implementation` section, ADR-0008),
+    /// without the heading/markers. `None` when no plan is stored. Additive:
+    /// the section also remains part of `body` verbatim.
+    pub plan: Option<String>,
     /// Other ADRs this one links to, resolved from supersession fields and
     /// markdown links in the body.
     pub related: Vec<RelatedLink>,
@@ -450,4 +455,50 @@ pub struct Plan {
     pub title: String,
     /// The implementation plan, as markdown (the model's output).
     pub plan: String,
+    /// `true` when `plan` is the one persisted in the ADR document (the
+    /// `<!-- adroit:plan -->`-marked `## Implementation` section, ADR-0008) — a
+    /// deterministic, provider-free read, or just written by `--save`. `false`
+    /// for a fresh unsaved generation (nondeterministic, provider-backed).
+    /// Additive in `manifest_schema` 1; consumers may ignore it.
+    pub stored: bool,
+}
+
+/// The `-o json` shape of `adroit import`: a machine summary of one ingest run,
+/// so a loop runner (the assessments seam-check, the Adopt-stage engine) can
+/// assert what was seeded without scraping the human report. Counts are the
+/// array lengths — no duplicated tallies to drift.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
+pub struct ImportSummary {
+    /// The assessment export file, as given on the command line.
+    pub source: String,
+    /// The assessment's own `name` field (provenance).
+    pub assessment: String,
+    /// `true` for a `--dry-run` preview — nothing was written; `seeded` lists
+    /// what a wet run *would* create.
+    pub dry_run: bool,
+    /// One entry per ADR seeded (or, under `dry_run`, per ADR that would be).
+    pub seeded: Vec<ImportSeed>,
+    /// Titles of practices skipped by the dedupe guard — an ADR with that title
+    /// already exists (or was seeded earlier in this same run). `--force` empties
+    /// this by seeding anyway.
+    pub skipped: Vec<String>,
+}
+
+/// One seeded (or would-be-seeded) ADR in an [`ImportSummary`].
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
+pub struct ImportSeed {
+    /// The created ADR's display reference (e.g. `ADR-0012`). `null` under
+    /// `--dry-run`: identity is allocated only on write (and isn't predictable
+    /// for every naming scheme), so a preview truthfully carries none.
+    pub reference: Option<String>,
+    /// The ADR title — the practice name verbatim.
+    pub title: String,
+    /// The seeded lifecycle status — the configured `default_status`
+    /// (`Proposed` unless overridden; an import never decides anything),
+    /// carried explicitly so consumers needn't hardcode it.
+    pub status: Status,
+    /// The source domain in the assessment (the `by_category` category).
+    pub domain: String,
 }

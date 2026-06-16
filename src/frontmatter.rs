@@ -99,6 +99,9 @@ pub fn deserialize(input: &str) -> Result<crate::adr::Adr, FrontmatterError> {
         depends_on: fm.depends_on,
         refines: fm.refines,
         review_by: fm.review_by,
+        // The frontmatter profile persists the full `created` timestamp in its
+        // YAML; the document-line variant is markdown-only (ADR-0011).
+        created_on: None,
     })
 }
 

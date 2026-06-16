@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
-use crate::adr::{Adr, Number, ReviewBy, Status};
+use crate::adr::{Adr, CreatedOn, Number, ReviewBy, Status};
 
 /// Which on-disk serialization profile a store uses.
 #[derive(
@@ -162,6 +162,7 @@ struct StatusRegion {
     supersedes: Option<String>,
     superseded_by: Option<String>,
     review_by: Option<ReviewBy>,
+    created_on: Option<CreatedOn>,
 }
 
 /// Parse the whole `## Status` region (the lines between the `## Status` heading
@@ -173,6 +174,7 @@ struct StatusRegion {
 /// - `Superseded by [ADR-NNNN](...)` -> `superseded_by`
 /// - `Supersedes [ADR-NNNN](...)` -> `supersedes`
 /// - `Review by: YYYY-MM-DD` -> `review_by`
+/// - `Created: YYYY-MM-DD` -> `created_on` (decision provenance; ADR-0011)
 fn parse_status_region(input: &str) -> StatusRegion {
     let mut region = StatusRegion::default();
     let mut lines = input.lines();
@@ -222,6 +224,13 @@ fn parse_status_line(line: &str, region: &mut StatusRegion) {
         if region.review_by.is_none() {
             let date = rest.trim().trim_start_matches(':').trim();
             region.review_by = date.parse::<ReviewBy>().ok();
+        }
+        return;
+    }
+    if let Some(rest) = strip_prefix_ci(v, "Created:").or_else(|| strip_prefix_ci(v, "Created")) {
+        if region.created_on.is_none() {
+            let date = rest.trim().trim_start_matches(':').trim();
+            region.created_on = date.parse::<CreatedOn>().ok();
         }
         return;
     }
@@ -293,6 +302,7 @@ pub fn parse_markdown(
         depends_on: Vec::new(),
         refines: Vec::new(),
         review_by: region.review_by,
+        created_on: region.created_on,
     })
 }
 
@@ -489,8 +499,54 @@ pub fn rewrite_review_by(original: &str, review_by: Option<ReviewBy>) -> String 
     lines.join(newline)
 }
 
-/// Index at which to insert a new `Review by:` line: right after the status
-/// value line inside the `## Status` section.
+/// Rewrite (in place, minimal-diff) the `Created: YYYY-MM-DD` line in the
+/// `## Status` region of a markdown ADR — the document-persisted creation date
+/// (ADR-0011), format-preserving exactly like [`rewrite_review_by`].
+///
+/// - `Some(date)` upserts a `Created: <date>` line: replaces an existing one,
+///   or inserts a new one immediately after the status value line.
+/// - `None` removes the line if present.
+///
+/// All other bytes are preserved exactly; a no-change call returns the input
+/// byte-identical. Stamped once by `new` — status moves, `set-review`, and
+/// `plan --save` rewrites never touch it, so `created` survives as decision
+/// provenance on corpora without git history.
+pub fn rewrite_created(original: &str, created_on: Option<CreatedOn>) -> String {
+    let original = normalize_lone_cr(original);
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut lines: Vec<String> = original.split(newline).map(|s| s.to_string()).collect();
+
+    let existing = lines
+        .iter()
+        .position(|l| strip_prefix_ci(l.trim(), "Created").is_some());
+
+    match (created_on, existing) {
+        (Some(date), Some(idx)) => lines[idx] = format!("Created: {date}"),
+        (Some(date), None) => {
+            // Insert after the status value line (first non-blank line after
+            // the `## Status` heading); fall back to after the heading.
+            if let Some(insert_at) = review_insert_point(&lines) {
+                lines.insert(insert_at, format!("Created: {date}"));
+            } else {
+                // No `## Status` section: nothing sensible to anchor to; append.
+                lines.push(format!("Created: {date}"));
+            }
+        }
+        (None, Some(idx)) => {
+            lines.remove(idx);
+        }
+        (None, None) => {}
+    }
+
+    lines.join(newline)
+}
+
+/// Index at which to insert a new `Review by:` / `Created:` line: right after
+/// the status value line inside the `## Status` section.
 fn review_insert_point(lines: &[String]) -> Option<usize> {
     let heading = lines.iter().position(|l| is_status_heading(l))?;
     // Skip blanks to the status value line.
@@ -774,6 +830,81 @@ We need a consistent way to capture architectural decisions.\n";
     #[test]
     fn rewrite_review_by_none_on_clean_doc_is_byte_identical() {
         assert_eq!(rewrite_review_by(SAMPLE, None), SAMPLE);
+    }
+
+    // ---- created-date provenance (`Created:` in the `## Status` region) ----
+
+    #[test]
+    fn parse_created_line() {
+        let doc = "# ADR-0003: Use Redis\n\n## Status\n\nProposed\nCreated: 2026-06-12\n\n## Context\n\nx\n";
+        let adr = pm(doc, None);
+        assert_eq!(
+            adr.created_on,
+            Some("2026-06-12".parse::<CreatedOn>().unwrap())
+        );
+    }
+
+    #[test]
+    fn created_line_outside_the_status_region_is_ignored() {
+        let doc = "# ADR-0003: Use Redis\n\n## Status\n\nProposed\n\n## Context\n\n\
+             Created: 2020-01-01 is mentioned in prose.\n";
+        let adr = pm(doc, None);
+        assert_eq!(adr.created_on, None);
+    }
+
+    #[test]
+    fn rewrite_created_inserts_after_status_value() {
+        let d: CreatedOn = "2026-06-12".parse().unwrap();
+        let out = rewrite_created(SAMPLE, Some(d));
+        assert!(
+            out.contains("## Status\n\nAccepted\nCreated: 2026-06-12\n"),
+            "{out}"
+        );
+        // Everything else byte-identical.
+        assert!(out.contains("# ADR-0006: Adopt ADRs as Team Decision Process"));
+        assert!(out.contains("We need a consistent way to capture architectural decisions."));
+    }
+
+    #[test]
+    fn rewrite_created_replaces_existing_and_is_idempotent() {
+        let d1: CreatedOn = "2026-06-12".parse().unwrap();
+        let d2: CreatedOn = "2026-06-13".parse().unwrap();
+        let with = rewrite_created(SAMPLE, Some(d1));
+        assert_eq!(rewrite_created(&with, Some(d1)), with, "not idempotent");
+        let updated = rewrite_created(&with, Some(d2));
+        assert!(updated.contains("Created: 2026-06-13"));
+        assert!(!updated.contains("Created: 2026-06-12"));
+        assert_eq!(updated.matches("Created:").count(), 1);
+    }
+
+    #[test]
+    fn rewrite_created_removes_when_none_and_is_byte_identical_when_absent() {
+        let d: CreatedOn = "2026-06-12".parse().unwrap();
+        let with = rewrite_created(SAMPLE, Some(d));
+        let removed = rewrite_created(&with, None);
+        assert_eq!(removed, SAMPLE);
+        assert_eq!(rewrite_created(SAMPLE, None), SAMPLE);
+    }
+
+    #[test]
+    fn rewrite_status_preserves_the_created_line() {
+        // The rewrite-stability core of the run-1 finding: a status change
+        // must not disturb the persisted creation date.
+        let d: CreatedOn = "2026-06-12".parse().unwrap();
+        let with = rewrite_created(SAMPLE, Some(d));
+        let moved = rewrite_status(&with, Status::Rejected, None);
+        assert!(moved.contains("Created: 2026-06-12"), "{moved}");
+        assert!(moved.contains("\n## Status\n\nRejected\n"), "{moved}");
+    }
+
+    #[test]
+    fn review_by_and_created_coexist_in_the_status_region() {
+        let d: CreatedOn = "2026-06-12".parse().unwrap();
+        let rb: ReviewBy = "2026-07-01".parse().unwrap();
+        let out = rewrite_review_by(&rewrite_created(SAMPLE, Some(d)), Some(rb));
+        let adr = pm(&out, None);
+        assert_eq!(adr.created_on, Some(d));
+        assert_eq!(adr.review_by, Some(rb));
     }
 
     #[test]

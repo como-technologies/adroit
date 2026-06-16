@@ -152,6 +152,45 @@ mod review_by_format {
     }
 }
 
+/// The authored creation date persisted *in the document* by the markdown
+/// profile — a `Created: YYYY-MM-DD` line in the `## Status` region (ADR-0011).
+/// Mirrors [`ReviewBy`]; the frontmatter profile persists the full [`Created`]
+/// timestamp in its YAML instead. Stamped by `new`, never re-stamped by
+/// rewrites — so `created` stays decision provenance even where git history is
+/// unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CreatedOn(#[serde(with = "review_by_format")] Date);
+
+impl CreatedOn {
+    pub fn new(date: Date) -> Self {
+        Self(date)
+    }
+
+    pub fn get(self) -> Date {
+        self.0
+    }
+}
+
+impl fmt::Display for CreatedOn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0.format(&Iso8601::DATE).map_err(|_| fmt::Error)?
+        )
+    }
+}
+
+impl FromStr for CreatedOn {
+    type Err = AdrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Date::parse(s.trim(), &Iso8601::DATE)
+            .map(Self)
+            .map_err(|_| AdrError::BadCreatedDate(s.to_string()))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -205,6 +244,8 @@ pub enum AdrError {
     EmptyTitle,
     #[error("invalid review date '{0}', expected ISO-8601 YYYY-MM-DD")]
     BadReviewDate(String),
+    #[error("invalid created date '{0}', expected ISO-8601 YYYY-MM-DD")]
+    BadCreatedDate(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -250,9 +291,20 @@ pub struct Adr {
     /// Optional review deadline. When a still-`Proposed` ADR is past this date
     /// it is flagged as review-due by the query layer.
     pub review_by: Option<ReviewBy>,
+    /// The creation date persisted in the document by the markdown profile
+    /// (`Created:` line in the `## Status` region; ADR-0011). `None` when the
+    /// document carries none (pre-ADR-0011 corpora) and in the frontmatter
+    /// profile (whose YAML persists the full `created` timestamp).
+    pub created_on: Option<CreatedOn>,
 }
 
 impl Adr {
+    /// The [`CreatedOn`] date stamp for this ADR's document (`Created:` line,
+    /// markdown profile; ADR-0011) — the date component of [`Adr::created`].
+    pub fn created_stamp(&self) -> CreatedOn {
+        CreatedOn::new(self.created.get().date())
+    }
+
     /// Create a new ADR with only a title. All other fields use defaults.
     /// The `number` is left as `None` — the store assigns it on write.
     pub fn new(title: impl Into<String>) -> Result<Self, AdrError> {
@@ -276,6 +328,7 @@ impl Adr {
             depends_on: Vec::new(),
             refines: Vec::new(),
             review_by: None,
+            created_on: None,
         })
     }
 

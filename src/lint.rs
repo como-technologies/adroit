@@ -11,6 +11,8 @@
 
 use serde::Serialize;
 
+use crate::view::Severity;
+
 /// Where a finding came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]
 #[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
@@ -23,11 +25,14 @@ pub enum LintSource {
     Ai,
 }
 
-/// One authoring-quality finding.
+/// One authoring-quality finding. `severity` mirrors `check`'s split: an
+/// `Error` gates the exit code (an unfinished draft), a `Warning` advises
+/// (visible, but a CI lint gate stays green).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
 pub struct LintFinding {
     pub source: LintSource,
+    pub severity: Severity,
     pub message: String,
 }
 
@@ -50,12 +55,19 @@ pub fn lint(body: &str) -> Vec<LintFinding> {
 
     // 2. Honest negative consequences (people skip these). A prompt-only section
     //    is already caught above, so only flag a missing or genuinely empty one.
-    match section(body, "### Negative Consequences") {
+    //    Depth-tolerant: MADR nests `### Negative Consequences` under the
+    //    Decision Outcome, but models (and humans) routinely record it at `##`
+    //    — depth is shape, not substance, so both count (the same
+    //    reconciliation as counting `###`-recorded options below; run-1 of the
+    //    full loop failed 2 of 11 seeded ADRs on this).
+    match section(body, "### Negative Consequences")
+        .or_else(|| section(body, "## Negative Consequences"))
+    {
         None => out.push(mech(
-            "no `### Negative Consequences` section — document the trade-offs honestly".into(),
+            "no `Negative Consequences` section — document the trade-offs honestly".into(),
         )),
         Some(c) if c.trim().is_empty() => out.push(mech(
-            "`### Negative Consequences` is empty — every decision has downsides; name them".into(),
+            "`Negative Consequences` is empty — every decision has downsides; name them".into(),
         )),
         _ => {}
     }
@@ -64,7 +76,7 @@ pub fn lint(body: &str) -> Vec<LintFinding> {
     //    Skip while the section is still the prompt — that's covered by (1).
     if let Some(opts) = section(body, "## Considered Options")
         && !prompt_only(&opts)
-        && list_items(&opts) < 2
+        && list_items(&opts) + option_headings(&opts) < 2
     {
         out.push(mech(
             "fewer than two options under `## Considered Options` — record the alternatives \
@@ -73,7 +85,36 @@ pub fn lint(body: &str) -> Vec<LintFinding> {
         ));
     }
 
+    // 4. Repeated top-level sections (run-1: a model echoed the seed skeleton,
+    //    duplicating `## Status` / `## Stakeholders`, and lint was silent). A
+    //    Warning — a duplicate reads as an echo/merge artifact to clean up,
+    //    not an unfinished draft, so it advises without gating CI.
+    for (name, count) in repeated_top_level_sections(body) {
+        out.push(warn(format!(
+            "`## {name}` appears {count} times — duplicated top-level section \
+             (often a model echo of the template); keep one"
+        )));
+    }
+
     out
+}
+
+/// Top-level (`## `) section names appearing more than once, with their counts,
+/// in first-appearance order. Matching is case-insensitive on the heading text.
+fn repeated_top_level_sections(body: &str) -> Vec<(String, usize)> {
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    for line in body.lines() {
+        let t = line.trim_start();
+        if let Some(name) = t.strip_prefix("## ") {
+            let name = name.trim();
+            match seen.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+                Some((_, c)) => *c += 1,
+                None => seen.push((name.to_string(), 1)),
+            }
+        }
+    }
+    seen.retain(|(_, c)| *c > 1);
+    seen
 }
 
 /// True if `line` is an italic authoring prompt — `_…_` with non-empty inner
@@ -98,7 +139,9 @@ fn is_prompt_line(line: &str) -> bool {
 
 /// True if a section's `content` is nothing but its prompt: at least one prompt
 /// line and no other (non-blank) content. Empty sections are *not* prompt-only.
-fn prompt_only(content: &str) -> bool {
+/// Shared with `crate::plan`, which treats a prompt-only `## Implementation`
+/// section as a replaceable template placeholder (ADR-0008).
+pub(crate) fn prompt_only(content: &str) -> bool {
     let mut saw_prompt = false;
     for line in content.lines() {
         if line.trim().is_empty() {
@@ -132,6 +175,15 @@ fn sections(body: &str) -> Vec<(String, String)> {
 fn mech(message: String) -> LintFinding {
     LintFinding {
         source: LintSource::Mechanical,
+        severity: Severity::Error,
+        message,
+    }
+}
+
+fn warn(message: String) -> LintFinding {
+    LintFinding {
+        source: LintSource::Mechanical,
+        severity: Severity::Warning,
         message,
     }
 }
@@ -152,6 +204,17 @@ fn section(body: &str, heading: &str) -> Option<String> {
         content.push('\n');
     }
     Some(content)
+}
+
+/// Count `### …` sub-headings in a block — MADR's long form (and most models)
+/// record each considered option as its own `###` heading rather than a list
+/// item, and both styles record an option.
+fn option_headings(block: &str) -> usize {
+    block
+        .lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("### "))
+        .count()
 }
 
 /// Count markdown list items (`- …` or `N. …`) in a block.
@@ -244,11 +307,93 @@ mod tests {
     }
 
     #[test]
+    fn options_recorded_as_subheadings_are_counted() {
+        // MADR's long form (and most models — observed with ollama/llama3.2 in
+        // the M5 dogfood rehearsal) record each option as its own `###` heading
+        // under `## Considered Options` rather than a list item. Two such
+        // headings are two recorded options, not a "fewer than two" finding.
+        let body = "## Considered Options\n\n### Option 1: Vault\n\nManaged secrets.\n\n\
+            ### Option 2: SOPS\n\nIn-repo encryption.\n\n\
+            ## Decision Outcome\n\nChosen: Vault, for the obvious reasons.\n\n\
+            ### Negative Consequences\n\n- New infrastructure to run.\n";
+        assert_eq!(lint(body), Vec::new());
+    }
+
+    #[test]
     fn single_option_is_flagged() {
         let body = "## Considered Options\n\n1. The only option\n\n\
             ## Decision Outcome\n\nPicked it for the obvious reasons.\n\n\
             ### Negative Consequences\n\n- A real downside here.\n";
         let f = lint(body);
         assert!(f.iter().any(|x| x.message.contains("two options")));
+    }
+
+    #[test]
+    fn negative_consequences_at_h2_is_accepted() {
+        // Run-1 regression (iteration-1 full loop): models record the
+        // consequences sections at `##` depth where MADR nests them as `###`
+        // under `## Decision Outcome`. Both depths are honest documentation —
+        // 2 of 11 seeded ADRs failed lint on shape, not substance.
+        let body = "## Context and Problem Statement\n\nReal context here.\n\n\
+            ## Considered Options\n\n1. A real option\n2. Another real option\n\n\
+            ## Decision Outcome\n\nChosen: the first one, because reasons.\n\n\
+            ## Positive Consequences\n\n* Faster feedback loops.\n\n\
+            ## Negative Consequences\n\n* Initial investment required.\n";
+        assert_eq!(lint(body), Vec::new());
+    }
+
+    #[test]
+    fn empty_h2_negative_consequences_is_flagged() {
+        // Depth tolerance must not weaken the honesty check: an empty `##`
+        // section is still flagged.
+        let body = "## Considered Options\n\n1. A\n2. B\n\n\
+            ## Decision Outcome\n\nChosen: A, for reasons.\n\n\
+            ## Negative Consequences\n\n## References\n\n- none\n";
+        let f = lint(body);
+        assert!(
+            f.iter().any(|x| x.message.contains("Negative Consequences")
+                && x.message.contains("empty")),
+            "{f:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_top_level_sections_warn() {
+        // Run-1 regression: ADR-0001/0005 carried a duplicated `## Status` /
+        // `## Stakeholders` skeleton echo below the ai-suggested marker, and
+        // lint was silent. A repeated top-level section is now a Warning
+        // finding (visible, but not a CI failure).
+        let body = "## Status\n\nProposed\n\n## Stakeholders\n\n- Team\n\n\
+            ## Status\nProposed\n\n## Stakeholders\n\n- Team\n\n\
+            ## Context and Problem Statement\n\nReal context.\n\n\
+            ## Considered Options\n\n1. A\n2. B\n\n\
+            ## Decision Outcome\n\nChosen: A, because reasons.\n\n\
+            ### Negative Consequences\n\n- A real downside.\n";
+        let f = lint(body);
+        let warnings: Vec<_> = f
+            .iter()
+            .filter(|x| x.severity == Severity::Warning)
+            .collect();
+        assert!(
+            warnings.iter().any(|x| x.message.contains("## Status")),
+            "{f:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|x| x.message.contains("## Stakeholders")),
+            "{f:?}"
+        );
+        // Nothing else is wrong with this body — every finding is a warning.
+        assert!(f.iter().all(|x| x.severity == Severity::Warning), "{f:?}");
+    }
+
+    #[test]
+    fn mechanical_findings_are_errors() {
+        // The pre-existing mechanical checks keep gating CI: they are
+        // Severity::Error (lint exits non-zero on them; warnings don't gate).
+        let f = lint(&fresh_madr());
+        assert!(!f.is_empty());
+        assert!(f.iter().all(|x| x.severity == Severity::Error), "{f:?}");
     }
 }

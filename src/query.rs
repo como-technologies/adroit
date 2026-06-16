@@ -114,11 +114,14 @@ pub fn detail_at(store: &Store, path: &Path) -> Result<AdrDetail, QueryError> {
     );
     let related = related_links(&adr, store.options().naming);
     let history: Vec<TimelineEvent> = events.iter().map(timeline_event).collect();
+    // The stored implementation plan, when the document carries one (ADR-0008).
+    let plan = crate::plan::extract(&adr.body).map(str::to_string);
     Ok(AdrDetail {
         summary,
         body: adr.body,
         // TODO(step4): render markdown -> HTML server-side for the web surface.
         body_html: None,
+        plan,
         related,
         history,
         last_modified: last_modified.and_then(|d| d.format(&Rfc3339).ok()),
@@ -806,11 +809,14 @@ fn load_resolved(store: &Store) -> Result<Vec<Resolved>, QueryError> {
 /// Resolve an ADR's creation date, last-modified date, and lifecycle from its
 /// git history when available, else from non-git sources.
 ///
-/// Precedence for `created`: 1) git first-add date (the real history); 2) for
-/// the frontmatter profile, the authored on-disk `created:`; 3) filesystem
+/// Precedence for `created`: 1) git first-add date (the real history); 2) the
+/// authored on-disk date — the frontmatter profile's `created:` field, or the
+/// markdown profile's `Created:` status-region line (ADR-0011); 3) filesystem
 /// mtime; 4) the parsed `Adr::created` (the `now()` last resort). A markdown
 /// ADR in git therefore always uses git — fixing the "everything shows today"
-/// symptom, since a clone resets mtime and markdown persists no date.
+/// symptom, since a clone resets mtime — and a non-git markdown corpus keeps a
+/// rewrite-stable `created` from the document instead of a re-stamping mtime
+/// (the run-1 `set-status`/`plan --save` provenance finding).
 fn resolve_dates(
     adr: &Adr,
     path: &Path,
@@ -823,6 +829,8 @@ fn resolve_dates(
             let mtime = file_mtime(path);
             let created = if is_frontmatter {
                 adr.created.get()
+            } else if let Some(d) = adr.created_on {
+                d.get().midnight().assume_utc()
             } else {
                 mtime.unwrap_or_else(|| adr.created.get())
             };

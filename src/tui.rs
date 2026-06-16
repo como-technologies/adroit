@@ -549,6 +549,7 @@ pub enum PaletteCmd {
     AiSummarize,
     AiLint,
     AiPlan,
+    AiPlanRegenerate,
     Theme(MarkdownTheme),
     Help,
     Quit,
@@ -575,7 +576,8 @@ impl PaletteCmd {
             PaletteCmd::AiAsk => "AI: ask the corpus…",
             PaletteCmd::AiSummarize => "AI: summarize this ADR",
             PaletteCmd::AiLint => "AI: review this ADR (advice)",
-            PaletteCmd::AiPlan => "AI: implementation plan",
+            PaletteCmd::AiPlan => "Plan: implementation plan (stored / AI)",
+            PaletteCmd::AiPlanRegenerate => "AI: regenerate implementation plan",
             PaletteCmd::Theme(MarkdownTheme::Gruvbox) => "Theme: gruvbox",
             PaletteCmd::Theme(MarkdownTheme::Warm) => "Theme: warm",
             PaletteCmd::Theme(MarkdownTheme::Default) => "Theme: default (ANSI)",
@@ -607,13 +609,14 @@ impl PaletteCmd {
             | PaletteCmd::AiSummarize
             | PaletteCmd::AiLint
             | PaletteCmd::AiPlan
+            | PaletteCmd::AiPlanRegenerate
             | PaletteCmd::Theme(_) => "",
         }
     }
 }
 
 /// Every command the palette offers, in display order (then fuzzy-filtered).
-pub const PALETTE: [PaletteCmd; 23] = [
+pub const PALETTE: [PaletteCmd; 24] = [
     PaletteCmd::Search,
     PaletteCmd::GoToAdr,
     PaletteCmd::NewAdr,
@@ -626,6 +629,7 @@ pub const PALETTE: [PaletteCmd; 23] = [
     PaletteCmd::AiSummarize,
     PaletteCmd::AiLint,
     PaletteCmd::AiPlan,
+    PaletteCmd::AiPlanRegenerate,
     PaletteCmd::CycleFilter,
     PaletteCmd::CycleSort,
     PaletteCmd::First,
@@ -804,8 +808,10 @@ impl TuiState {
         self.ai_result.as_ref()
     }
 
-    /// Show a read-only AI result in the popup (driver-only). The result
-    /// supersedes the "thinking…" notice, so clear that transient message.
+    /// Show a read-only result in the popup — set by the driver when an AI
+    /// call lands, and by the pure layer for the provider-free stored-plan
+    /// read (ADR-0008). The result supersedes the "thinking…" notice, so
+    /// clear that transient message.
     pub fn show_ai_result(&mut self, title: String, text: String) {
         self.ai_result = Some((title, text));
         self.ai_scroll = 0;
@@ -1340,7 +1346,22 @@ impl TuiState {
             PaletteCmd::AiLint => {
                 self.ai_request_for_selected(|title, body| AiRequest::Lint { title, body })
             }
-            PaletteCmd::AiPlan => {
+            PaletteCmd::AiPlan => match self.selected_detail_parts() {
+                // ADR-0008 semantics: with a stored plan, `plan` is a
+                // deterministic, provider-free read — show it directly, no
+                // provider thread. Fresh generation (no stored plan) still
+                // goes through the AI worker; regeneration over a stored plan
+                // is the explicit verb below.
+                Some((_addr, title, body)) => match crate::plan::extract(&body) {
+                    Some(stored) => {
+                        self.show_ai_result(format!("Plan — {title} (stored)"), stored.to_string());
+                        Action::None
+                    }
+                    None => Action::Ai(AiRequest::Plan { title, body }),
+                },
+                None => Action::None,
+            },
+            PaletteCmd::AiPlanRegenerate => {
                 self.ai_request_for_selected(|title, body| AiRequest::Plan { title, body })
             }
             PaletteCmd::Theme(t) => {
@@ -1836,6 +1857,9 @@ fn create_adr(store: &Store, cfg: &Config, title: &str) -> Result<Adr> {
         let date = adr.created.to_string();
         let date = date.get(..10).unwrap_or(&date);
         adr.body = crate::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
+        // Persist the creation date in the document (ADR-0011) — same stamp
+        // `new` applies in the CLI path.
+        adr.body = crate::format::rewrite_created(&adr.body, Some(adr.created_stamp()));
     }
     store.write(&mut adr)?;
     Ok(adr)
@@ -4468,6 +4492,57 @@ mod tests {
     }
 
     #[test]
+    fn plan_palette_surfaces_a_stored_plan_provider_free() {
+        // ADR-0008 semantics in the TUI: with a stored plan, the plan verb is
+        // a deterministic, provider-free read — the stored section opens in
+        // the result popup directly; no Action::Ai, no provider, no thread.
+        let (_d, store, cfg) = setup_store();
+        let (mut s, num) = state_with_one_adr(&store, &cfg, "Planned");
+        let body = s.preview().unwrap().body.clone();
+        let with_plan = crate::plan::splice(&body, "1. Step one.\n2. Step two.");
+        store
+            .set_body_ref(&crate::naming::AdrRef::Number(num), &with_plan)
+            .unwrap();
+        reload(&mut s, &store).unwrap();
+        let action = s.run_palette_cmd(PaletteCmd::AiPlan);
+        assert_eq!(action, Action::None);
+        assert!(matches!(s.mode(), Mode::AiResult));
+        let (title, text) = s.ai_result().unwrap();
+        assert!(title.contains("stored"), "{title}");
+        assert!(text.contains("1. Step one."), "{text}");
+    }
+
+    #[test]
+    fn plan_palette_generates_when_no_plan_is_stored() {
+        // Without a stored plan the verb still requests fresh generation
+        // (matching CLI `plan <ID>` with nothing persisted).
+        let (_d, store, cfg) = setup_store();
+        let (mut s, _num) = state_with_one_adr(&store, &cfg, "Unplanned");
+        match s.run_palette_cmd(PaletteCmd::AiPlan) {
+            Action::Ai(AiRequest::Plan { title, .. }) => assert_eq!(title, "Unplanned"),
+            other => panic!("expected a fresh Plan request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_regeneration_is_an_explicit_separate_verb() {
+        // Fresh generation over a stored plan is a deliberate, distinct
+        // palette action (the CLI's `--regenerate`), never the default read.
+        let (_d, store, cfg) = setup_store();
+        let (mut s, num) = state_with_one_adr(&store, &cfg, "Planned");
+        let body = s.preview().unwrap().body.clone();
+        let with_plan = crate::plan::splice(&body, "1. Stored step.");
+        store
+            .set_body_ref(&crate::naming::AdrRef::Number(num), &with_plan)
+            .unwrap();
+        reload(&mut s, &store).unwrap();
+        match s.run_palette_cmd(PaletteCmd::AiPlanRegenerate) {
+            Action::Ai(AiRequest::Plan { title, .. }) => assert_eq!(title, "Planned"),
+            other => panic!("expected a regeneration Plan request, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn every_theme_yields_a_chrome_and_markdown_palette() {
         for t in [
             MarkdownTheme::Gruvbox,
@@ -4952,6 +5027,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n"),
             body_html: None,
+            plan: None,
             related: Vec::new(),
             history: Vec::new(),
             last_modified: None,

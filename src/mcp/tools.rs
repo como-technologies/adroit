@@ -31,13 +31,21 @@ impl Server {
         let tools = manifest::build()
             .commands()
             .iter()
-            // `publish` reads the repo but *produces* an output tree, so it is not
-            // a read-only tool even though the manifest marks no repo write.
-            .filter(|c| c.is_read_tool() && c.name != "publish")
+            .filter(|c| c.is_read_tool())
             .map(|c| Tool {
                 name: c.name.clone(),
                 description: c.summary.clone(),
-                args: c.args.clone(),
+                // Strip every arg the manifest marks escalating (ADR-0006:
+                // `review --forge` is a forge write, `--out` an arbitrary file
+                // write, `list --forge` network cost), so the projected surface
+                // is read-only flag-set included. Stripping the schema is
+                // sufficient: `build_argv` ignores keys it doesn't project.
+                args: c
+                    .args
+                    .iter()
+                    .filter(|a| a.escalates.is_none())
+                    .cloned()
+                    .collect(),
             })
             .collect();
         Self {
@@ -226,6 +234,68 @@ mod tests {
     }
 
     #[test]
+    fn projected_tools_carry_no_escalating_flags() {
+        // The ADR-0005/0006 conformance: no projected tool's arg surface can
+        // mutate the repo, the forge, or the filesystem. `forge` reaches the
+        // forge, `yes` / `dry_run` apply / preview that side effect, `out`
+        // writes an arbitrary local file, and `save` / `force` / `regenerate`
+        // (ADR-0008) splice the corpus or force a fresh provider call — none
+        // may appear in any inputSchema.
+        const ESCALATING: &[&str] = &[
+            "forge",
+            "yes",
+            "dry_run",
+            "out",
+            "save",
+            "force",
+            "regenerate",
+        ];
+        let s = server();
+        let tools = s.tool_list();
+        assert!(!tools.is_empty());
+        for tool in &tools {
+            let name = tool["name"].as_str().unwrap();
+            let props = tool["inputSchema"]["properties"].as_object().unwrap();
+            for flag in ESCALATING {
+                assert!(
+                    !props.contains_key(*flag),
+                    "projected tool `{name}` leaks escalating flag `{flag}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn projection_strips_every_flag_the_manifest_marks_escalating() {
+        // Mechanical drift-guard: whatever the manifest classifies as
+        // escalating — today's flags or a future one — must be absent from the
+        // projected schema of the same verb.
+        let m: Value = serde_json::from_str(&manifest::json()).unwrap();
+        let s = server();
+        for tool in s.tool_list() {
+            let name = tool["name"].as_str().unwrap();
+            let props = tool["inputSchema"]["properties"].as_object().unwrap();
+            let cmd = m["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == name)
+                .unwrap_or_else(|| panic!("tool `{name}` is in the manifest"));
+            let args = cmd["args"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+            for arg in args {
+                if arg["escalates"].is_string() {
+                    let flag = arg["name"].as_str().unwrap();
+                    assert!(
+                        !props.contains_key(flag),
+                        "tool `{name}` projects `{flag}`, which the manifest marks escalates={}",
+                        arg["escalates"]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn input_schema_marks_required_and_enum() {
         // A verb with a required positional + an enum option exercises both.
         let args = vec![
@@ -295,6 +365,7 @@ mod tests {
             default: None,
             env: None,
             help: None,
+            escalates: None,
         }
     }
 }

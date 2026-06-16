@@ -71,9 +71,12 @@ pub(crate) struct CommandInfo {
 
 impl CommandInfo {
     /// A read-only, side-effect-free verb safe to expose as an MCP tool: it reads,
-    /// never writes the repo, and costs only `local` work or a (read-only) AI call.
-    /// Excludes `network` verbs (`sync` / `notify` reach a forge / webhook) and
-    /// `long-running` servers (`serve` / `mcp`).
+    /// never writes (the corpus, an output tree — `publish` is classified a
+    /// write), and costs only `local` work or a (read-only) AI call. Excludes
+    /// `network` verbs (`sync` / `notify` reach a forge / webhook) and
+    /// `long-running` servers (`serve` / `mcp`). Per-verb only — a flag can still
+    /// escalate a read verb (see [`escalation`]), so the projection also strips
+    /// every arg with an `escalates` classification.
     #[cfg(feature = "mcp")]
     pub(crate) fn is_read_tool(&self) -> bool {
         self.reads && !self.writes && matches!(self.cost, "local" | "provider-call")
@@ -104,10 +107,46 @@ pub(crate) struct OptionInfo {
     pub(crate) env: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) help: Option<String>,
+    /// What passing this flag escalates the verb into (ADR-0006): `forge` (the
+    /// flag reaches — or applies / previews reaching — the forge over the
+    /// network), `file-output` (writes an arbitrary local file), or `writes`
+    /// (mutates the corpus). Absent ⇒ the flag keeps the verb's declared
+    /// semantics. Safety filters (the MCP projection, downstream allowlists)
+    /// treat the (verb, flag) pair, not the verb name, as the unit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) escalates: Option<&'static str>,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// The per-(verb, flag) escalation table (ADR-0006). The per-verb [`classified`]
+/// semantics are too coarse on their own: `review --forge` un-drafts the PR and
+/// posts comments, `--out` writes an arbitrary file, `list --forge` reaches the
+/// network — each from a verb classified read-only. Declaring the escalation
+/// here keeps the manifest the single source of truth; the MCP projection strips
+/// classified flags and downstream allowlists become mechanical. The
+/// `escalating_flags_on_read_verbs_are_classified` test fails CI when a suspect
+/// flag on a read verb is missing here.
+#[rustfmt::skip]
+fn escalation(verb: &str, flag: &str) -> Option<&'static str> {
+    Some(match (verb, flag) {
+        // `--forge` reaches the forge; on `review`, `--yes` / `--dry-run` apply /
+        // preview that side effect — the whole forge control surface escalates.
+        ("review", "forge" | "yes" | "dry_run") => "forge",
+        ("list" | "check", "forge")             => "forge",
+        // `--out` writes an arbitrary local file from an otherwise read-only verb.
+        ("review" | "plan" | "summarize", "out") => "file-output",
+        // ADR-0008: `plan --save` splices the plan into the ADR document — the
+        // whole save control surface (`--force` overwrite, `--dry-run` preview)
+        // escalates the read verb into a corpus write, and `--regenerate`
+        // forces a fresh, nondeterministic provider call where the stored read
+        // is free. Stripping all four keeps the projected MCP `plan` tool
+        // read-only and deterministic once a plan is stored.
+        ("plan", "save" | "force" | "dry_run" | "regenerate") => "writes",
+        _ => return None,
+    })
 }
 
 /// Per-command semantics the clap tree can't express.
@@ -142,13 +181,18 @@ fn classified(name: &str) -> Option<Meta> {
         "new"        => m!("author",  false, true,  false, "local",   None,                 &[],            None),
         "draft"      => m!("author",  false, true,  false, PROVIDER,  None,                 AI,             None),
         "compose"    => m!("author",  false, true,  false, PROVIDER,  None,                 AI,             None),
+        // `plan`'s cost / requires are the conservative *generation* path. With
+        // a stored plan in the document (ADR-0008) the bare read is local,
+        // deterministic, and provider-free — schema 1 has no conditional cost,
+        // so that path is expressed additively: the verb summary documents it
+        // and `escalates` marks the flags that re-enter generation/write.
         "plan"       => m!("author",  true,  false, true,  PROVIDER,  Some("Plan"),         AI,             None),
         "edit"       => m!("author",  false, true,  false, "local",   None,                 &[],            None),
-        "lint"       => m!("author",  true,  false, true,  "local",   Some("LintFinding[]"), &[],           Some("non-zero on mechanical findings (--ai is advisory)")),
+        "lint"       => m!("author",  true,  false, true,  "local",   Some("LintFinding[]"), &[],           Some("non-zero on mechanical error findings (warnings + --ai advise)")),
         "dedupe"     => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
         "related"    => m!("author",  true,  false, true,  "local",   Some("Match[]"),      &[],            None),
         "link"       => m!("author",  false, true,  true,  "local",   None,                 &[],            None),
-        "import"     => m!("author",  false, true,  false, "local",   None,                 &[],            None),
+        "import"     => m!("author",  false, true,  false, "local",   Some("ImportSummary"), &[],           None),
         // Review & decide
         "set-review" => m!("review",  false, true,  true,  "local",   None,                 &[],            None),
         "review"     => m!("review",  true,  false, true,  "local",   None,                 &[],            None),
@@ -170,7 +214,10 @@ fn classified(name: &str) -> Option<Meta> {
         "renumber"   => m!("maintain", false, true,  false, "local",  None,                &[],            None),
         "migrate"    => m!("maintain", false, true,  true,  "local",  None,                &[],            None),
         "index"      => m!("maintain", false, true,  true,  "local",  None,                &[],            Some("`--check`: non-zero if SUMMARY.md is stale")),
-        "publish"    => m!("maintain", true,  false, true,  "local",  None,                &[],            None),
+        // `publish` never touches the corpus, but producing an output tree IS a
+    // filesystem write (ADR-0007) — consumers filtering on `writes` (the MCP
+    // projection included) must get the safe answer.
+    "publish"    => m!("maintain", true,  true,  true,  "local",  None,                &[],            None),
         // Forge integration (compiled with the `forge` feature)
         "init"       => m!("forge",   false, true,  false, NET,       None,                 &["forge"],          None),
         "auth"       => m!("forge",   false, true,  false, NET,       None,                 &["forge"],          None),
@@ -199,7 +246,9 @@ fn meta(name: &str) -> Meta {
     })
 }
 
-fn arg_info(a: &clap::Arg) -> OptionInfo {
+/// `verb` is the owning subcommand (`None` for a global option) — it keys the
+/// per-(verb, flag) [`escalation`] lookup.
+fn arg_info(verb: Option<&str>, a: &clap::Arg) -> OptionInfo {
     // A boolean switch / counter takes no value — don't advertise a placeholder
     // or true/false "possible values" for it.
     let is_switch = matches!(
@@ -240,6 +289,7 @@ fn arg_info(a: &clap::Arg) -> OptionInfo {
             .map(|s| s.to_string_lossy().into_owned()),
         env: a.get_env().map(|s| s.to_string_lossy().into_owned()),
         help: a.get_help().map(|s| s.to_string()),
+        escalates: verb.and_then(|v| escalation(v, a.get_id().as_str())),
     }
 }
 
@@ -291,6 +341,11 @@ fn type_schemas() -> serde_json::Map<String, Value> {
         "Plan".into(),
         to_val(schemars::schema_for!(crate::view::Plan)),
     );
+    // The one write verb with a structured report: `import` (ImportSummary).
+    m.insert(
+        "ImportSummary".into(),
+        to_val(schemars::schema_for!(crate::view::ImportSummary)),
+    );
     m
 }
 
@@ -301,7 +356,7 @@ pub fn build() -> Manifest {
     let global_options = root
         .get_arguments()
         .filter(|a| a.is_global_set())
-        .map(arg_info)
+        .map(|a| arg_info(None, a))
         .collect();
     let mut commands = Vec::new();
     for sub in root.get_subcommands() {
@@ -324,7 +379,7 @@ pub fn build() -> Manifest {
             args: sub
                 .get_arguments()
                 .filter(|a| !a.is_global_set() && a.get_id() != "help" && a.get_id() != "help_all")
-                .map(arg_info)
+                .map(|a| arg_info(Some(name), a))
                 .collect(),
         });
     }
@@ -432,6 +487,167 @@ mod tests {
             .find(|c| c["name"] == "ask");
         if let Some(ask) = ask {
             assert_eq!(ask["cost"], "provider-call");
+        }
+    }
+
+    #[test]
+    fn publish_is_classified_a_write() {
+        // ADR-0007: producing an output tree IS a filesystem write, even though
+        // the corpus itself is untouched. Consumers filtering on `writes` must
+        // get the safe answer without out-of-band knowledge.
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        let publish = v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "publish")
+            .expect("publish present");
+        assert_eq!(publish["writes"], true, "publish writes an output tree");
+        assert_eq!(publish["reads"], true);
+    }
+
+    /// Look up `commands[cmd].args[arg].escalates` in the serialized manifest.
+    fn escalates(v: &Value, cmd: &str, arg: &str) -> Value {
+        v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == cmd)
+            .unwrap_or_else(|| panic!("command `{cmd}` present"))["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == arg)
+            .unwrap_or_else(|| panic!("arg `{arg}` on `{cmd}`"))["escalates"]
+            .clone()
+    }
+
+    #[test]
+    fn known_escalations_are_declared() {
+        // ADR-0006: the verified MCP write leak — these (verb, flag) pairs
+        // escalate a read verb and must say so in `manifest -o json`.
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        assert_eq!(escalates(&v, "review", "out"), "file-output");
+        assert_eq!(escalates(&v, "plan", "out"), "file-output");
+        assert_eq!(escalates(&v, "summarize", "out"), "file-output");
+        // ADR-0008: the `plan --save` control surface escalates the read verb —
+        // a corpus splice (`save` / `force` / `dry_run`) or a forced fresh
+        // provider call (`regenerate`).
+        assert_eq!(escalates(&v, "plan", "save"), "writes");
+        assert_eq!(escalates(&v, "plan", "force"), "writes");
+        assert_eq!(escalates(&v, "plan", "dry_run"), "writes");
+        assert_eq!(escalates(&v, "plan", "regenerate"), "writes");
+        #[cfg(feature = "forge")]
+        {
+            assert_eq!(escalates(&v, "review", "forge"), "forge");
+            assert_eq!(escalates(&v, "review", "yes"), "forge");
+            assert_eq!(escalates(&v, "review", "dry_run"), "forge");
+            assert_eq!(escalates(&v, "list", "forge"), "forge");
+            assert_eq!(escalates(&v, "check", "forge"), "forge");
+        }
+        // An ordinary read arg stays unclassified — the field is additive.
+        assert_eq!(escalates(&v, "list", "status"), Value::Null);
+        assert_eq!(escalates(&v, "show", "id"), Value::Null);
+    }
+
+    #[test]
+    fn escalating_flags_on_read_verbs_are_classified() {
+        // The per-flag mirror of `manifest_classifies_every_command` (ADR-0006):
+        // on any verb the MCP projection would expose (reads, !writes, local /
+        // provider-call cost), a forge-gated or output-path flag MUST carry an
+        // `escalates` classification — otherwise a future flag silently re-opens
+        // the read-only leak this table exists to close.
+        const SUSPECT: &[&str] = &[
+            "forge",
+            "yes",
+            "dry_run",
+            "out",
+            "save",
+            "force",
+            "regenerate",
+        ];
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        for c in v["commands"].as_array().unwrap() {
+            let read_tool = c["reads"] == true
+                && c["writes"] == false
+                && matches!(c["cost"].as_str(), Some("local" | "provider-call"));
+            if !read_tool {
+                continue;
+            }
+            let Some(args) = c["args"].as_array() else {
+                continue;
+            };
+            for a in args {
+                let name = a["name"].as_str().unwrap();
+                if SUSPECT.contains(&name) {
+                    assert!(
+                        a["escalates"].is_string(),
+                        "flag `{name}` on read verb `{}` has no `escalates` classification — add it to `escalation()` in src/manifest.rs",
+                        c["name"]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plan_and_review_summaries_are_their_own() {
+        // Regression: `plan`'s doc comment carried a copy-pasted `review`
+        // summary line, so the manifest advertised the wrong one-liner and
+        // `review` had none at all.
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        let summary = |name: &str| {
+            v["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == name)
+                .unwrap_or_else(|| panic!("command `{name}` present"))["summary"]
+                .as_str()
+                .unwrap_or_else(|| panic!("command `{name}` has a summary"))
+                .to_string()
+        };
+        let plan = summary("plan");
+        assert!(
+            plan.starts_with("Generate an AI implementation plan"),
+            "plan summary: {plan}"
+        );
+        assert!(
+            !plan.contains("review-kickoff"),
+            "plan summary still carries review's copy-pasted sentence: {plan}"
+        );
+        let review = summary("review");
+        assert!(
+            review.contains("review-kickoff"),
+            "review summary: {review}"
+        );
+    }
+
+    #[test]
+    fn output_long_help_names_every_json_read_verb() {
+        // `--help-all`'s description of `-o/--output` enumerates the verbs that
+        // honor `-o json`; keep that prose in lockstep with the `json_output`
+        // column of `classified()` (every verb advertising a JSON shape honors
+        // the flag — `manifest` is the exception: always JSON, `-o` ignored).
+        let root = crate::cli::Cli::command();
+        let help = root
+            .get_arguments()
+            .find(|a| a.get_id() == "output")
+            .expect("global --output")
+            .get_long_help()
+            .expect("--output has long help")
+            .to_string();
+        let v: Value = serde_json::from_str(&json()).unwrap();
+        for c in v["commands"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            if name == "manifest" || c["json_output"].is_null() {
+                continue;
+            }
+            assert!(
+                help.contains(name),
+                "--output long help omits `{name}`, which honors -o json ({}): {help}",
+                c["json_output"]
+            );
         }
     }
 

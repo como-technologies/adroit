@@ -53,7 +53,7 @@ Author a decision:
   new           Create a new ADR (--interview for an AI Q&A draft)
   draft         Fill in an existing ADR via the AI interview
   compose       Revise an ADR's body from a free-form instruction (AI)
-  plan          Draft an AI implementation plan for an ADR
+  plan          Draft an AI implementation plan (--save persists it into the ADR)
   edit          Open an ADR in your editor ($EDITOR / $VISUAL)
   lint          Check one ADR's authoring quality (--ai for a model review)
   dedupe        Find existing ADRs that overlap a new one
@@ -113,7 +113,7 @@ Author a decision:
   new           Create a new ADR (--interview for an AI Q&A draft)
   draft         Fill in an existing ADR via the AI interview
   compose       Revise an ADR's body from a free-form instruction (AI)
-  plan          Draft an AI implementation plan for an ADR
+  plan          Draft an AI implementation plan (--save persists it into the ADR)
   edit          Open an ADR in your editor ($EDITOR / $VISUAL)
   lint          Check one ADR's authoring quality (--ai for a model review)
   dedupe        Find existing ADRs that overlap a new one
@@ -234,8 +234,11 @@ pub struct Cli {
     /// Output format for read verbs: `human` (default) or `json`.
     ///
     /// `json` emits the structured `view` types — the same contract the web API
-    /// returns — for scripts and AI agents. Honored by `list` / `show` /
-    /// `search` / `stats` / `graph` / `check`; other verbs ignore it.
+    /// returns — for scripts and AI agents. Honored by the read verbs `list` /
+    /// `show` / `status` / `search` / `stats` / `graph` / `check` / `lint` /
+    /// `related` / `dedupe` / `ask` / `plan`, and by the write verb `import`
+    /// (its machine seed summary); other verbs ignore it (`manifest` is always
+    /// JSON).
     #[arg(
         short = 'o',
         long,
@@ -308,7 +311,8 @@ pub enum Command {
     /// risk become decision drivers, its questions become recorded signals — so
     /// the assessment becomes a decision backlog. Mechanical (no AI/network);
     /// re-running skips practices whose decision already exists. Refine each
-    /// seeded ADR (e.g. `adroit draft <id>`) before review.
+    /// seeded ADR (e.g. `adroit draft <id>`) before review. `-o json` emits a
+    /// machine seed summary (`ImportSummary`) for loop runners.
     Import {
         /// Path to an `assessments` export (`.json`, `.yaml`/`.yml`, or `.toml`).
         #[arg(long, value_name = "FILE")]
@@ -673,19 +677,37 @@ pub enum Command {
         /// ADR identifier to edit (number, slug, or uuid prefix — see `show`).
         id: String,
     },
-    /// Generate a review-kickoff doc for an ADR (prints to stdout by default).
-    /// Generate an AI implementation plan for an (accepted) ADR.
+    /// Generate an AI implementation plan for an (accepted) ADR — or read back
+    /// the plan stored in it.
     ///
-    /// Reads the ADR + corpus and asks the configured AI provider for an ordered,
-    /// actionable implementation checklist. Read-only — it never changes the ADR.
-    /// Prints to stdout unless `--out <PATH>` is given. Needs an AI provider
-    /// (`ai.enabled` with a `--features ai` build, or the `ADROIT_AI_FAKE` seam).
+    /// With a plan persisted in the document (`--save`), `plan <ID>` returns it
+    /// deterministically with **no AI provider** — the stored-plan read costs
+    /// nothing and never changes. Otherwise it reads the ADR + corpus and asks
+    /// the configured AI provider for an ordered, actionable implementation
+    /// checklist (`ai.enabled` with a `--features ai` build, or the
+    /// `ADROIT_AI_FAKE` seam); `--regenerate` forces that fresh call even when a
+    /// plan is stored. Prints to stdout unless `--out <PATH>` is given.
     Plan {
         /// ADR identifier (number, slug, or uuid prefix — see `show`).
         id: String,
         /// Write the plan to this file instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Generate a fresh plan and persist it into the ADR document as a
+        /// `<!-- adroit:plan -->`-marked `## Implementation` section (ADR-0008).
+        /// Refuses to overwrite an existing stored plan without `--force`.
+        #[arg(long)]
+        save: bool,
+        /// With `--save`: overwrite the existing stored plan.
+        #[arg(long, requires = "save")]
+        force: bool,
+        /// Skip the stored plan and ask the provider for a fresh one (printed,
+        /// not persisted — add `--save --force` to also replace the stored plan).
+        #[arg(long)]
+        regenerate: bool,
+        /// With `--save`: preview the generated plan + target without writing.
+        #[arg(long, requires = "save")]
+        dry_run: bool,
     },
     /// Run the AI interview on an existing ADR — the after-the-fact `new
     /// --interview`, for an ADR you created with a plain `new` (template) and want
@@ -718,6 +740,12 @@ pub enum Command {
         #[arg(long)]
         no_edit: bool,
     },
+    /// Generate a review-kickoff doc for an ADR (prints to stdout by default).
+    ///
+    /// Pure generation from the built-in `review-kickoff` template — review
+    /// window (business days) + quorum from config (`review_days` /
+    /// `review_quorum`) unless overridden. `--forge` additionally posts the
+    /// kickoff on the linked issue/PR.
     Review {
         /// ADR number to generate a review kickoff for.
         number: u32,

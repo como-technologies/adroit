@@ -251,7 +251,7 @@ fn main() -> Result<()> {
             dry_run,
             force,
             ai,
-        }) => cmd_import(&store, &cfg, &from_assessment, dry_run, force, ai)?,
+        }) => cmd_import(&store, &cfg, &from_assessment, dry_run, force, ai, output)?,
         Some(Command::List {
             status,
             #[cfg(feature = "forge")]
@@ -386,11 +386,22 @@ fn main() -> Result<()> {
             cmd_related(&store, &cfg, &resolve_ref(&cfg, &id)?, true, output)?
         }
         Some(Command::Ask { question }) => cmd_ask(&store, &cfg, &question, output)?,
-        Some(Command::Plan { id, out }) => cmd_plan(
+        Some(Command::Plan {
+            id,
+            out,
+            save,
+            force,
+            regenerate,
+            dry_run,
+        }) => cmd_plan(
             &store,
             &cfg,
             &resolve_ref(&cfg, &id)?,
             out.as_deref(),
+            save,
+            force,
+            regenerate,
+            dry_run,
             output,
         )?,
         Some(Command::Draft { id, no_edit }) => {
@@ -661,6 +672,11 @@ fn cmd_new(
         let date = adr.created.to_string();
         let date = date.get(..10).unwrap_or(&date);
         adr.body = adroit::template::render(&text, cfg.naming, &r, title, cfg.default_status, date);
+        // Persist the creation date in the document (`Created:` in the
+        // `## Status` region; ADR-0011) — stamped once here, never re-stamped
+        // by rewrites — so `created` survives as decision provenance on
+        // corpora without git history (mtime resets on clone and rewrites).
+        adr.body = adroit::format::rewrite_created(&adr.body, Some(adr.created_stamp()));
     }
 
     // Dry run: report where it *would* land, write nothing.
@@ -677,9 +693,11 @@ const IMPORT_AI_INSTRUCTION: &str = "This proposed ADR was seeded from a maturit
      Drivers are filled, but Considered Options, Decision Outcome, and Consequences are \
      still authoring prompts. Flesh out the prose — weigh at least two concrete options \
      with trade-offs, recommend one as a proposal (the ADR stays Proposed), and complete \
-     the positive/negative consequences and a short implementation outline — grounded in \
-     the context and drivers already present. Be concise and honest; do not invent \
-     specifics the assessment does not support.";
+     the positive/negative consequences and a short implementation outline under an \
+     `## Implementation notes` heading (never `## Implementation` — that heading is \
+     reserved for the adroit-managed plan) — grounded in the context and drivers already \
+     present. Be concise and honest; do not invent specifics the assessment does not \
+     support.";
 
 /// `adroit import --from-assessment <file>`: the ingest seam (issue #18). Parse an
 /// assessment export, turn each practice into a **proposed** ADR, splicing the
@@ -688,6 +706,9 @@ const IMPORT_AI_INSTRUCTION: &str = "This proposed ADR was seeded from a maturit
 /// (degrading to the mechanical seed if no provider is available). Re-runnable:
 /// practices whose title already exists are skipped (unless `--force`), so importing
 /// an updated assessment only adds what's new. `--dry-run` reports without writing.
+/// `-o json` emits a `view::ImportSummary` machine summary on stdout (human notes
+/// stay on stderr) so a loop runner can assert the ingest result.
+#[allow(clippy::too_many_arguments)]
 fn cmd_import(
     store: &Store,
     cfg: &Config,
@@ -695,6 +716,7 @@ fn cmd_import(
     dry_run: bool,
     force: bool,
     ai: bool,
+    output: OutputFormat,
 ) -> Result<()> {
     use std::collections::HashSet;
 
@@ -702,11 +724,24 @@ fn cmd_import(
         .with_context(|| format!("reading assessment export {}", from_assessment.display()))?;
     let assessment = adroit::import::parse_assessment(&text, from_assessment)?;
     let drafts = adroit::import::seed_drafts(&assessment);
+    // The machine summary, built alongside the run either way (cheap) and
+    // emitted instead of the human report under `-o json`.
+    let mut summary = adroit::view::ImportSummary {
+        source: from_assessment.display().to_string(),
+        assessment: assessment.name.trim().to_string(),
+        dry_run,
+        seeded: Vec::new(),
+        skipped: Vec::new(),
+    };
     if drafts.is_empty() {
         eprintln!(
             "{}",
             "No named practices found in the assessment — nothing to seed.".yellow()
         );
+        // Keep stdout machine-parseable: an empty run is still a valid summary.
+        if output == OutputFormat::Json {
+            return print_json(&summary);
+        }
         return Ok(());
     }
 
@@ -743,23 +778,31 @@ fn cmd_import(
     };
 
     let by_category = store.options().layout == Layout::ByCategory;
-    let mut created = 0usize;
-    let mut skipped = 0usize;
+    let scheme = store.options().naming;
 
     for d in &drafts {
         let key = d.title.trim().to_lowercase();
         if !existing.insert(key) {
-            skipped += 1;
+            summary.skipped.push(d.title.clone());
             continue;
         }
         if dry_run {
-            println!(
-                "would seed   {}   [{} → {}]",
-                d.title,
-                assessment.name.trim(),
-                d.domain
-            );
-            created += 1;
+            if output == OutputFormat::Human {
+                println!(
+                    "would seed   {}   [{} → {}]",
+                    d.title,
+                    assessment.name.trim(),
+                    d.domain
+                );
+            }
+            // Identity is allocated only on write (and isn't predictable under
+            // every naming scheme) — a preview truthfully carries no reference.
+            summary.seeded.push(adroit::view::ImportSeed {
+                reference: None,
+                title: d.title.clone(),
+                status: cfg.default_status,
+                domain: d.domain.clone(),
+            });
             continue;
         }
         // Under by_category each ADR lives in a subdir — map the domain to it.
@@ -778,20 +821,31 @@ fn cmd_import(
         if let Some(provider) = ai_provider.as_ref() {
             flesh_out_seed(store, &path, &r, &d.title, provider.as_ref())?;
         }
-        println!("seeded   {}", path.display());
-        created += 1;
+        if output == OutputFormat::Human {
+            println!("seeded   {}", path.display());
+        }
+        summary.seeded.push(adroit::view::ImportSeed {
+            reference: Some(scheme.display(&r)),
+            title: d.title.clone(),
+            status: cfg.default_status,
+            domain: d.domain.clone(),
+        });
     }
 
     let verb = if dry_run { "Would seed" } else { "Seeded" };
-    let tail = if skipped > 0 {
-        format!(" ({skipped} skipped — already present)")
-    } else {
+    let tail = if summary.skipped.is_empty() {
         String::new()
+    } else {
+        format!(" ({} skipped — already present)", summary.skipped.len())
     };
     eprintln!(
-        "{verb} {created} proposed ADR(s) from assessment \"{}\"{tail}.",
+        "{verb} {} proposed ADR(s) from assessment \"{}\"{tail}.",
+        summary.seeded.len(),
         assessment.name.trim()
     );
+    if output == OutputFormat::Json {
+        return print_json(&summary);
+    }
     Ok(())
 }
 
@@ -966,6 +1020,14 @@ fn splice_generated(store: &Store, r: &AdrRef, draft: &str) -> Result<()> {
         format!("{}\n", draft.trim())
     } else {
         format!("{}\n\n{}\n", prefix.trim_end(), draft.trim())
+    };
+    // A stored implementation plan (ADR-0008) is adroit-managed decision
+    // content, not prose: a re-draft replaces the prose around it but must not
+    // silently discard the plan — re-splice it (only `plan --save --force`
+    // replaces a stored plan).
+    let new_body = match adroit::plan::extract(&adr.body) {
+        Some(stored) => adroit::plan::splice(&new_body, stored),
+        None => new_body,
     };
     store
         .set_body_ref(r, &new_body)
@@ -2195,20 +2257,84 @@ fn cmd_summarize(
     Ok(())
 }
 
-/// `adroit plan <ID>`: an AI implementation plan for an (accepted) ADR. Reads the
-/// ADR + corpus, asks the provider for an ordered checklist, and prints it (or
-/// writes `--out`). Read-only — the ADR is never modified.
+/// `adroit plan <ID>`: an implementation plan for an (accepted) ADR (ADR-0008).
+///
+/// Two paths. **Stored read** (the default once `--save` has persisted a plan
+/// into the document's `<!-- adroit:plan -->`-marked `## Implementation`
+/// section): deterministic, provider-free, never writes. **Generation**: reads
+/// the ADR + corpus and asks the provider for an ordered checklist — entered
+/// when nothing is stored, or explicitly via `--regenerate` (print-only) /
+/// `--save` (persist; refuses to overwrite a stored plan without `--force`,
+/// previews with `--dry-run`). `-o json` emits the `view::Plan` envelope with
+/// the additive `stored` flag either way.
+#[allow(clippy::too_many_arguments)]
 fn cmd_plan(
     store: &Store,
     cfg: &Config,
     r: &AdrRef,
     out: Option<&std::path::Path>,
+    save: bool,
+    force: bool,
+    regenerate: bool,
+    dry_run: bool,
     output: OutputFormat,
 ) -> Result<()> {
-    let provider = require_provider(cfg, "plan")?;
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
-    // Corpus context: the other ADRs' `reference — title` lines (exclude self).
+
+    // Emit one plan (stored or fresh) on the selected sink. `json` always goes
+    // to stdout, so `--out` is for the human file.
+    let emit = |plan: &str, stored: bool| -> Result<()> {
+        if output == OutputFormat::Json {
+            return print_json(&adroit::view::Plan {
+                reference: detail.summary.reference.clone(),
+                title: detail.summary.title.clone(),
+                plan: plan.to_string(),
+                stored,
+            });
+        }
+        match out {
+            Some(p) => {
+                std::fs::write(p, plan)?;
+                println!("Wrote implementation plan to {}", p.display());
+            }
+            None => println!("{plan}"),
+        }
+        Ok(())
+    };
+
+    // The deterministic read path: a stored plan comes back verbatim with NO
+    // provider, unless a fresh generation is explicitly requested.
+    if !save
+        && !regenerate
+        && let Some(stored) = detail.plan.as_deref()
+    {
+        eprintln!(
+            "(stored plan from {} — `--regenerate` for a fresh draft, `--save --force` to replace)",
+            path.display()
+        );
+        return emit(stored, true);
+    }
+
+    // Write-path guards, checked before spending a provider call.
+    if save {
+        if detail.plan.is_some() && !force {
+            anyhow::bail!(
+                "{} already has a stored plan — `--force` overwrites it, `--regenerate` prints a fresh plan without saving",
+                detail.summary.reference
+            );
+        }
+        if adroit::plan::has_hand_written_section(&detail.body) {
+            anyhow::bail!(
+                "{} has a hand-written `## Implementation` section, which adroit won't manage — fold the plan in by hand, or remove/rename that section before `--save`",
+                detail.summary.reference
+            );
+        }
+    }
+
+    // Generation (provider required). Corpus context: the other ADRs'
+    // `reference — title` lines (exclude self).
+    let provider = require_provider(cfg, "plan")?;
     let corpus: Vec<String> = query::summaries(store, &Filter::default())?
         .iter()
         .filter(|s| s.address != detail.summary.address)
@@ -2227,23 +2353,51 @@ fn cmd_plan(
         &corpus,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    // `-o json` emits a structured envelope to stdout (the plan tagged with its ADR
-    // identity); `json` always goes to stdout, so `--out` is for the human file.
-    if output == OutputFormat::Json {
-        return print_json(&adroit::view::Plan {
-            reference: detail.summary.reference.clone(),
-            title: detail.summary.title.clone(),
-            plan,
-        });
+
+    // Persist (ADR-0008): splice the marked `## Implementation` section into
+    // the document body; `--dry-run` previews without writing (the local
+    // mutation is gated, like every write verb).
+    if save && dry_run {
+        if output == OutputFormat::Json {
+            // Pure JSON on stdout (`stored: false` — nothing was written).
+            eprintln!(
+                "Dry run: would save the implementation plan into {}",
+                path.display()
+            );
+            return emit(&plan, false);
+        }
+        println!("{plan}");
+        println!(
+            "Dry run: would save the implementation plan into {}",
+            path.display()
+        );
+        return Ok(());
     }
-    match out {
-        Some(p) => {
+    if save {
+        let new_body = adroit::plan::splice(&detail.body, &plan);
+        store.set_body_ref(r, &new_body)?;
+        if output == OutputFormat::Json {
+            // The confirmation goes to stderr; stdout carries the envelope
+            // (`stored: true` — the plan is now in the document).
+            eprintln!(
+                "Saved implementation plan into {} ({})",
+                detail.summary.reference,
+                path.display()
+            );
+            return emit(&plan, true);
+        }
+        println!(
+            "Saved implementation plan into {} ({})",
+            detail.summary.reference,
+            path.display()
+        );
+        if let Some(p) = out {
             std::fs::write(p, &plan)?;
             println!("Wrote implementation plan to {}", p.display());
         }
-        None => println!("{plan}"),
+        return Ok(());
     }
-    Ok(())
+    emit(&plan, false)
 }
 
 /// `adroit lint <ID>`: authoring-quality checks on one ADR (read-only).
@@ -2260,7 +2414,12 @@ fn cmd_lint(
     let path = store.find_path_by_ref(r)?;
     let detail = query::detail_at(store, &path)?;
     let mut findings = adroit::lint::lint(&detail.body);
-    let mechanical = findings.len();
+    // Only mechanical *errors* gate the exit — warnings (e.g. a duplicated
+    // top-level section) and the AI review advise.
+    let blocking = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Error)
+        .count();
 
     if ai_review {
         let provider = require_provider(cfg, "lint --ai")?;
@@ -2284,6 +2443,7 @@ fn cmd_lint(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
         findings.push(adroit::lint::LintFinding {
             source: adroit::lint::LintSource::Ai,
+            severity: Severity::Warning,
             message: review.trim().to_string(),
         });
     }
@@ -2294,13 +2454,16 @@ fn cmd_lint(
         println!("OK: no lint findings for {}", detail.summary.reference);
     } else {
         for f in &findings {
-            println!("[{}] {}", f.source, f.message);
+            match f.severity {
+                Severity::Error => println!("[{}] {}", f.source, f.message),
+                Severity::Warning => println!("[{} warning] {}", f.source, f.message),
+            }
         }
     }
 
-    // Exit non-zero on mechanical findings (the AI review is advisory).
-    if mechanical > 0 {
-        anyhow::bail!("{mechanical} authoring finding(s)");
+    // Exit non-zero on mechanical error findings (warnings + --ai advise).
+    if blocking > 0 {
+        anyhow::bail!("{blocking} authoring finding(s)");
     }
     Ok(())
 }

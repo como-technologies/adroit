@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 1e47549781044f191aecc58c2581eec5289fdf0b436d0cc1984c73319623e266 # shrinks to text = "", r = Slug("a𐀀𐀀")
 cc 2866aa3064983a8e228fe45ac42ce7fcf2898fd8500ef6c553a888c910f313b6 # shrinks to text = "#\r", label = "A", url = ""
+cc b7cd201bb63aeecb364dc47a9f9d53a9fb325ff72d72c2a55a9da30b497c4e29 # shrinks to text = "#\r\n", y = 2000, o = 1, d = 1

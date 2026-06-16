@@ -8,11 +8,13 @@
 //! bespoke subprocess plumbing.
 //!
 //! **Read-only by design:** only verbs the manifest marks `reads && !writes` and
-//! non-`long-running` (and not the artifact-producing `publish`) become tools, so
-//! nothing here can mutate the repo over the wire. A `tools/call` re-runs the verb
-//! as `adroit <verb> … -o json` with the resolved on-disk shape forwarded as env,
-//! so it stays drift-proof: a new read verb auto-appears as a tool and executes
-//! with no code change.
+//! non-`long-running` become tools (`publish` is classified a write — it produces
+//! an output tree), and flags the manifest marks escalating (`review --forge`,
+//! `--out`, …) are stripped from the projected schemas — so nothing here can
+//! mutate the repo, the forge, or the filesystem over the wire. A `tools/call`
+//! re-runs the verb as `adroit <verb> … -o json` with the resolved on-disk shape
+//! forwarded as env, so it stays drift-proof: a new read verb auto-appears as a
+//! tool and executes with no code change.
 //!
 //! The protocol handlers ([`handle_line`]) are pure (`&str -> Option<String>`),
 //! unit-tested with no stdio and fuzzed for no-panic on hostile input; [`run`] is
