@@ -7,6 +7,28 @@ release commit so `adroit --version` matches the tag, tags pushed only by the
 owner — is ADR-0012 in the repo's own
 [decision corpus](../dev/decisions.md) (`adr/accepted/`).
 
+## Unreleased
+
+- **Sanitizer: novel bracket placeholders dropped.** Run-2 of the full
+  portfolio loop surfaced a new wart class: the model closed a drafted body
+  with `[Insert implementation plan or other details as needed]` — a
+  whole-line bracket placeholder the template never contained, invisible to
+  the known-scaffold rules. `sanitize_draft` now drops `[Insert …]` /
+  `[Your Name]` / `[TBD]`-shaped placeholder lines wherever they appear
+  (curated openers on a word boundary; links, checkboxes, citations,
+  footnotes, single-token `[section]` lines, and fenced/indented code never
+  match), along with the horizontal rule a tail placeholder orphans.
+- **Lint: new warning on whole-line bracket placeholders** (same detector,
+  fenced code exempt) — visible in `lint` / `lint -o json`, doesn't gate the
+  exit code.
+- **Ollama requests pin `num_ctx=8192`.** Ollama silently truncates prompts
+  at its 2048-token default window — the root cause of run-1's authoring
+  retries, fixed suite-wide. The rig-backed provider now sends
+  `options.num_ctx` on every ollama call; `tests/ai_rig.rs` captures the
+  literal wire JSON so the pin can't regress with a rig upgrade. (Wider
+  windows multiply KV-cache memory per `OLLAMA_NUM_PARALLEL` runner — see
+  the book's [AI provider notes](../usage/automation.md).)
+
 ## v0.2.0 — 2026-06-12
 
 The iteration-2 fix train: every machine-output friction the first full

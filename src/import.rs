@@ -1,7 +1,7 @@
 //! Seed proposed ADRs from an external artifact — the **Ingest** seam of the
 //! portfolio loop (Assess → Prescribe; issue #18).
 //!
-//! An [`assessments`](https://github.com/como-technologies) export is a maturity
+//! An [`assessments`](https://github.com/como-technologies/assessments) export is a maturity
 //! model — `Domain → Practice → Question` leaves, each carrying *context*,
 //! *value*, and *risk*. Each **practice** implies a decision the team has to make,
 //! so this module turns each practice into a **proposed** draft ADR: the

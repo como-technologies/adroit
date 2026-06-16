@@ -18,9 +18,11 @@ use adroit::adr::Status;
 use adroit::format;
 use adroit::import::{self, SEED_MARKER, parse_assessment, seed_drafts, seed_fragment};
 use adroit::links;
+use adroit::lint;
 use adroit::naming::{AdrRef, NamingScheme};
 use adroit::plan;
 use adroit::publish;
+use adroit::view::Severity;
 
 use proptest::prelude::*;
 
@@ -92,6 +94,38 @@ fn arb_link_doc() -> impl Strategy<Value = String> {
         0..12,
     )
     .prop_map(|parts| parts.join(" "))
+}
+
+/// A whole-line bracket placeholder in the run-2 wart's shape — a curated
+/// opener (mixed case), an arbitrary bracket-free tail, optionally behind a
+/// list marker or light indentation: `[Insert …]`, `- [Your …]`, `1. [TBD …]`.
+fn arb_placeholder_line() -> impl Strategy<Value = String> {
+    let opener = prop::sample::select(vec![
+        "Insert",
+        "insert",
+        "INSERT",
+        "Add",
+        "Describe",
+        "List",
+        "Enter",
+        "Provide",
+        "Specify",
+        "Replace",
+        "Fill",
+        "Include",
+        "Your",
+        "your",
+        "Name of",
+        "To be",
+        "TODO",
+        "TBD",
+        "FIXME",
+        "Placeholder",
+        "Optional",
+    ]);
+    let tail = prop::string::string_regex("[A-Za-z0-9 ,.'-]{0,40}").expect("valid regex");
+    let marker = prop::sample::select(vec!["", "- ", "* ", "1. ", "12. ", "  "]);
+    (marker, opener, tail).prop_map(|(m, o, t)| format!("{m}[{o} {t}]"))
 }
 
 fn arb_ref() -> impl Strategy<Value = AdrRef> {
@@ -482,5 +516,114 @@ proptest! {
         }
         prop_assert_eq!(draft.matches("<!-- adroit:ai-suggested -->").count(), 1, "{}", draft);
         prop_assert_eq!(draft.matches("<!-- adroit:seeded-from-assessment -->").count(), 0, "{}", draft);
+    }
+
+    /// An AI draft never carries a whole-line bracket placeholder — the run-2
+    /// regression (playbook ADR-0010's "[Insert implementation plan…]")
+    /// generalized: wherever the model drops `[Insert …]` / `[Your …]`-shaped
+    /// filler in its output (plan spans and fenced code excluded — those stay
+    /// verbatim by design), the sanitized draft is free of it.
+    #[test]
+    fn ai_drafts_never_carry_bracket_placeholder_lines(
+        pre in arb_text(), ph in arb_placeholder_line(), post in arb_text()
+    ) {
+        let text = format!("{pre}\n{ph}\n{post}");
+        prop_assume!(!text.contains("<!-- adroit:plan -->") && !text.contains("<!-- /adroit:plan -->"));
+        prop_assume!(!text.contains("```") && !text.contains("~~~"));
+        prop_assume!(text != "__ERROR__"); // the FakeProvider failure hook
+        let fake = adroit::ai::FakeProvider { canned: text };
+        let draft = adroit::ai::draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        for line in draft.lines() {
+            prop_assert!(!lint::bracket_placeholder(line),
+                "placeholder survived: {:?} in {}", line, draft);
+        }
+    }
+
+    /// Dropping a tail placeholder never strands the horizontal rule above it
+    /// (the run-2 artifact's exact `---` + placeholder closing shape): the
+    /// sanitized draft never ends on a rule.
+    #[test]
+    fn trailing_placeholder_never_orphans_a_rule(
+        body in arb_text(), ph in arb_placeholder_line()
+    ) {
+        let text = format!("{body}\n\n---\n\n{ph}");
+        prop_assume!(!text.contains("<!-- adroit:plan -->") && !text.contains("<!-- /adroit:plan -->"));
+        prop_assume!(!text.contains("```") && !text.contains("~~~"));
+        prop_assume!(text != "__ERROR__"); // the FakeProvider failure hook
+        let fake = adroit::ai::FakeProvider { canned: text };
+        let draft = adroit::ai::draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        let last = draft.trim_end().lines().last().unwrap_or("").trim();
+        prop_assert!(!matches!(last, "---" | "***" | "___"), "orphaned rule: {}", draft);
+    }
+
+    /// Fenced code is exempt from the placeholder rule — an example config
+    /// showing `[insert API key]`-style lines survives the sanitizer verbatim.
+    #[test]
+    fn fenced_placeholder_lookalikes_stay_verbatim(ph in arb_placeholder_line()) {
+        let text = format!("## Notes\n\nReal content.\n\n```\n{ph}\n```\n");
+        let fake = adroit::ai::FakeProvider { canned: text };
+        let draft = adroit::ai::draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        prop_assert!(draft.contains(&ph), "fenced line lost: {:?} in {}", ph, draft);
+    }
+
+    /// The drop-counting sanitizer (`draft_compose_counted`, behind `import
+    /// --ai`'s telemetry) never alters the body the count-free `draft_compose`
+    /// produces — the counts are a pure observation over arbitrary model output,
+    /// not a behavior change. (No-panic + body-stability in one property.)
+    #[test]
+    fn counted_draft_body_matches_the_plain_draft(text in arb_text()) {
+        prop_assume!(text != "__ERROR__"); // the FakeProvider failure hook
+        let plain = adroit::ai::draft_compose(
+            &adroit::ai::FakeProvider { canned: text.clone() }, "T", "i", "old", &[]).unwrap();
+        let (counted, _drops) = adroit::ai::draft_compose_counted(
+            &adroit::ai::FakeProvider { canned: text }, "T", "i", "old", &[]).unwrap();
+        prop_assert_eq!(plain, counted);
+    }
+
+    /// The telemetry never undercounts a real wart: a whole-line bracket
+    /// placeholder dropped from the body is always tallied (≥ 1) — so the
+    /// `import --ai` artifacts can't read "the model emitted none" when the
+    /// sanitizer in fact ate one (the run-3 observability wart). Plan spans and
+    /// fenced code excluded (those stay verbatim, uncounted, by design).
+    #[test]
+    fn a_dropped_bracket_placeholder_is_always_counted(
+        pre in arb_text(), ph in arb_placeholder_line(), post in arb_text()
+    ) {
+        let text = format!("{pre}\n{ph}\n{post}");
+        prop_assume!(!text.contains("<!-- adroit:plan -->") && !text.contains("<!-- /adroit:plan -->"));
+        prop_assume!(!text.contains("```") && !text.contains("~~~"));
+        prop_assume!(text != "__ERROR__"); // the FakeProvider failure hook
+        let fake = adroit::ai::FakeProvider { canned: text };
+        let (_body, drops) = adroit::ai::draft_compose_counted(&fake, "T", "i", "old", &[]).unwrap();
+        prop_assert!(drops.bracket_placeholder >= 1, "uncounted placeholder: {:?}", ph);
+    }
+
+    /// `lint` flags every whole-line bracket placeholder on an otherwise-clean
+    /// body — and only as a Warning (a CI lint gate stays green).
+    #[test]
+    fn lint_warns_on_any_bracket_placeholder_line(ph in arb_placeholder_line()) {
+        let body = format!(
+            "## Context and Problem Statement\n\nReal context.\n\n\
+             ## Considered Options\n\n1. A\n2. B\n\n\
+             ## Decision Outcome\n\nChosen: A, because reasons.\n\n\
+             ### Negative Consequences\n\n- A real downside.\n\n{ph}\n"
+        );
+        let f = lint::lint(&body);
+        prop_assert!(
+            f.iter().any(|x| x.severity == Severity::Warning
+                && x.message.contains("bracket placeholder")),
+            "no placeholder warning for {:?}: {:?}", ph, f
+        );
+        prop_assert!(f.iter().all(|x| x.severity == Severity::Warning), "{:?}", f);
+    }
+
+    /// `lint` and the placeholder detector scan untrusted ADR bodies — they
+    /// must tolerate arbitrary input without panicking.
+    #[test]
+    fn lint_never_panics(text in arb_text()) {
+        let _ = lint::lint(&text);
+        for line in text.lines() {
+            let _ = lint::bracket_placeholder(line);
+        }
     }
 }

@@ -61,7 +61,7 @@ directory — the same generic platform-engineering assessment as
 `adroit import --from-assessment examples/assessment.json --dry-run` (add `--ai` to
 see the fleshed-out variant) — it seeds **four proposed ADRs**.
 
-It reads an [`assessments`](https://github.com/como-technologies) export (a
+It reads an [`assessments`](https://github.com/como-technologies/assessments) export (a
 `Domain → Practice → Question` maturity model, as `.json`, `.yaml`, or `.toml`) and seeds one
 **proposed** ADR per practice: the practice's *context* becomes the problem
 statement, its *value* / *risk* / *effort* become decision drivers, and its

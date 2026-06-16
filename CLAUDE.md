@@ -120,7 +120,8 @@ just adopt-slice # live-ollama dogfood rehearsal of the Adopt read slice (temp c
   (properties / bolero fuzz), `config_precedence.rs`, `date_source_git.rs`,
   `forge_faults.rs` + `forge_cli.rs`. `tests/fixtures/golden-assessment.yaml` is the
   **vendored cross-repo ingest contract** — the assessments app's real-exporter
-  golden (regenerate THERE via `just golden`, re-copy verbatim under the header);
+  golden (regenerate it in an assessments checkout — sibling `../assessments` or a clone
+  per the suite resolution convention — via `just golden`, re-copy verbatim under the header);
   `import_golden_assessment_contract` pins the seeded backlog against it, and the
   env-gated `ADROIT_LIVE_OLLAMA=1` test exercises `import --ai` on live ollama.
   See `docs/src/dev/testing.md`.
@@ -145,8 +146,10 @@ is deferred to the web surface (`AdrDetail::body_html` stays `None`).
 (`human` default, `json`) is honored by read verbs `list`/`show`/`status`/`search`/
 `stats`/`graph`/`check`/`lint`/`related`/`dedupe`/`ask`/`plan` **and the write verb
 `import`** (its `view::ImportSummary` machine seed summary — `{source, assessment,
-dry_run, seeded[], skipped[]}`; `--dry-run -o json` is the same shape with
-`reference: null`, since identity is allocated only on write)
+dry_run, seeded[], skipped[]}`, plus an optional `sanitized` `SanitizeReport` of
+per-rule `--ai` draft-sanitizer drop counts (zero rules + non-`--ai`/clean runs
+omit it; additive, `manifest_schema` stays 1); `--dry-run -o json` is the same
+shape with `reference: null`, since identity is allocated only on write)
 (`docs/src/usage/automation.md`; the `--output` long help enumerates them —
 guarded by `output_long_help_names_every_json_read_verb` against the manifest's
 `json_output` column). `check -o json` still exits
@@ -565,17 +568,39 @@ re-emitted leading H1 / `> State:` banner is dropped; a re-emitted `## Status` /
 document's own — a model copy is always a duplicate; run-1 ADR-0001/0005); echoed adroit
 markers (`ai-suggested`/`seeded-from-assessment`) are dropped; trailing conversational
 residue ("Please review this revised ADR body…" — run-1 ADR-0002; `RESIDUE_OPENERS`) is
-stripped with the rule it orphans; and an unmanaged `## Implementation` section with real
+stripped with the rule it orphans; **whole-line bracket placeholders** ("[Insert
+implementation plan or other details as needed]" — run-2 playbook ADR-0010; `[Your Name]`)
+are dropped wherever they appear, plus the rule a tail placeholder orphans — detected by
+`lint::bracket_placeholder` (curated `PLACEHOLDER_OPENERS` on a word boundary; links,
+checkboxes, citations, single-token `[section]` lines, and fenced/indented code never
+match); and an unmanaged `## Implementation` section with real
 content is retitled `## Implementation notes` — so no model output can read as the
 hand-written section that blocks `plan --save` (ADR-0008 reserves that heading; echoes of
 the marker-bracketed stored plan or the prompt-only template placeholder stay verbatim, and
 plan-span content is never touched). Properties `ai_drafts_never_block_plan_save` +
-`ai_drafts_never_duplicate_the_mechanical_preamble` (`tests/parsers.rs`) pin the invariants;
-found in the M5 ollama dogfood rehearsal and the iteration-1 full-loop run (book:
-Development → The Adopt Read Slice).
+`ai_drafts_never_duplicate_the_mechanical_preamble` +
+`ai_drafts_never_carry_bracket_placeholder_lines` (`tests/parsers.rs`; bolero twins
+`fuzz_ai_sanitizer`/`fuzz_lint`) pin the invariants;
+found in the M5 ollama dogfood rehearsal and the iteration-1/-2 full-loop runs (book:
+Development → The Adopt Read Slice). **Drops are observable, not silent**
+(iteration-3 run-3 wart): the counting core `sanitize_draft_counted` returns a
+`view::SanitizeReport` (per-rule drop counts — `bracket_placeholder`/`residue`/
+`skeleton_echo`/`identity_echo`/`marker_echo`, non-blank lines only; the
+`## Implementation` retitle keeps content, so it's NOT a drop), `sanitize_draft`
+is the count-free wrapper, and `draft_compose_counted` surfaces it. `import --ai`
+aggregates across seeds, prints a `sanitized: …` stderr line, and carries the
+`sanitized` object in `-o json` (zeros-omitted; additive — `manifest_schema`
+stays 1). Pinned by `import_ai_surfaces_sanitizer_drop_telemetry` +
+`a_dropped_bracket_placeholder_is_always_counted`.
 
 **`ai`-gated** (`src/ai/rig_provider.rs`): `RigProvider` wraps rig (aliased from `rig-core`) —
 Anthropic and Ollama (local) — on a current-thread tokio runtime, `block_on`-ing rig's agent.
+Every ollama request pins **`options.num_ctx = OLLAMA_NUM_CTX` (8192)** via
+`additional_params` — ollama otherwise silently truncates prompts at its 2048-token default
+(the iteration-2 suite root cause; KV-cache memory multiplies per `OLLAMA_NUM_PARALLEL`
+runner at wider windows). Wire-shape-pinned by `tests/ai_rig.rs` (loopback fake ollama,
+asserts the literal request JSON; `req.max_tokens` is deliberately NOT mapped to ollama —
+`/api/chat` has no such field and generation stays unclipped).
 
 **`new --interview`** (`run_interview`): asks the fixed `INTERVIEW_QUESTIONS` over **plain
 stdin** (robust on non-TTY/piped), builds a corpus summary, drafts, then **splices**: keeps
@@ -605,8 +630,10 @@ splice (`draft`/`compose`/`import --ai`) **preserves** a stored plan section. **
 placeholders, missing/empty Negative Consequences (`##` and `###` depth both accepted —
 models write h2 where MADR nests h3; depth is shape, not substance), `## Considered
 Options` with <2 recorded options (list items and `###` sub-headings both count — MADR's
-long form and most models record options as sub-headings), and a **Warning** on repeated
-top-level (`##`) sections (the run-1 skeleton-echo shape). Findings carry `severity`
+long form and most models record options as sub-headings), a **Warning** on repeated
+top-level (`##`) sections (the run-1 skeleton-echo shape), and a **Warning** on whole-line
+bracket placeholders (`bracket_placeholder` — the run-2 novel-filler shape; fenced code
+exempt). Findings carry `severity`
 (reusing `view::Severity`): Errors gate the exit, Warnings (incl. the `--ai` advisory
 finding) don't. Needs **no AI** (CI-usable); `--ai` appends one advisory finding. Exits
 non-zero on **mechanical Error** findings only.

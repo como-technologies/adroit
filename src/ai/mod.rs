@@ -185,16 +185,40 @@ pub fn draft_body(
 ///   heading that opens a marker-bracketed plan span (a stored plan echoed
 ///   back) is managed content, and an empty / prompt-only section (the
 ///   template placeholder echoed back) never blocks — `plan --save` replaces
-///   it in place, and retitling it would strand a prompt-only "notes" section.
+///   it in place, and retitling it would strand a prompt-only "notes" section;
+/// - **whole-line bracket placeholders** (`[Insert implementation plan or
+///   other details as needed]`, run-2 playbook ADR-0010; `[Your Name]`, the M5
+///   rehearsal) — NOVEL filler the template never contained, detected by
+///   [`crate::lint::bracket_placeholder`] (conservative: links / checkboxes /
+///   citations / single-token `[section]` lines never match) — dropped, along
+///   with the horizontal rule a tail placeholder orphans. Fenced code is
+///   exempt: an example config legitimately shows `[insert API key]`-style
+///   lines.
 ///
 /// Everything inside a marker-bracketed plan span is adroit-managed and stays
 /// verbatim.
 fn sanitize_draft(text: &str) -> String {
+    sanitize_draft_counted(text).0
+}
+
+/// The counting core behind [`sanitize_draft`]: the same mechanical sanitize,
+/// but returning a [`crate::view::SanitizeReport`] tallying the lines dropped
+/// per rule alongside the cleaned body. `sanitize_draft` is the thin
+/// drop-the-count wrapper used by every flow that only wants the body
+/// (`draft_body` / the bare `draft_compose`); `import --ai` calls this directly
+/// so it can surface what was stripped — making the otherwise-silent sanitizer
+/// observable (the run-3 wart). Each `continue`-without-`out.push` branch below
+/// is a drop, attributed to exactly one rule; the `## Implementation` retitle
+/// keeps its content, so it is deliberately *not* counted.
+fn sanitize_draft_counted(text: &str) -> (String, crate::view::SanitizeReport) {
+    let mut counts = crate::view::SanitizeReport::default();
     let lines: Vec<&str> = text.lines().collect();
     let mut out: Vec<&str> = Vec::with_capacity(lines.len());
     let mut in_plan_span = false;
+    let mut in_fence = false; // inside ``` / ~~~ fenced code (placeholder rule only)
     let mut kept_content = false; // a non-empty line has survived (past the head)
     let mut dropped_h1 = false;
+    let mut tail_drop = false; // a placeholder was dropped with nothing kept after it
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -205,8 +229,21 @@ fn sanitize_draft(text: &str) -> String {
             in_plan_span = false;
         }
         if !in_plan_span {
+            if t.starts_with("```") || t.starts_with("~~~") {
+                in_fence = !in_fence;
+            }
+            // Whole-line bracket placeholders are filler wherever they appear
+            // (outside fenced code) — dropped; `tail_drop` remembers a drop
+            // that left nothing after it, so the rule it orphaned goes too.
+            if !in_fence && crate::lint::bracket_placeholder(line) {
+                counts.bracket_placeholder += 1;
+                tail_drop = true;
+                i += 1;
+                continue;
+            }
             // Echoed adroit markers are metadata noise wherever they appear.
             if t == AI_MARKER || t == crate::import::SEED_MARKER {
+                counts.marker_echo += 1;
                 i += 1;
                 continue;
             }
@@ -214,11 +251,13 @@ fn sanitize_draft(text: &str) -> String {
             // before real content begins.
             if !kept_content {
                 if !dropped_h1 && t.starts_with("# ") {
+                    counts.identity_echo += 1;
                     dropped_h1 = true;
                     i += 1;
                     continue;
                 }
                 if t.starts_with("> State:") {
+                    counts.identity_echo += 1;
                     i += 1;
                     continue;
                 }
@@ -228,11 +267,18 @@ fn sanitize_draft(text: &str) -> String {
             // a duplicate — drop the heading and its content (up to the next
             // heading or a plan-span marker).
             if t.eq_ignore_ascii_case("## Status") || t.eq_ignore_ascii_case("## Stakeholders") {
+                counts.skeleton_echo += 1; // the heading (always non-blank)
                 i += 1;
                 while i < lines.len()
                     && !lines[i].trim_start().starts_with('#')
                     && lines[i].trim() != crate::plan::PLAN_MARKER
                 {
+                    // Count only non-blank content the section drops — blank
+                    // lines are whitespace the join normalizes, not content the
+                    // sanitizer "ate" (uniform with the residue rule).
+                    if !lines[i].trim().is_empty() {
+                        counts.skeleton_echo += 1;
+                    }
                     i += 1;
                 }
                 continue;
@@ -258,6 +304,7 @@ fn sanitize_draft(text: &str) -> String {
                 && !heads_plan_span()
                 && blocking_content()
             {
+                // A retitle, not a drop: content is kept, so no rule counts it.
                 out.push("## Implementation notes");
                 kept_content = true;
                 i += 1;
@@ -266,12 +313,13 @@ fn sanitize_draft(text: &str) -> String {
         }
         if !t.is_empty() {
             kept_content = true;
+            tail_drop = false;
         }
         out.push(line);
         i += 1;
     }
-    strip_trailing_residue(&mut out);
-    out.join("\n")
+    counts.residue = strip_trailing_residue(&mut out, tail_drop);
+    (out.join("\n"), counts)
 }
 
 /// Conversational-closer openings (matched case-insensitively against the first
@@ -293,8 +341,13 @@ const RESIDUE_OPENERS: [&str; 8] = [
 /// paragraphs that are plain prose opening with a recognized closer, then any
 /// horizontal rule the strip orphaned. Headings, lists, quotes, code, and
 /// comments are never residue; an unrecognized final paragraph stays.
-fn strip_trailing_residue(lines: &mut Vec<&str>) {
-    let mut stripped = false;
+/// `stripped` seeds the orphaned-rule rule: `true` when the caller already
+/// dropped the draft's tail (a bracket placeholder), so a now-final horizontal
+/// rule is that drop's orphan. Returns the count of non-blank lines removed —
+/// the `residue` tally for the drop telemetry (blank lines trimmed alongside
+/// don't count; they're whitespace the join would normalize anyway).
+fn strip_trailing_residue(lines: &mut Vec<&str>, mut stripped: bool) -> u32 {
+    let mut dropped = 0u32;
     loop {
         while lines.last().is_some_and(|l| l.trim().is_empty()) {
             lines.pop();
@@ -322,6 +375,7 @@ fn strip_trailing_residue(lines: &mut Vec<&str>) {
         });
         let first = para[0].trim().to_lowercase();
         if plain_prose && RESIDUE_OPENERS.iter().any(|o| first.starts_with(o)) {
+            dropped += (lines.len() - start) as u32;
             lines.truncate(start);
             stripped = true;
             continue;
@@ -330,11 +384,13 @@ fn strip_trailing_residue(lines: &mut Vec<&str>) {
         // rule with real content after it (no strip happened) stays.
         let is_rule = para.len() == 1 && matches!(para[0].trim(), "---" | "***" | "___");
         if stripped && is_rule {
+            dropped += 1;
             lines.truncate(start);
             continue;
         }
         break;
     }
+    dropped
 }
 
 /// Build the completion request for `plan`: a concrete implementation plan for
@@ -468,9 +524,24 @@ pub fn draft_compose(
     current_body: &str,
     corpus: &[String],
 ) -> Result<String, AiError> {
+    Ok(draft_compose_counted(provider, title, instruction, current_body, corpus)?.0)
+}
+
+/// [`draft_compose`] that also surfaces the per-rule [`crate::view::SanitizeReport`]
+/// — the lines the sanitizer dropped from the model's output. The returned body
+/// is byte-identical to `draft_compose`'s; `import --ai` uses this variant so it
+/// can report what it stripped (making the silent sanitizer observable — the
+/// run-3 wart), while `compose` / the TUI keep the count-free `draft_compose`.
+pub fn draft_compose_counted(
+    provider: &dyn AiProvider,
+    title: &str,
+    instruction: &str,
+    current_body: &str,
+    corpus: &[String],
+) -> Result<(String, crate::view::SanitizeReport), AiError> {
     let req = build_compose_request(title, instruction, current_body, corpus);
-    let body = sanitize_draft(&provider.complete(&req)?);
-    Ok(format!("{AI_MARKER}\n\n{}\n", body.trim()))
+    let (body, counts) = sanitize_draft_counted(&provider.complete(&req)?);
+    Ok((format!("{AI_MARKER}\n\n{}\n", body.trim()), counts))
 }
 
 /// An offline provider for tests and the `ADROIT_AI_FAKE` seam: echoes a canned
@@ -693,6 +764,99 @@ mod tests {
     }
 
     #[test]
+    fn drafts_drop_a_novel_bracket_placeholder_tail() {
+        // Run-2 regression (iteration-2 full loop, playbook ADR-0010): llama3.2
+        // closed the drafted body with a horizontal rule and "[Insert
+        // implementation plan or other details as needed]" — a NOVEL bracket
+        // placeholder the template never contained, so the known-scaffold rules
+        // were silent and it sailed into the committed corpus. Whole-line
+        // bracket placeholders are now dropped, along with the rule this one
+        // orphans (same orphan handling as the conversational closers).
+        let fake = FakeProvider {
+            canned: "## Decision Outcome\n\nChosen: **Automated Integration Testing with \
+                     Manual Review**, because it addresses the drivers.\n\n\
+                     ## Implementation Notes\n\n\
+                     1. **Initial Setup**: Develop automated integration tests.\n\
+                     2. **Manual Review Process**: Establish a clear process.\n\n\
+                     ---\n\n\
+                     [Insert implementation plan or other details as needed]"
+                .into(),
+        };
+        let body = draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        assert!(!body.contains("[Insert implementation plan"), "{body}");
+        assert!(!body.trim_end().ends_with("---"), "{body}");
+        assert!(body.contains("2. **Manual Review Process**"), "{body}");
+    }
+
+    #[test]
+    fn drafts_drop_bracket_placeholders_anywhere() {
+        // The M5-rehearsal sibling shape: invented `[Your Name]`-style fillers
+        // inside a section (not just at the tail), bare or as list items.
+        let fake = FakeProvider {
+            canned: "## Context and Problem Statement\n\nReal context.\n\n\
+                     ## Decision Outcome\n\nChosen: A.\n\n\
+                     Approved by [Manager's Name] on [Insert date].\n\n\
+                     - [Your Name]\n\
+                     - a real stakeholder\n\n\
+                     [List the remaining stakeholders here]\n"
+                .into(),
+        };
+        let body = draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        assert!(!body.contains("[Your Name]"), "{body}");
+        assert!(!body.contains("[List the remaining stakeholders"), "{body}");
+        // Mid-prose spans are NOT whole-line placeholders — the line carries
+        // real content around them, so it stays (conservative by design).
+        assert!(body.contains("Approved by [Manager's Name]"), "{body}");
+        assert!(body.contains("- a real stakeholder"), "{body}");
+    }
+
+    #[test]
+    fn drafts_keep_legitimate_bracket_constructs() {
+        // The placeholder rule must not eat real markdown: checkboxes,
+        // whole-line links, reference definitions, citations, footnotes.
+        let fake = FakeProvider {
+            canned: "## Decision Outcome\n\nChosen: A.\n\n\
+                     - [ ] wire the adapter\n\
+                     - [x] write the ADR\n\n\
+                     [MADR](https://adr.github.io/madr/)\n\n\
+                     [madr]: https://adr.github.io/madr/\n\n\
+                     [^1]: a footnote definition\n\n\
+                     [1]\n"
+                .into(),
+        };
+        let body = draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        for kept in [
+            "- [ ] wire the adapter",
+            "- [x] write the ADR",
+            "[MADR](https://adr.github.io/madr/)",
+            "[madr]: https://adr.github.io/madr/",
+            "[^1]: a footnote definition",
+            "[1]",
+        ] {
+            assert!(body.contains(kept), "lost {kept:?} in: {body}");
+        }
+    }
+
+    #[test]
+    fn drafts_keep_placeholder_lookalikes_in_fenced_code() {
+        // A fenced code example legitimately shows where a value goes —
+        // `[Insert API key here]` inside a fence is content, not filler.
+        let fake = FakeProvider {
+            canned: "## Decision Outcome\n\nChosen: A.\n\n\
+                     ```yaml\n\
+                     api_key: [Insert API key here]\n\
+                     [Your Name]\n\
+                     ```\n\n\
+                     [Insert rollout plan here]\n"
+                .into(),
+        };
+        let body = draft_compose(&fake, "T", "i", "old", &[]).unwrap();
+        assert!(body.contains("api_key: [Insert API key here]"), "{body}");
+        assert!(body.contains("[Your Name]"), "{body}");
+        assert!(!body.contains("[Insert rollout plan here]"), "{body}");
+    }
+
+    #[test]
     fn drafts_keep_real_trailing_content() {
         // A real final paragraph (and trailing list items) must survive — only
         // recognized conversational closers are residue.
@@ -803,5 +967,79 @@ mod tests {
             "{body}"
         );
         assert!(!body.contains("## Implementation notes"), "{body}");
+    }
+
+    #[test]
+    fn sanitize_draft_counts_each_drop_rule() {
+        // One draft exercising every drop rule at once — the counter must
+        // attribute each dropped line to the right rule. (The retitle of an
+        // unmanaged `## Implementation` keeps its content, so it is NOT a drop
+        // and is not counted — asserted in its own test below.)
+        let text = format!(
+            "# ADR-0007: Echoed title\n\
+             > State: Proposed\n\
+             {AI_MARKER}\n\
+             ## Status\nProposed\n\
+             ## Stakeholders\n- Team Lead\n\n\
+             ## Decision Outcome\n\nChosen: A.\n\n\
+             [Insert implementation plan here]\n\n\
+             ---\n\n\
+             Please review this revised ADR body for clarity."
+        );
+        let (out, counts) = sanitize_draft_counted(&text);
+        // bracket-placeholder: the one `[Insert …]` line.
+        assert_eq!(counts.bracket_placeholder, 1, "out: {out}");
+        // residue: the closer paragraph + the rule it orphans = 2 lines.
+        assert_eq!(counts.residue, 2, "out: {out}");
+        // skeleton-echo: `## Status` + `Proposed` + `## Stakeholders` +
+        // `- Team Lead` = 4 lines (heading + its content, both sections).
+        assert_eq!(counts.skeleton_echo, 4, "out: {out}");
+        // identity-echo: leading H1 + `> State:` banner = 2 lines.
+        assert_eq!(counts.identity_echo, 2, "out: {out}");
+        // marker-echo: the one re-emitted ai-suggested marker.
+        assert_eq!(counts.marker_echo, 1, "out: {out}");
+        // The surviving prose is unchanged from `sanitize_draft`.
+        assert_eq!(out, sanitize_draft(&text));
+        assert!(out.contains("Chosen: A."), "out: {out}");
+    }
+
+    #[test]
+    fn sanitize_draft_counts_are_zero_on_clean_output() {
+        // A well-formed body with nothing to strip drops nothing.
+        let text = "## Decision Outcome\n\nChosen: A, because reasons.\n\n\
+                    ### Negative Consequences\n\n- A real downside.";
+        let (out, counts) = sanitize_draft_counted(text);
+        assert!(counts.is_empty(), "nothing should drop: {counts:?}");
+        assert_eq!(out, sanitize_draft(text));
+    }
+
+    #[test]
+    fn sanitize_draft_does_not_count_the_implementation_retitle() {
+        // The `## Implementation` → `## Implementation notes` retitle keeps the
+        // content (it is a rename, not a drop), so it contributes to no rule.
+        let text = "## Decision Outcome\n\nChosen.\n\n## Implementation\n\n1. Step one.";
+        let (_out, counts) = sanitize_draft_counted(text);
+        assert!(counts.is_empty(), "a retitle is not a drop: {counts:?}");
+    }
+
+    #[test]
+    fn draft_compose_counted_reports_the_same_body_and_drops() {
+        // `draft_compose_counted` wraps `draft_compose`'s output AND surfaces
+        // the counts, so `import --ai` can report what it stripped. The body is
+        // byte-identical to the plain `draft_compose`.
+        let canned = "## Decision Outcome\n\nChosen: A.\n\n\
+                      [Insert the rollout plan here]";
+        let fake = FakeProvider {
+            canned: canned.into(),
+        };
+        let (body, counts) = draft_compose_counted(&fake, "T", "i", "old", &[]).unwrap();
+        assert_eq!(counts.bracket_placeholder, 1, "{body}");
+        assert!(counts.residue == 0 && counts.skeleton_echo == 0);
+        let fake2 = FakeProvider {
+            canned: canned.into(),
+        };
+        let plain = draft_compose(&fake2, "T", "i", "old", &[]).unwrap();
+        assert_eq!(body, plain, "counted variant must not alter the body");
+        assert!(!body.contains("[Insert the rollout plan"), "{body}");
     }
 }

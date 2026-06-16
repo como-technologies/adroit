@@ -3891,6 +3891,103 @@ fn import_ai_degrades_to_mechanical_without_a_provider() {
     assert!(!body.contains("adroit:ai-suggested"));
 }
 
+#[test]
+fn import_ai_surfaces_sanitizer_drop_telemetry() {
+    // Run-3 wart 1 (iteration-1 learnings; iteration-3 run-3 loop-summary): on
+    // a fresh corpus the bracket-placeholder rule had zero survivors, but the
+    // drops were SILENT — from the artifacts alone "the model emitted no
+    // placeholder" was indistinguishable from "the sanitizer ate it". The fix:
+    // count drops per rule and surface them.
+    //
+    // The model output here is run-3's confirmed shape — the run-2 ADR-0010
+    // wart that run-3 re-exercised: a body closing with a horizontal rule and a
+    // novel "[Insert …]" bracket placeholder (which the sanitizer drops, along
+    // with the rule it orphans = 1 residue). Driven through the FAKE provider,
+    // applied to BOTH seeded practices, so the run-level telemetry aggregates.
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    let canned = "## Decision Outcome\n\n\
+                  Chosen: adopt the practice, because it addresses the drivers.\n\n\
+                  ## Implementation Notes\n\n\
+                  1. Establish the baseline.\n\
+                  2. Roll it out incrementally.\n\n\
+                  ---\n\n\
+                  [Insert implementation plan or other details as needed]";
+
+    // Human run: the stderr telemetry line names each non-zero rule.
+    adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .arg("--ai")
+        .env("ADROIT_AI_FAKE", canned)
+        .assert()
+        .success()
+        // Two seeds × (1 bracket placeholder + 1 orphaned rule) = 2 + 2.
+        .stderr(predicate::str::contains(
+            "sanitized: 2 bracket-placeholder, 2 residue",
+        ))
+        .stderr(predicate::str::contains("Seeded 2 proposed ADR(s)"));
+
+    // The wart's safety property still holds: no placeholder reaches the corpus.
+    for f in adr_files(dir.path()) {
+        let body = fs::read_to_string(&f).unwrap();
+        assert!(
+            !body.contains("[Insert implementation plan"),
+            "placeholder leaked into {}: {body}",
+            f.display()
+        );
+        assert!(
+            !body.trim_end().ends_with("---"),
+            "orphaned rule leaked into {}: {body}",
+            f.display()
+        );
+    }
+
+    // Machine run: the same drops carried in `-o json` under `sanitized`, with
+    // only the non-zero rules present (house zeros-omitted convention).
+    let dir2 = TempDir::new().unwrap();
+    let export2 = write_assessment(&dir2);
+    let out = adroit(&dir2)
+        .args(["import", "--from-assessment"])
+        .arg(&export2)
+        .args(["--ai", "-o", "json"])
+        .env("ADROIT_AI_FAKE", canned)
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("import --ai -o json invalid: {e}\n{text}"));
+    assert_eq!(v["sanitized"]["bracket_placeholder"], 2, "{v}");
+    assert_eq!(v["sanitized"]["residue"], 2, "{v}");
+    // Rules that didn't fire are omitted entirely (not serialized as 0).
+    assert!(v["sanitized"].get("skeleton_echo").is_none(), "{v}");
+    assert!(v["sanitized"].get("identity_echo").is_none(), "{v}");
+    assert!(v["sanitized"].get("marker_echo").is_none(), "{v}");
+    assert_eq!(v["seeded"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn import_ai_omits_sanitized_when_nothing_dropped() {
+    // A clean draft (nothing for the sanitizer to strip) carries NO `sanitized`
+    // field and prints no telemetry line — the additive field stays absent, so
+    // the legacy `-o json` shape is byte-for-byte unchanged for clean runs, and
+    // the artifacts honestly read "the model emitted nothing bad".
+    let dir = TempDir::new().unwrap();
+    let export = write_assessment(&dir);
+    let out = adroit(&dir)
+        .args(["import", "--from-assessment"])
+        .arg(&export)
+        .args(["--ai", "-o", "json"])
+        .env("ADROIT_AI_FAKE", "A clean, well-formed proposal body.")
+        .assert()
+        .success()
+        // No telemetry line when nothing dropped.
+        .stderr(predicate::str::contains("sanitized:").not());
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(v.get("sanitized").is_none(), "clean run must omit it: {v}");
+}
+
 // ---- import -o json (machine seed summary) + the golden contract fixture ----
 
 /// The vendored cross-repo contract fixture (see its comment header): the

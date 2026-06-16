@@ -732,7 +732,13 @@ fn cmd_import(
         dry_run,
         seeded: Vec::new(),
         skipped: Vec::new(),
+        sanitized: None,
     };
+    // Run-level tally of what the `--ai` draft sanitizer dropped, folded over
+    // every fleshed-out seed — so a clean (or non-`--ai`) run reports nothing
+    // and a run with drops can both print a human line and carry the counts in
+    // `-o json`, making the otherwise-silent sanitizer observable (run-3 wart).
+    let mut sanitized = adroit::view::SanitizeReport::default();
     if drafts.is_empty() {
         eprintln!(
             "{}",
@@ -819,7 +825,13 @@ fn cmd_import(
         let (path, r) = cmd_new(store, cfg, &d.title, None, category.as_deref(), false)?;
         splice_generated(store, &r, &adroit::import::seed_fragment(d))?;
         if let Some(provider) = ai_provider.as_ref() {
-            flesh_out_seed(store, &path, &r, &d.title, provider.as_ref())?;
+            sanitized.add(&flesh_out_seed(
+                store,
+                &path,
+                &r,
+                &d.title,
+                provider.as_ref(),
+            )?);
         }
         if output == OutputFormat::Human {
             println!("seeded   {}", path.display());
@@ -830,6 +842,17 @@ fn cmd_import(
             status: cfg.default_status,
             domain: d.domain.clone(),
         });
+    }
+
+    // Surface the sanitizer drops: carry the counts in the machine summary
+    // (only when something dropped — a clean run omits the field, keeping the
+    // legacy shape) and print one human line so the artifacts distinguish "the
+    // model emitted nothing bad" from "the sanitizer ate it".
+    if !sanitized.is_empty() {
+        if let Some(line) = sanitized.human_line() {
+            eprintln!("{}", format!("sanitized: {line}").yellow());
+        }
+        summary.sanitized = Some(sanitized);
     }
 
     let verb = if dry_run { "Would seed" } else { "Seeded" };
@@ -853,14 +876,16 @@ fn cmd_import(
 /// engine, grounded in the assessment context already in the body (the same engine
 /// as `compose`, so heading/status stay mechanical and the body is marked
 /// `AI_MARKER`). A provider failure warns and keeps the mechanical seed — it never
-/// errors the import.
+/// errors the import. Returns the per-rule [`adroit::view::SanitizeReport`] of
+/// what the draft sanitizer dropped (empty on a failed/degraded draft), which
+/// the caller folds into the run-level drop telemetry.
 fn flesh_out_seed(
     store: &Store,
     path: &std::path::Path,
     r: &AdrRef,
     title: &str,
     provider: &dyn adroit::ai::AiProvider,
-) -> Result<()> {
+) -> Result<adroit::view::SanitizeReport> {
     let detail = query::detail_at(store, path)?;
     let corpus: Vec<String> = query::summaries(store, &Filter::default())?
         .iter()
@@ -874,14 +899,17 @@ fn flesh_out_seed(
         &req,
         &format!("Fleshing out {}", detail.summary.reference),
     );
-    match adroit::ai::draft_compose(
+    match adroit::ai::draft_compose_counted(
         provider,
         title,
         IMPORT_AI_INSTRUCTION,
         &detail.body,
         &corpus,
     ) {
-        Ok(drafted) => splice_generated(store, r, &drafted),
+        Ok((drafted, counts)) => {
+            splice_generated(store, r, &drafted)?;
+            Ok(counts)
+        }
         Err(e) => {
             eprintln!(
                 "{}",
@@ -891,7 +919,7 @@ fn flesh_out_seed(
                 )
                 .yellow()
             );
-            Ok(())
+            Ok(adroit::view::SanitizeReport::default())
         }
     }
 }

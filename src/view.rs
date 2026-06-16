@@ -168,6 +168,87 @@ mod forge_data_tests {
     }
 }
 
+#[cfg(test)]
+mod sanitize_report_tests {
+    use super::*;
+
+    #[test]
+    fn empty_report_has_no_human_line_and_serializes_to_nothing() {
+        let r = SanitizeReport::default();
+        assert!(r.is_empty());
+        assert_eq!(r.human_line(), None);
+        // Every field is skip-if-zero, so a clean report is an empty object.
+        assert_eq!(serde_json::to_string(&r).unwrap(), "{}");
+    }
+
+    #[test]
+    fn human_line_lists_only_non_zero_rules_in_a_stable_order() {
+        let r = SanitizeReport {
+            bracket_placeholder: 2,
+            residue: 1,
+            skeleton_echo: 0,
+            identity_echo: 3,
+            marker_echo: 0,
+        };
+        assert!(!r.is_empty());
+        // Stable order: bracket-placeholder, residue, skeleton-echo,
+        // identity-echo, marker-echo; zero rules omitted.
+        assert_eq!(
+            r.human_line().unwrap(),
+            "2 bracket-placeholder, 1 residue, 3 identity-echo"
+        );
+    }
+
+    #[test]
+    fn add_accumulates_per_seed_reports() {
+        let mut total = SanitizeReport::default();
+        total.add(&SanitizeReport {
+            bracket_placeholder: 1,
+            residue: 2,
+            ..SanitizeReport::default()
+        });
+        total.add(&SanitizeReport {
+            bracket_placeholder: 3,
+            skeleton_echo: 1,
+            ..SanitizeReport::default()
+        });
+        assert_eq!(total.bracket_placeholder, 4);
+        assert_eq!(total.residue, 2);
+        assert_eq!(total.skeleton_echo, 1);
+    }
+
+    #[test]
+    fn json_omits_zero_rules_present_non_zero_ones() {
+        let r = SanitizeReport {
+            bracket_placeholder: 2,
+            residue: 1,
+            ..SanitizeReport::default()
+        };
+        let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["bracket_placeholder"], 2);
+        assert_eq!(v["residue"], 1);
+        // Zero rules are absent entirely, not serialized as `0`.
+        assert!(v.get("skeleton_echo").is_none(), "{v}");
+        assert!(v.get("identity_echo").is_none(), "{v}");
+        assert!(v.get("marker_echo").is_none(), "{v}");
+    }
+
+    #[test]
+    fn import_summary_omits_sanitized_when_none() {
+        let s = ImportSummary {
+            source: "x.yaml".into(),
+            assessment: "X".into(),
+            dry_run: false,
+            seeded: Vec::new(),
+            skipped: Vec::new(),
+            sanitized: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&s).unwrap();
+        // The additive field is absent unless drops occurred — the legacy shape.
+        assert!(v.get("sanitized").is_none(), "{v}");
+    }
+}
+
 /// Full detail for a single ADR: the summary fields plus the raw markdown body
 /// and resolved related links.
 #[derive(Debug, Clone, Serialize)]
@@ -463,6 +544,96 @@ pub struct Plan {
     pub stored: bool,
 }
 
+/// Per-rule counts of the lines the AI-draft sanitizer dropped from model
+/// output during an `import --ai` run, aggregated across every fleshed-out
+/// seed. The sanitizer ([`crate::ai::sanitize_draft`]) silently removes
+/// model-shaped filler before the splice — without these counts the output
+/// artifacts can't distinguish "the model emitted nothing bad" from "the
+/// sanitizer ate it" (the run-3 observability wart). One field per drop rule
+/// `sanitize_draft` actually has; the no-op retitle (`## Implementation` →
+/// `## Implementation notes`) keeps its content, so it is *not* a drop and is
+/// not counted here.
+///
+/// **Zero-rules-omitted, house serde convention:** every field is
+/// `skip_serializing_if`-zero, so only rules that actually fired appear in
+/// `import -o json`. A run with drops carries a `sanitized` object listing
+/// just the non-zero rules; a clean run omits the field entirely (it is
+/// `Option`al on [`ImportSummary`]). Additive in `manifest_schema` 1 —
+/// consumers that predate it simply never see the key.
+///
+/// **Counts are non-blank content lines only** — the telemetry measures how
+/// much *content* the sanitizer removed, not the surrounding whitespace it
+/// normalizes (a dropped skeleton section's interior blank lines, or the blank
+/// lines around a trailing-residue paragraph, don't inflate the tally).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "manifest", derive(schemars::JsonSchema))]
+pub struct SanitizeReport {
+    /// Whole-line bracket placeholders dropped (`[Insert …]` / `[Your Name]` /
+    /// `[TBD]` — the run-2 novel-filler class; fenced/indented code exempt).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bracket_placeholder: u32,
+    /// Trailing conversational-residue lines dropped (a recognized closer
+    /// paragraph — "Please review this revised ADR body…", "Let me know if…" —
+    /// plus any horizontal rule it orphaned).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub residue: u32,
+    /// Skeleton-echo lines dropped (a re-emitted `## Status` / `## Stakeholders`
+    /// section — heading and content — that duplicates the mechanical preamble
+    /// the splice preserves).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub skeleton_echo: u32,
+    /// Leading identity-echo lines dropped (a re-emitted title `# ` H1 or a
+    /// `> State:` banner before real content begins).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub identity_echo: u32,
+    /// Echoed adroit-marker lines dropped (`<!-- adroit:ai-suggested -->` /
+    /// `<!-- adroit:seeded-from-assessment -->` re-emitted by the model — the
+    /// wrapper/seed path owns those).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub marker_echo: u32,
+}
+
+impl SanitizeReport {
+    /// Total lines dropped across every rule — `true` when nothing was dropped,
+    /// so the caller can omit an all-zero `sanitized` object and skip the human
+    /// telemetry line.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Accumulate another report's counts into this one (one fleshed-out seed's
+    /// drops folded into the run total).
+    pub fn add(&mut self, other: &SanitizeReport) {
+        self.bracket_placeholder += other.bracket_placeholder;
+        self.residue += other.residue;
+        self.skeleton_echo += other.skeleton_echo;
+        self.identity_echo += other.identity_echo;
+        self.marker_echo += other.marker_echo;
+    }
+
+    /// The human one-liner for `import --ai` output: the non-zero rules in a
+    /// stable order, e.g. `2 bracket-placeholder, 1 residue`. `None` when
+    /// nothing was dropped (no line to print).
+    pub fn human_line(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            (self.bracket_placeholder, "bracket-placeholder"),
+            (self.residue, "residue"),
+            (self.skeleton_echo, "skeleton-echo"),
+            (self.identity_echo, "identity-echo"),
+            (self.marker_echo, "marker-echo"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{n} {label}"))
+        .collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 /// The `-o json` shape of `adroit import`: a machine summary of one ingest run,
 /// so a loop runner (the assessments seam-check, the Adopt-stage engine) can
 /// assert what was seeded without scraping the human report. Counts are the
@@ -483,6 +654,14 @@ pub struct ImportSummary {
     /// already exists (or was seeded earlier in this same run). `--force` empties
     /// this by seeding anyway.
     pub skipped: Vec<String>,
+    /// Per-rule counts of what the AI-draft sanitizer dropped while fleshing out
+    /// seeds (`--ai` only). Present **only** when at least one drop occurred —
+    /// a clean run (or any run without `--ai`) omits the field. Additive in
+    /// `manifest_schema` 1: makes the silent sanitizer observable so a loop
+    /// runner can tell "the model emitted nothing bad" from "the sanitizer ate
+    /// it" (the run-3 wart).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sanitized: Option<SanitizeReport>,
 }
 
 /// One seeded (or would-be-seeded) ADR in an [`ImportSummary`].

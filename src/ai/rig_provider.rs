@@ -11,6 +11,18 @@ use rig::providers::{anthropic, ollama};
 use crate::ai::{AiError, AiProvider, CompletionRequest};
 use crate::config::{self, AiConfig, AiProviderKind};
 
+/// The context window pinned on every ollama request (`options.num_ctx`).
+///
+/// Ollama **silently truncates** the prompt at its default context window
+/// (2048 tokens in the suite's ollama) — a corpus-bearing prompt leaves ~50
+/// tokens of generation room and clips mid-fence, with no error (the
+/// iteration-2 root cause behind run-1's structure retries; the assessments
+/// app pinned the same value first). 8192 covers the corpus-block prompts at
+/// llama3.2-class memory cost. Note the memory trade: each parallel ollama
+/// runner (`OLLAMA_NUM_PARALLEL`) allocates its own KV cache scaled by
+/// `num_ctx`, so wider windows multiply across parallel lanes.
+pub const OLLAMA_NUM_CTX: u64 = 8192;
+
 /// A rig-backed provider. Holds the resolved model/key/host plus the runtime
 /// used to drive rig's async API from the synchronous trait.
 pub struct RigProvider {
@@ -84,7 +96,19 @@ impl AiProvider for RigProvider {
                             ollama::Client::new(Nothing).map_err(|e| AiError::Api(e.to_string()))?
                         }
                     };
-                    let agent = client.agent(&self.model).preamble(&req.system).build();
+                    // Pin the context window: rig routes `additional_params`
+                    // into the request's ollama `options`, and without an
+                    // explicit `num_ctx` ollama silently clips the prompt at
+                    // its 2048-token default (see [`OLLAMA_NUM_CTX`]). Note
+                    // `req.max_tokens` is NOT enforced on this path — ollama's
+                    // /api/chat has no such field (its cap is
+                    // `options.num_predict`), so generation is bounded by the
+                    // model/context, deliberately unclipped.
+                    let agent = client
+                        .agent(&self.model)
+                        .preamble(&req.system)
+                        .additional_params(serde_json::json!({ "num_ctx": OLLAMA_NUM_CTX }))
+                        .build();
                     agent
                         .prompt(req.prompt.as_str())
                         .await

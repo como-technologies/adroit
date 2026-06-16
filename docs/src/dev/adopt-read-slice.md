@@ -95,7 +95,15 @@ itself putting its outline under `## Implementation notes`.
   trailing ADR-0002), so the sanitizer now drops skeleton-echo sections and
   echoed markers wherever they appear and strips trailing conversational
   closers — pinned by the run-1-shaped regressions in `src/ai/mod.rs` and the
-  `ai_drafts_never_duplicate_the_mechanical_preamble` property.
+  `ai_drafts_never_duplicate_the_mechanical_preamble` property. The
+  iteration-2 full-loop run then surfaced the same filler *outside* an echoed
+  skeleton: a **novel whole-line bracket placeholder** ("[Insert
+  implementation plan or other details as needed]") closed a drafted body the
+  template never contained it in, sailing past the known-scaffold rules — so
+  the sanitizer now drops `[Insert …]` / `[Your Name]`-shaped placeholder
+  lines (conservatively: links, checkboxes, citations, and fenced code never
+  match) and `lint` warns on them, pinned by the run-2-shaped regression and
+  the `ai_drafts_never_carry_bracket_placeholder_lines` property.
 - It invents **structure inside sections**: a `### Continuous Integration`
   sub-heading inside the Context section, tab-indented `+` nested bullets.
   Valid GFM, cosmetic only.

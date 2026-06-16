@@ -18,8 +18,9 @@ the approach behind these suites and where bugs tend to hide, see
 |---|---|---|---|
 | Unit tests | `#[cfg(test)]` in each `src/*.rs` (incl. the pure TUI `TuiState` / `apply_action` layer and the AI interview / compose builders) | pure functions behave | instant |
 | AI authoring | `src/ai/` tests + the `ADROIT_AI_FAKE` seam | the interview / compose flow drafts *prose* only (identity / status stay mechanical) and degrades cleanly with no provider | instant |
+| AI provider wire shape | `tests/ai_rig.rs` (`ai`; default build) | the rig-backed ollama request pins `options.num_ctx` (the silent-truncation guard), captured from the literal JSON against a loopback fake server — no network, no model | ~0.1s |
 | CLI integration | `tests/cli.rs` | the real binary does X on a temp repo (incl. every regression) | fast |
-| Cross-repo ingest contract | `import_golden_assessment_contract` in `tests/cli.rs`, over `tests/fixtures/golden-assessment.yaml` | `import` keeps seeding exactly the expected backlog from the `assessments` app's **real-exporter** golden export (regenerated *there* via `just golden`, then re-vendored — see the fixture's header), so export-contract drift fails CI here | fast |
+| Cross-repo ingest contract | `import_golden_assessment_contract` in `tests/cli.rs`, over `tests/fixtures/golden-assessment.yaml` | `import` keeps seeding exactly the expected backlog from the `assessments` app's **real-exporter** golden export (regenerated in an assessments *checkout* — the sibling `../assessments`, or a clone of `${COMO_GIT_BASE:-https://github.com/como-technologies}/assessments.git` per the suite resolution convention — via `just golden`, then re-vendored verbatim; see the fixture's header), so export-contract drift fails CI here | fast |
 | Model-based oracle | `tests/model.rs` | random command sequences never violate the invariants, across the format × layout × scheme × relink_scope matrix | ~40s |
 | Parser properties | `tests/parsers.rs` | the parsers never panic + obey round-trip/idempotence laws (random) | ~1s |
 | Coverage-guided fuzz | `tests/fuzz_parsers.rs` (bolero) | same parser laws, coverage-guided under `cargo bolero` | ~1s |
@@ -126,7 +127,14 @@ parser — a hostile auth response must never panic), `fuzz_parse_assessment`
 (the `adroit publish` cross-link rewriter — adversarial nested / multibyte markdown
 must never panic), `fuzz_plan_helpers` (the ADR-0008 plan splice/extract engine —
 never panics on an arbitrary body; a marker-free plan reads back verbatim and the
-splice converges), and `fuzz_mcp_request` (the `adroit mcp` JSON-RPC line handler —
+splice converges), `fuzz_lint` (the authoring-quality checks and their
+bracket-placeholder detector — an arbitrary body never panics, and a fully fenced
+body never yields a placeholder finding), `fuzz_ai_sanitizer` (the AI draft
+sanitizer over arbitrary model output — never panics, keeps exactly one
+ai-suggested marker, and no whole-line bracket placeholder survives outside
+fenced code / plan spans; the drop-counting variant `draft_compose_counted`
+behind `import --ai`'s telemetry is fuzzed in lockstep and must yield a
+byte-identical body), and `fuzz_mcp_request` (the `adroit mcp` JSON-RPC line handler —
 a hostile MCP request must yield an error response, never a panic). cargo-bolero builds
 its instrumented target with
 `--profile fuzz`, so the repo defines a `[profile.fuzz]` in `Cargo.toml` (inherits

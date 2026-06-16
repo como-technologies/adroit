@@ -2,8 +2,11 @@
 #
 # Provenance: the `assessments` app's contract/golden-assessment.yaml, generated
 # by its REAL exporter (CLI `export`) from the committed fixture project at
-# tests/fixtures/golden/ in that repo. Regenerate THERE via `just golden`, then
-# re-copy the file here verbatim below this comment header.
+# tests/fixtures/golden/ in that repo. Regenerate it in an ASSESSMENTS CHECKOUT
+# — the sibling ../assessments, or a clone of
+# ${COMO_GIT_BASE:-https://github.com/como-technologies}/assessments.git (the
+# suite resolution convention) — via `just golden`, then re-copy the file here
+# verbatim below this comment header.
 #
 # adroit's contract test (`import_golden_assessment_contract` in tests/cli.rs)
 # pins `import --from-assessment <this file> --dry-run` to the expected seed

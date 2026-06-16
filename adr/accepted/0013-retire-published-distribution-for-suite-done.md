@@ -17,8 +17,10 @@ The installation page has said "isn't published yet — build it from source"
 since Phase 1, with crates.io publication and prebuilt binaries as implied
 eventual work. The portfolio's suite-done bar for adroit is **SME-usable** —
 an SME drives the Prescribe workflow with Como alongside — and every consumer
-adroit actually has (the Adopt engine's rev pin, sibling repos' gate scripts,
-the dogfood corpora) builds from the local source tree.
+adroit actually has (the Adopt engine's rev pin, sibling repos' gate scripts —
+which resolve the binary per the suite resolution convention: ADROIT_BIN →
+sibling checkout → PATH → a pinned `cargo install --git` clone cache →
+skip-with-notice — the dogfood corpora) builds from the local source tree.
 
 Publishing to crates.io or attaching prebuilt binaries is a **remote,
 irreversible, owner-only action** under the standing working agreement

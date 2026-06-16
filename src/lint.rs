@@ -96,7 +96,118 @@ pub fn lint(body: &str) -> Vec<LintFinding> {
         )));
     }
 
+    // 5. Whole-line bracket placeholders (run-2: the model closed playbook
+    //    ADR-0010 with "[Insert implementation plan or other details as
+    //    needed]" — a NOVEL placeholder the template never contained, so the
+    //    prompt check (1) was silent). A Warning, like the skeleton echo:
+    //    filler to delete or replace, not an unfinished-draft gate. Fenced
+    //    code is exempt — an example config legitimately shows
+    //    `[insert API key]`-style lines.
+    let mut in_fence = false;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence && bracket_placeholder(line) {
+            out.push(warn(format!(
+                "`{}` is a bracket placeholder — model-shaped filler, not content; \
+                 replace it or delete the line",
+                line.trim()
+            )));
+        }
+    }
+
     out
+}
+
+/// Openers that mark a whole-line `[…]` span as an unfilled placeholder.
+/// Curated from observed model output (run-2's "[Insert implementation plan or
+/// other details as needed]", the M5 rehearsal's "[Your Name]") plus the
+/// classic template-filler shapes — matched case-insensitively on a word
+/// boundary, so `[insertion order matters]` never matches `insert`. Like
+/// [`RESIDUE_OPENERS`](crate::ai), a curated list over a clever heuristic:
+/// novel entries get added when observed, and legitimate prose is never
+/// guessed at.
+const PLACEHOLDER_OPENERS: [&str; 23] = [
+    // imperative template-filler verbs
+    "insert",
+    "add",
+    "describe",
+    "list",
+    "enter",
+    "provide",
+    "specify",
+    "replace",
+    "fill",
+    "include",
+    "write",
+    "outline",
+    "summarize",
+    "attach",
+    // possessive / nominal placeholder shapes
+    "your",
+    "name of",
+    // classic unfilled-value tokens
+    "to be",
+    "todo",
+    "tbd",
+    "tba",
+    "fixme",
+    "placeholder",
+    "optional",
+];
+
+/// True if `line` is nothing but a **bracket-placeholder span** — a whole line
+/// (optionally behind a list marker) of the form `[Insert …]` / `[Your Name]` /
+/// `[TBD]`: model-shaped filler, not content (the run-2 wart class — novel
+/// placeholders the template never contained, so the prompt-echo check is
+/// silent on them).
+///
+/// Conservative by design; legitimate bracket constructs never match:
+/// - links / images / reference definitions / footnotes continue past the
+///   closing `]` (`[t](url)`, `[t][ref]`, `[ref]: url`), so the whole-line
+///   requirement excludes them;
+/// - checkboxes (`[ ]`, `[x]`) and citations (`[1]`, `[^1]`) have empty or
+///   single-token inner text that's not in the curated opener list — as do
+///   TOML-style `[section]` lines;
+/// - the opener must end on a word boundary (end / space / `:`), so
+///   `[insertion order matters]` is not `insert`;
+/// - a 4-space- or tab-indented line is an indented code block, never flagged
+///   (callers additionally skip fenced code).
+pub fn bracket_placeholder(line: &str) -> bool {
+    if line.starts_with("    ") || line.starts_with('\t') {
+        return false; // indented code block
+    }
+    let t = strip_list_marker(line.trim());
+    let Some(inner) = t.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) else {
+        return false;
+    };
+    if inner.contains('[') || inner.contains(']') {
+        return false; // composite construct (reference link, nested spans)
+    }
+    let inner = inner.trim().to_lowercase();
+    PLACEHOLDER_OPENERS.iter().any(|o| {
+        inner == *o
+            || inner
+                .strip_prefix(o)
+                .is_some_and(|rest| rest.starts_with([' ', ':']))
+    })
+}
+
+/// Strip an optional leading list marker (`- `, `* `, `N. `) from a trimmed
+/// line, returning the rest (shared by the prompt and placeholder detectors).
+fn strip_list_marker(t: &str) -> &str {
+    t.strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .or_else(|| {
+            t.split_once(". ")
+                .filter(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                .map(|(_, rest)| rest)
+        })
+        .unwrap_or(t)
+        .trim()
 }
 
 /// Top-level (`## `) section names appearing more than once, with their counts,
@@ -120,17 +231,7 @@ fn repeated_top_level_sections(body: &str) -> Vec<(String, usize)> {
 /// True if `line` is an italic authoring prompt — `_…_` with non-empty inner
 /// text — after stripping an optional leading list marker (`- `, `* `, `N. `).
 fn is_prompt_line(line: &str) -> bool {
-    let t = line.trim();
-    let t = t
-        .strip_prefix("- ")
-        .or_else(|| t.strip_prefix("* "))
-        .or_else(|| {
-            t.split_once(". ")
-                .filter(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-                .map(|(_, rest)| rest)
-        })
-        .unwrap_or(t)
-        .trim();
+    let t = strip_list_marker(line.trim());
     t.len() >= 2
         && t.starts_with('_')
         && t.ends_with('_')
@@ -386,6 +487,76 @@ mod tests {
         );
         // Nothing else is wrong with this body — every finding is a warning.
         assert!(f.iter().all(|x| x.severity == Severity::Warning), "{f:?}");
+    }
+
+    #[test]
+    fn bracket_placeholder_lines_warn() {
+        // Run-2 regression (iteration-2 full loop, playbook ADR-0010): the
+        // model closed the body with "[Insert implementation plan or other
+        // details as needed]" — a novel bracket placeholder the template never
+        // contained — and lint was silent. A whole-line bracket placeholder is
+        // now a Warning finding (visible, but a CI lint gate stays green).
+        let body =
+            format!("{FINISHED}\n---\n\n[Insert implementation plan or other details as needed]\n");
+        let f = lint(&body);
+        assert!(
+            f.iter().any(|x| x.severity == Severity::Warning
+                && x.message.contains("placeholder")
+                && x.message
+                    .contains("[Insert implementation plan or other details as needed]")),
+            "{f:?}"
+        );
+        // Nothing else is wrong with this body — every finding is a warning.
+        assert!(f.iter().all(|x| x.severity == Severity::Warning), "{f:?}");
+    }
+
+    #[test]
+    fn bracket_placeholders_in_fenced_code_are_not_flagged() {
+        // A fenced example legitimately shows where a value goes.
+        let body = format!("{FINISHED}\n```yaml\n[Insert API key here]\n```\n");
+        assert_eq!(lint(&body), Vec::new());
+    }
+
+    #[test]
+    fn bracket_placeholder_detection_is_conservative() {
+        for line in [
+            "[Insert implementation plan or other details as needed]",
+            "[Your Name]",
+            "[your name]",
+            "[TBD]",
+            "[TODO: add the rollout diagram]",
+            "[To be determined]",
+            "[Describe the rollout]",
+            "[Name of the approver]",
+            "[Optional: include metrics]",
+            "- [Insert step]",
+            "* [List the stakeholders]",
+            "3. [Add a step here]",
+            "  [Fill in the dates]",
+        ] {
+            assert!(bracket_placeholder(line), "should flag {line:?}");
+        }
+        for line in [
+            "- [ ] a real task",                   // checkbox
+            "- [x] done task",                     // checked checkbox
+            "[ ]",                                 // bare empty checkbox
+            "[x]",                                 // bare checked checkbox
+            "[1]",                                 // citation
+            "[^1]: a footnote definition",         // footnote
+            "[MADR](https://adr.github.io/madr/)", // whole-line link
+            "[madr]: https://adr.github.io/madr/", // reference definition
+            "[the MADR spec][madr]",               // reference-style link
+            "![diagram](./diagram.png)",           // image
+            "[dependencies]",                      // TOML section: single token
+            "[insertion-order]",                   // single token, curated-word prefix
+            "[insertion order matters]",           // word boundary: insertion != insert
+            "See [above] for details",             // span is not the whole line
+            "    [Insert anything]",               // 4-space indented code
+            "\t[Insert anything]",                 // tab-indented code
+            "",                                    // empty
+        ] {
+            assert!(!bracket_placeholder(line), "should keep {line:?}");
+        }
     }
 
     #[test]

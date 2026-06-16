@@ -27,15 +27,31 @@ adroit plan 21 -o json                        # provider-free once a plan is sto
 
 One **write** verb honors it too: `import` replaces its human report with a
 machine **seed summary** (`ImportSummary`), so a loop runner can assert an
-ingest result — what was seeded, what the dedupe guard skipped — without
-scraping prose. `--dry-run -o json` previews the same shape with nothing
-written (each entry's `reference` is `null` there: identity is allocated only
-on write, and isn't predictable under every naming scheme):
+ingest result — what was seeded, what the dedupe guard skipped, and (on an
+`--ai` run) what the draft sanitizer dropped — without scraping prose.
+`--dry-run -o json` previews the same shape with nothing written (each entry's
+`reference` is `null` there: identity is allocated only on write, and isn't
+predictable under every naming scheme):
 
 ```sh
 adroit import --from-assessment maturity.yaml -o json             # seed + summary
 adroit import --from-assessment maturity.yaml --dry-run -o json   # same shape, no writes
 ```
+
+**Sanitizer drop telemetry (`--ai`).** When `import --ai` has the model flesh
+out a seed, every draft is mechanically [sanitized](#ai-assisted-authoring)
+before the splice — model-shaped filler (bracket placeholders, trailing chat
+residue, skeleton echoes, …) is dropped silently. Without telemetry the
+artifacts can't distinguish *"the model emitted nothing bad"* from *"the
+sanitizer ate it."* So an `--ai` run that drops anything carries a `sanitized`
+object — per-rule drop counts (`bracket_placeholder`, `residue`,
+`skeleton_echo`, `identity_echo`, `marker_echo`), aggregated across every seed —
+in the JSON summary, and prints one human line to stderr
+(`sanitized: 2 bracket-placeholder, 1 residue`). The counts are **non-blank
+content lines** (whitespace the splice normalizes doesn't inflate them), and
+**zero rules are omitted** — a clean run (and any run without `--ai`) omits the
+field entirely, so the legacy shape is unchanged. Additive (`manifest_schema`
+stays `1`).
 
 The JSON is the same `view` contract the [web dashboard](./web.md)'s API returns
 — so a tool can consume `adroit list -o json` locally or `GET /api/adrs` from a
@@ -53,7 +69,7 @@ running `serve`, and get identical shapes. Key types:
 | `related` / `dedupe` | array of `Match` (`reference`, `title`, `score`) — the ranked mechanical-similarity hits |
 | `ask` | `AskAnswer` — `{ answer, sources }` (the ADRs the answer cites) |
 | `plan` | `Plan` — `{ reference, title, plan, stored }`, the markdown plan tagged with its ADR identity; `stored: true` when it's the plan persisted in the document (a deterministic, provider-free read) |
-| `import` | `ImportSummary` — `{ source, assessment, dry_run, seeded: [{ reference, title, status, domain }], skipped: [titles] }`; counts are the array lengths, `status` is the seeded lifecycle status (`"Proposed"` unless `default_status` overrides) |
+| `import` | `ImportSummary` — `{ source, assessment, dry_run, seeded: [{ reference, title, status, domain }], skipped: [titles], sanitized? }`; counts are the array lengths, `status` is the seeded lifecycle status (`"Proposed"` unless `default_status` overrides). `sanitized` is present **only on an `--ai` run that dropped something**: a `SanitizeReport` of per-rule drop counts (`bracket_placeholder`, `residue`, `skeleton_echo`, `identity_echo`, `marker_echo`), with zero rules omitted — so a loop runner can tell "the model emitted nothing bad" from "the sanitizer ate it" |
 
 `json` always goes to **stdout**; human-facing warnings/notes go to **stderr**,
 so a consumer can pipe stdout straight into a JSON parser.
@@ -109,8 +125,9 @@ Three parts, none of which can drift from the binary:
   `Stats` / `Graph` / `CheckReport`) for `list` / `show` / `stats` / `graph` /
   `check`, plus `Status` (`status`), `LintFinding` (`lint`), `Match` (`dedupe` /
   `related`), `AskAnswer` (`ask`), `Plan` (`plan`), and `ImportSummary`
-  (`import` — the one write verb with a structured report). A `[]` suffix on a
-  `json_output` name means an array of that type.
+  (`import` — the one write verb with a structured report; its optional
+  `sanitized` field nests a `SanitizeReport` of `--ai` draft-sanitizer drop
+  counts). A `[]` suffix on a `json_output` name means an array of that type.
 - **`global_options`** + `tool` / `version` / `manifest_schema` (the version of the
   manifest's own shape — bumped on a breaking change).
 
@@ -186,13 +203,24 @@ heading is preserved by the splice, so they would duplicate); a re-emitted
 echoed adroit markers (`<!-- adroit:ai-suggested -->`,
 `<!-- adroit:seeded-from-assessment -->`) are dropped; trailing conversational
 residue ("Please review this revised ADR body…", "Let me know if…") is stripped,
-along with the horizontal rule such a closer orphans; and a model-written
-`## Implementation` section with real content is retitled
+along with the horizontal rule such a closer orphans; **whole-line bracket
+placeholders** (`[Insert implementation plan or other details as needed]`,
+`[Your Name]` — *novel* filler the template never contained) are dropped
+wherever they appear, again with any horizontal rule a tail placeholder orphans
+— detection is conservative (a curated opener list on a word boundary), so
+markdown links, checkboxes, citations, footnotes, single-token `[section]`
+lines, and anything inside fenced or indented code are never touched; and a
+model-written `## Implementation` section with real content is retitled
 `## Implementation notes`, so an AI draft can never read as the hand-written
 section that blocks `plan --save` (the `## Implementation` heading belongs to
 the managed plan — see `plan` below). Content inside a marker-bracketed stored
 plan span always stays verbatim. If no provider is available, `--interview`
 degrades to the plain template (the ADR is still created).
+
+These drops are otherwise **silent** — so `import --ai` makes them observable:
+it counts what each rule dropped and surfaces the totals (a stderr
+`sanitized: N bracket-placeholder, M residue …` line, and a `sanitized` object
+in `-o json`). See [Sanitizer drop telemetry](#-o-json-on-the-read-verbs-and-import).
 
 **Cost notice + draft journal:** before each provider call adroit prints a
 one-line token estimate (`~N input tokens, up to M generated`) to stderr, so a
@@ -242,10 +270,11 @@ Consequences section — `##` and `###` depth both accepted, fewer than two
 recorded options — list items and `###` sub-headings both count) need
 **no provider**, so `lint` is usable as an authoring gate in CI. Findings carry
 a `severity`: **errors** (an unfinished draft) make `lint` exit non-zero;
-**warnings** — e.g. a repeated top-level section, usually a model echo of the
-template — are printed (and serialized) but don't gate, mirroring `check`'s
-error/warning split. `lint --ai` adds an advisory model review on top (always a
-warning).
+**warnings** — a repeated top-level section (usually a model echo of the
+template), or a whole-line bracket placeholder (`[Insert …]` / `[Your Name]` /
+`[TBD]`-shaped filler; fenced code exempt) — are printed (and serialized) but
+don't gate, mirroring `check`'s error/warning split. `lint --ai` adds an
+advisory model review on top (always a warning).
 
 `adroit summarize <ID>` prints a one-paragraph plain-language TL;DR of an ADR —
 handy for a PR description, a notification, or a decision-log entry (read-only).
@@ -297,6 +326,16 @@ ADROIT_ANTHROPIC_KEY=sk-ant-...     # anthropic only
 |---|---|---|
 | `anthropic` | `ADROIT_ANTHROPIC_KEY` / `adroit auth anthropic` | Hosted Claude |
 | `ollama` | none | Local models; set `ai.host` for a remote instance |
+
+**Ollama context window:** every ollama request pins `options.num_ctx` to
+**8192** (`OLLAMA_NUM_CTX`). Without the pin, ollama **silently truncates** the
+prompt at its default window (2048 tokens) — a corpus-bearing prompt leaves
+almost no generation room and output clips mid-sentence with no error (found as
+the root cause of the suite's run-1 authoring retries). Mind the memory trade
+when running ollama with parallel clients: each parallel runner
+(`OLLAMA_NUM_PARALLEL`) allocates its own KV cache scaled by `num_ctx`, so the
+wider window multiplies across lanes. The pin is captured from the literal wire
+JSON by `tests/ai_rig.rs`, so it can't silently regress with a rig upgrade.
 
 The AI layer is built on the **rig** framework (provider-agnostic LLM adapters),
 chosen so the provider stays swappable — see the

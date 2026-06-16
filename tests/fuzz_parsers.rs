@@ -201,6 +201,70 @@ fn fuzz_oauth_token_parse() {
     });
 }
 
+/// `lint` (and its bracket-placeholder detector) scans untrusted ADR bodies —
+/// arbitrary input must never panic, and a fully fenced body never yields a
+/// placeholder finding (fenced code is exempt by design).
+#[test]
+fn fuzz_lint() {
+    use adroit::lint;
+    check!().with_type::<String>().for_each(|input: &String| {
+        let _ = lint::lint(input);
+        for line in input.lines() {
+            let _ = lint::bracket_placeholder(line);
+        }
+        if !input.contains("```") && !input.contains("~~~") {
+            let fenced = format!("```\n{input}\n```");
+            assert!(
+                lint::lint(&fenced)
+                    .iter()
+                    .all(|f| !f.message.contains("bracket placeholder")),
+                "placeholder finding from fenced content: {input:?}"
+            );
+        }
+    });
+}
+
+/// The AI draft sanitizer consumes untrusted model output — arbitrary input
+/// must never panic, and (plan spans / fenced code aside, which stay verbatim
+/// by design) the sanitized draft carries exactly one ai-suggested marker and
+/// no whole-line bracket placeholder. The drop-counting variant
+/// (`draft_compose_counted`, behind `import --ai`'s telemetry) is fuzzed in
+/// lockstep: it must never panic and must yield a body byte-identical to the
+/// count-free draft — the counts are a pure observation, never a behavior change.
+#[test]
+fn fuzz_ai_sanitizer() {
+    use adroit::{ai, lint};
+    check!().with_type::<String>().for_each(|input: &String| {
+        if input == "__ERROR__" {
+            return; // the FakeProvider failure hook
+        }
+        let fake = ai::FakeProvider {
+            canned: input.clone(),
+        };
+        let draft = ai::draft_compose(&fake, "T", "i", "old", &[]).expect("fake never fails");
+        let (counted, _drops) =
+            ai::draft_compose_counted(&fake, "T", "i", "old", &[]).expect("fake never fails");
+        assert_eq!(counted, draft, "counted body diverged: {input:?}");
+        if !input.contains("<!-- adroit:plan -->")
+            && !input.contains("<!-- /adroit:plan -->")
+            && !input.contains("```")
+            && !input.contains("~~~")
+        {
+            assert_eq!(
+                draft.matches("<!-- adroit:ai-suggested -->").count(),
+                1,
+                "marker count drifted: {input:?}"
+            );
+            for line in draft.lines() {
+                assert!(
+                    !lint::bracket_placeholder(line),
+                    "placeholder survived: {line:?} from {input:?}"
+                );
+            }
+        }
+    });
+}
+
 /// The MCP request handler tolerates any stdin line — a hostile / garbage JSON-RPC
 /// message must never panic, only yield an error response. The server (projected
 /// from the manifest) is built once; the fuzzer drives `handle_line` over it.
