@@ -66,7 +66,7 @@ model *ARGS:
 # Self-hosted corpus gate (dogfood): build adroit, then have it validate its own
 # in-repo ADR corpus (ADR-0001). Always `--dir adr` — ADROIT_DIR points elsewhere.
 adr-check: build
-    ./target/debug/adroit check --dir adr
+    ./target/debug/adroit check --dir docs/adr
 
 # M5 dogfood rehearsal: the exact read slice the Adopt engine (conduit) issues,
 # end to end against a LIVE local ollama — import --ai → lint → accept →
