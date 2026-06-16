@@ -1,7 +1,15 @@
 # Installation
 
-adroit is in Phase 1 (dogfooding) and isn't published yet — build it from
-source.
+adroit is distributed as **source**: build it with the standard Rust
+toolchain. This is a decision, not a gap — crates.io publication and prebuilt
+binaries are retired for the current maturity rung by ADR-0013 (publishing is
+an owner-only action, and every current consumer builds from a checkout). The
+[Changelog](../reference/changelog.md) records tagged releases; a consumer
+pins a release by installing from the repo at the tag's commit:
+
+```sh
+cargo install --git <path-or-url-to-adroit> --rev <tag-sha> adroit
+```
 
 ## Prerequisites
 

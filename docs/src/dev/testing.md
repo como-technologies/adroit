@@ -19,6 +19,7 @@ the approach behind these suites and where bugs tend to hide, see
 | Unit tests | `#[cfg(test)]` in each `src/*.rs` (incl. the pure TUI `TuiState` / `apply_action` layer and the AI interview / compose builders) | pure functions behave | instant |
 | AI authoring | `src/ai/` tests + the `ADROIT_AI_FAKE` seam | the interview / compose flow drafts *prose* only (identity / status stay mechanical) and degrades cleanly with no provider | instant |
 | CLI integration | `tests/cli.rs` | the real binary does X on a temp repo (incl. every regression) | fast |
+| Cross-repo ingest contract | `import_golden_assessment_contract` in `tests/cli.rs`, over `tests/fixtures/golden-assessment.yaml` | `import` keeps seeding exactly the expected backlog from the `assessments` app's **real-exporter** golden export (regenerated *there* via `just golden`, then re-vendored — see the fixture's header), so export-contract drift fails CI here | fast |
 | Model-based oracle | `tests/model.rs` | random command sequences never violate the invariants, across the format × layout × scheme × relink_scope matrix | ~40s |
 | Parser properties | `tests/parsers.rs` | the parsers never panic + obey round-trip/idempotence laws (random) | ~1s |
 | Coverage-guided fuzz | `tests/fuzz_parsers.rs` (bolero) | same parser laws, coverage-guided under `cargo bolero` | ~1s |
@@ -31,10 +32,13 @@ the approach behind these suites and where bugs tend to hide, see
 The centerpiece is the **oracle** (`tests/model.rs`): it generates a random matrix
 cell (format × layout × naming × relink_scope) and a random sequence of mutating
 CLI commands (`new`, `import`, `set-status`, `supersede`, `set-review`,
-`renumber`, `relink`, `link`, `draft`), runs each against the **real binary** on a throwaway
+`renumber`, `relink`, `link`, `draft`, `plan --save`), runs each against the
+**real binary** on a throwaway
 `TempDir`, and asserts a battery of invariants after **every** command — on-disk
 state agrees with an in-memory oracle, `adroit check` is clean, the repo stays
-link-canonical (scope-aware), and each ADR sits where its status implies. `link`
+link-canonical (scope-aware), each ADR sits where its status implies, and a
+stored implementation plan (ADR-0008) reads back verbatim (and survives a
+`draft` re-splice). `link`
 (frontmatter-only typed links) and `draft` (the AI body-splice, driven offline by
 the `ADROIT_AI_FAKE` seam) aren't modeled — they're held to the same invariants,
 so a typed link must heal when its target moves and a draft must keep identity /
@@ -56,6 +60,17 @@ just unit        # unit tests only (--lib)
 cargo test --test model            # just the oracle
 cargo test --test cli supersede    # CLI tests whose name contains "supersede"
 
+# env-gated LIVE check (skipped without the var; never runs in CI): `import --ai`
+# against a local ollama serving llama3.2 — the real-provider end of the seam
+# that `ADROIT_AI_FAKE` covers offline.
+ADROIT_LIVE_OLLAMA=1 cargo test --test cli import_ai_fleshes_out_seeds_against_live_ollama
+
+# the full Adopt-slice dogfood rehearsal against live ollama, in a throwaway
+# temp corpus: import --ai → lint → accept → plan --save → the conduit-shaped
+# -o json reads, with the stored-plan read asserted byte-deterministic. Skips
+# cleanly when no ollama is listening; see the Adopt Read Slice page.
+just adopt-slice
+
 # clippy across the feature matrix:
 just lint        # default features (tui + ai + forge)
 just lint-core   # --no-default-features — guards the core pulls in NO surface deps
@@ -63,9 +78,12 @@ just lint-web    # the `web` feature
 ```
 
 `just ci` runs `fmt-check → lint-core → lint → lint-web → test-core → test →
-test-web → book → crate-outdated → crate-audit`. Because **`ai` and `forge` are in
-the default build**, `lint` / `test` already exercise them — there are no separate
-per-feature recipes for `ai` or `forge`.
+test-web → adr-check → book → crate-outdated → crate-audit`. Because **`ai` and
+`forge` are in the default build**, `lint` / `test` already exercise them — there
+are no separate per-feature recipes for `ai` or `forge`. `adr-check` is the
+self-hosted dogfood gate: the freshly built binary validates adroit's own
+[decision corpus](./decisions.md) (`adroit check --dir adr`), so a broken corpus
+fails CI.
 
 ### Soaking
 
@@ -106,7 +124,9 @@ The targets are `fuzz_format_helpers`, `fuzz_link_rewriter`, `fuzz_naming_helper
 parser — a hostile auth response must never panic), `fuzz_parse_assessment`
 (the assessment-import JSON/YAML parser + seed mapping), `fuzz_publish_rewriter`
 (the `adroit publish` cross-link rewriter — adversarial nested / multibyte markdown
-must never panic), and `fuzz_mcp_request` (the `adroit mcp` JSON-RPC line handler —
+must never panic), `fuzz_plan_helpers` (the ADR-0008 plan splice/extract engine —
+never panics on an arbitrary body; a marker-free plan reads back verbatim and the
+splice converges), and `fuzz_mcp_request` (the `adroit mcp` JSON-RPC line handler —
 a hostile MCP request must yield an error response, never a panic). cargo-bolero builds
 its instrumented target with
 `--profile fuzz`, so the repo defines a `[profile.fuzz]` in `Cargo.toml` (inherits
@@ -138,7 +158,16 @@ real binary and decide what kind of failure it is:
 The oracle is an **executable spec** — keep it in step with the code:
 
 - **New verb** → add an `Op` variant, an arm in `Harness::apply`, a weight in
-  `arb_op()`.
+  `arb_op()` — and a semantics entry in `classified()` in `src/manifest.rs`
+  (the `manifest_classifies_every_command` unit test fails CI without one).
+- **New flag on a read verb** → if it reaches the forge or writes a file
+  (`--forge` / `--yes` / `--dry-run` / `--out`-shaped), classify it in
+  `escalation()` in `src/manifest.rs` — the
+  `escalating_flags_on_read_verbs_are_classified` coverage test fails CI on an
+  unclassified suspect flag, and the MCP projection tests
+  (`projected_tools_carry_no_escalating_flags`, plus the end-to-end
+  `mcp_projected_tools_expose_no_escalating_flags` in `tests/cli.rs`) assert no
+  projected tool schema carries an escalating flag.
 - **New scheme / layout / format** → add a weighted cell to `arb_profile()`.
   Identity is read back from disk, so a new scheme needs almost no prediction.
 - **Behavior depends on a setting** → branch the model on it (it already branches

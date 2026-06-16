@@ -98,6 +98,26 @@ repair links edited outside adroit), and `adroit check` flags any broken or
 stale relative link. External URLs, anchors, and non-ADR links are never
 touched.
 
+### Creation dates (`Created:`)
+
+`adroit new` stamps the creation date into the document as a line inside the
+`## Status` region:
+
+```markdown
+## Status
+
+Proposed
+Created: 2026-06-12
+```
+
+The stamp is written **once, at creation** — status moves, `set-review`, and
+`plan --save` rewrites never touch it — so on a corpus without git history
+`created` stays stable decision provenance instead of tracking the file's
+modification time (which a clone or any rewrite re-stamps). Where git history
+exists it remains authoritative (see [Dates come from git](#dates-come-from-git) below). Documents created before this
+line existed simply don't carry it and keep the older fallbacks; adding the
+line by hand is fine — it parses case-insensitively.
+
 ### Review deadlines
 
 A still-`Proposed` ADR may carry an optional review deadline, written as a line
@@ -276,7 +296,9 @@ Resolution precedence for the creation date, highest first:
 
 1. **git** — the first commit that added the file (when the ADR dir is inside a
    git work tree and the file is tracked);
-2. the authored `created:` field, in the **frontmatter** profile only;
+2. the authored document date — the **frontmatter** profile's `created:` field,
+   or the **markdown** profile's `Created:` status-region line (stamped by
+   `new`);
 3. the file's filesystem modification time;
 4. the value parsed from the file (a fresh "now" for a brand-new, never-committed
    markdown ADR).

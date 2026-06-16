@@ -178,7 +178,9 @@ When the [`ai` feature](./automation.md) is enabled and a provider is configured
 (`ai.enabled` + a key, or the offline `ADROIT_AI_FAKE` test seam), the command
 palette (`:`) gains a set of AI assists. Each runs on a **background thread** with
 a "thinking" spinner, so the UI never blocks; without a provider configured each
-just reports that AI isn't set up.
+just reports that AI isn't set up. The one exception is the plan verb's
+**stored-plan read**, which is provider-free (below) and works with no AI at
+all.
 
 | Palette command | What it does |
 | --------------- | ------------ |
@@ -186,7 +188,8 @@ just reports that AI isn't set up.
 | **AI: ask the corpus…** | A free-form question answered from the most relevant ADRs (mechanical TF-IDF retrieval → AI synthesis with citations), shown in a popup. |
 | **AI: summarize this ADR** | A one-paragraph TL;DR of the selected ADR, in a popup. |
 | **AI: review this ADR (advice)** | Authoring-quality suggestions for the selected ADR, in a popup. |
-| **AI: implementation plan** | An ordered implementation checklist for the selected ADR, in a popup. |
+| **Plan: implementation plan (stored / AI)** | The implementation plan for the selected ADR, in a popup. With a **stored** plan (`plan --save`, ADR-0008) this is a deterministic, provider-free read — it works with no AI configured, instantly, exactly like CLI `plan <ID>`. Without one it requests fresh AI generation. |
+| **AI: regenerate implementation plan** | Explicitly requests a **fresh** AI generation even when a stored plan exists (the CLI's `--regenerate`). Read-only: the popup result never overwrites the stored plan. |
 
 **Reviewing an AI draft.** "Draft / revise body" loads the suggestion straight
 into the editor pane (opening in **Normal** mode for review), flagged

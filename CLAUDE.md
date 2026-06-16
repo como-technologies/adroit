@@ -61,7 +61,10 @@ every change must preserve.
   converge too (`review`/`set-review --forge` upsert by a hidden marker — forge section).
 - **Intentionally non-idempotent** *imperative events* (repeating repeats the event,
   by design): `new` (allocates the next ADR), `renumber old new` (one-shot;
-  re-running fails because `old` is gone), `notify` (fresh message), forge/git side
+  re-running fails because `old` is gone), `notify` (fresh message), `plan --save`
+  (each save is a fresh AI generation; the *splice* converges — re-saving identical
+  content is byte-identical — and the stored-plan *read* is a pure deterministic
+  read), forge/git side
   effects. `new` adds a **duplicate guard** (`dup_guard`): on an exact (case-insensitive)
   title match it warns, lists similar ADRs (`similar::rank`), and prompts `[y/N]` on a TTY
   (non-TTY proceeds; `--force` skips).
@@ -96,6 +99,8 @@ just fmt-check   # check formatting
 just book        # build the mdbook user manual
 just book-serve  # local book dev server with live reload
 just run <args>  # run the binary
+just adopt-slice # live-ollama dogfood rehearsal of the Adopt read slice (temp corpus;
+                 # skips cleanly without a local ollama; not part of `just ci`)
 ```
 
 ## Project Layout
@@ -108,12 +113,24 @@ just run <args>  # run the binary
 - `src/history.rs` — git-derived ADR dates + lifecycle (shells `git log`)
 - `src/links.rs` — cross-ADR relative-link parsing/rewriting + `absolutize_links`
   (rel→blob URL for forge comments); pure
+- `src/plan.rs` — persisted implementation plans (ADR-0008): the pure splice/extract
+  engine behind `plan --save` and the stored-plan read; pure
 - `tests/` — `cli.rs` (binary + regressions), `model.rs` (model-based oracle over the
   format×layout×scheme×relink_scope matrix), `parsers.rs` + `fuzz_parsers.rs`
   (properties / bolero fuzz), `config_precedence.rs`, `date_source_git.rs`,
-  `forge_faults.rs` + `forge_cli.rs`. See `docs/src/dev/testing.md`.
+  `forge_faults.rs` + `forge_cli.rs`. `tests/fixtures/golden-assessment.yaml` is the
+  **vendored cross-repo ingest contract** — the assessments app's real-exporter
+  golden (regenerate THERE via `just golden`, re-copy verbatim under the header);
+  `import_golden_assessment_contract` pins the seeded backlog against it, and the
+  env-gated `ADROIT_LIVE_OLLAMA=1` test exercises `import --ai` on live ollama.
+  See `docs/src/dev/testing.md`.
 - `docs/` — mdbook source (`book.toml` + `src/`), to GitHub Pages; output `docs/book/`
   (gitignored). `justfile` — all dev recipes.
+- `adr/` — adroit's **own ADR corpus** (markdown / by-status), authored with the
+  built binary via the `/adr` skill — **always `--dir adr`** (`ADROIT_DIR` points at
+  the external dogfood repo, so a bare `adroit new` writes to the wrong corpus).
+  Gated in CI: `just adr-check` (in `just ci`) runs the freshly built
+  `adroit check --dir adr`. See the book's Development → Decision Records page.
 
 ## Read/query layer (shared by all surfaces)
 
@@ -126,7 +143,13 @@ is deferred to the web surface (`AdrDetail::body_html` stays `None`).
 
 **CLI emits the same JSON (`-o`/`--output json`).** A global `cli::OutputFormat`
 (`human` default, `json`) is honored by read verbs `list`/`show`/`status`/`search`/
-`stats`/`graph`/`check` (`docs/src/usage/automation.md`). `check -o json` still exits
+`stats`/`graph`/`check`/`lint`/`related`/`dedupe`/`ask`/`plan` **and the write verb
+`import`** (its `view::ImportSummary` machine seed summary — `{source, assessment,
+dry_run, seeded[], skipped[]}`; `--dry-run -o json` is the same shape with
+`reference: null`, since identity is allocated only on write)
+(`docs/src/usage/automation.md`; the `--output` long help enumerates them —
+guarded by `output_long_help_names_every_json_read_verb` against the manifest's
+`json_output` column). `check -o json` still exits
 non-zero on an Error-severity problem (the CI gate). `status -o json` is the scalar
 case — the typed `Status` as a JSON string (`"Accepted"`); its human form stays the
 bare lowercase word.
@@ -137,15 +160,30 @@ bare lowercase word.
 `schemars::schema_for!` of the `view` types; **semantics**
 (`reads`/`writes`/`idempotent`/`stage`/`json_output`/`requires`/`exit`) an owned `classified()`
 table — `manifest_classifies_every_command` fails CI if a compiled command lacks an entry.
-`requires` captures **runtime** gating (`["ai","ai.enabled"]`, `["forge config"]`). Handled
+Semantics are also **per-(verb, flag)**: the owned `escalation()` table marks args that
+escalate a read verb — `escalates: "forge"` (`review --forge`/`--yes`/`--dry-run`,
+`list`/`check --forge`), `"file-output"` (`review`/`plan`/`summarize --out`), or `"writes"`
+(corpus mutation — `plan --save`/`--force`/`--dry-run`, plus `--regenerate`, which forces a
+fresh provider call where the stored read is free; ADR-0008) — serialized on the arg in
+`manifest -o json` (additive; `manifest_schema`
+stays 1). `escalating_flags_on_read_verbs_are_classified` fails CI when a suspect flag
+(`forge`/`yes`/`dry_run`/`out`/`save`/`force`/`regenerate`) on a read verb lacks an entry.
+`publish` is classified
+`writes=true` — producing an output tree IS a filesystem write (ADR-0007). `requires` captures
+**runtime** gating (`["ai","ai.enabled"]`, `["forge config"]`); a verb's `cost`/`requires` are
+its conservative worst case — `plan` declares `provider-call`+`ai`, but the stored-plan read
+(ADR-0008) is local and provider-free. Handled
 before the store opens; a core build drops the command + `schemars`.
 
 **Agent surface — `adroit mcp`** (`src/mcp/`, default-on `mcp` feature = `manifest`): a
 built-in **Model Context Protocol** server (JSON-RPC 2.0 over stdio) **projecting the
 manifest's read verbs as MCP tools**. Hand-rolled sync stdio loop; `handle_line` is a pure
-`&str -> Option<String>` (fuzzed via `fuzz_mcp_request`). **Read-only:** `Server::new`
-filters to `is_read_tool()` verbs (`reads && !writes && cost ∈ {local, provider-call}`,
-minus `publish`), so repo-mutating/network/long-running verbs are never exposed. A
+`&str -> Option<String>` (fuzzed via `fuzz_mcp_request`). **Read-only, flag set included:**
+`Server::new` filters to `is_read_tool()` verbs (`reads && !writes && cost ∈ {local,
+provider-call}` — fully mechanical, no special cases) **and strips args the manifest marks
+`escalates`**, so no projected tool can mutate the repo, the forge, or the filesystem
+(conformance pinned by `projected_tools_carry_no_escalating_flags` +
+`mcp_projected_tools_expose_no_escalating_flags`). A
 `tools/call` re-runs `adroit <verb> … -o json` as a subprocess with the resolved on-disk
 shape as env (a new read verb auto-appears). Dispatched with the resolved `--dir`.
 `publish`/`review` destination flags are **`--out`** (long-only) so `-o` = `--output`.
@@ -172,14 +210,20 @@ validated in **both** profiles. `cmd_check` sorts messages so output is **byte-i
 (`check_*` tests guard); web `GET /api/check` serves it. `Stats.proposed_age` rows carry a
 `review_due` flag.
 
-**Dates & lifecycle come from git (`src/history.rs`).** The markdown profile persists
-no creation date and a clone resets mtime, so `query` resolves `created`,
+**Dates & lifecycle come from git (`src/history.rs`), creation dates also from the
+document (ADR-0011).** A clone resets mtime, so `query` resolves `created`,
 `last_modified`, and the status timeline from git: one `git log --follow --name-status`
 per file → `AdrHistory { created, last_modified, events }` (pure `parse_log`,
 unit-tested without git). In by-status each status change is a directory rename, so the
 timeline (proposed → accepted/rejected/superseded) is rebuilt from renames; `status_of`
-is injected as `Store::dir_status` (flat = no milestones). `query::load_resolved` resolves
-`created` per row (git → frontmatter `created:` → mtime → `now()`); `query::detail` adds
+is injected as `Store::dir_status` (flat = no milestones). The markdown profile persists
+a `Created: YYYY-MM-DD` line in the `## Status` region (`adr::CreatedOn` /
+`Adr.created_on`, `format::rewrite_created` — format-preserving, `Review by:` algebra),
+stamped **once** by `new` (CLI + TUI) and never re-stamped by rewrites — so on a non-git
+corpus `created` is rewrite-stable provenance, not mtime (run-1 finding; regression
+`created_is_byte_stable_across_set_status_and_plan_save_without_git`).
+`query::load_resolved` resolves `created` per row (git → document date [frontmatter
+`created:` / markdown `Created:`] → mtime → `now()`); `query::detail` adds
 `AdrDetail.history` + `last_modified`.
 Degrades gracefully (no git → fallback). Surfaced in `show`, the TUI header, the web
 detail view.
@@ -227,12 +271,18 @@ single `PaletteCmd` enum + `PALETTE` const (the one place to extend; adding a ve
 it by key and name). Filtering: `fuzzy_rank` over **nucleo-matcher** (helix/telescope engine,
 `tui`-gated, terminal-free). Also exposes the theme switchers (no key).
 
-**AI assists (`Mode::AiPrompt`/`AiResult`).** The palette exposes five AI verbs
+**AI assists (`Mode::AiPrompt`/`AiResult`).** The palette exposes six AI verbs
 (`PaletteCmd::Ai*`): **draft/revise body** + **ask** open a free-form prompt,
-**summarize**/**lint**/**plan** act on the selected ADR. The pure layer builds
-`Action::Ai(AiRequest)`; the driver runs it on a worker thread with the "thinking" spinner. A
-`Draft` reply loads the `AI_MARKER`-tagged body into the editor; a `Popup` reply shows
-scrollable read-only markdown. One call at a time; no provider → clear message.
+**summarize**/**lint**/**plan**/**plan-regenerate** act on the selected ADR. The pure layer
+builds `Action::Ai(AiRequest)`; the driver runs it on a worker thread with the "thinking"
+spinner. A `Draft` reply loads the `AI_MARKER`-tagged body into the editor; a `Popup` reply
+shows scrollable read-only markdown. One call at a time; no provider → clear message.
+**`AiPlan` reads the stored plan first** (ADR-0008 semantics, matching CLI `plan <ID>`):
+with a marker-bracketed plan in the body, the pure layer opens the popup directly via
+`plan::extract` — deterministic, provider-free, no thread; only a plan-less ADR requests
+generation. `AiPlanRegenerate` is the explicit fresh-generation verb (CLI `--regenerate`);
+its popup never overwrites the stored plan. Pinned by headless `TuiState` tests
+(`plan_palette_surfaces_a_stored_plan_provider_free` + siblings).
 
 **Fuzzy ADR pickers (`Mode::PickAdr`).** Two flows fuzzy-pick an ADR (one mode + overlay, by
 `PickPurpose`): `Jump` (`Ctrl-P` → moves selection) and `Supersede` (`S` → the OLDER ADR).
@@ -508,6 +558,21 @@ stay mechanical.
 `AI_MARKER`, the `FakeProvider` stand-in — so the interview flow is unit-testable with no
 network and no `ai` feature. The facade `ai_hook::open_provider(cfg)` resolves `ADROIT_AI_FAKE`
 (offline echo) → the rig provider (only when `ai.enabled`, never in a core build) → `None`.
+Every AI draft is mechanically **sanitized** before the splice (`sanitize_draft`, shared by
+`draft_body`/`draft_compose` → covers interview/`draft`/`compose`/`import --ai`/TUI): a
+re-emitted leading H1 / `> State:` banner is dropped; a re-emitted `## Status` /
+`## Stakeholders` skeleton section is dropped wherever it appears (the splice preserves the
+document's own — a model copy is always a duplicate; run-1 ADR-0001/0005); echoed adroit
+markers (`ai-suggested`/`seeded-from-assessment`) are dropped; trailing conversational
+residue ("Please review this revised ADR body…" — run-1 ADR-0002; `RESIDUE_OPENERS`) is
+stripped with the rule it orphans; and an unmanaged `## Implementation` section with real
+content is retitled `## Implementation notes` — so no model output can read as the
+hand-written section that blocks `plan --save` (ADR-0008 reserves that heading; echoes of
+the marker-bracketed stored plan or the prompt-only template placeholder stay verbatim, and
+plan-span content is never touched). Properties `ai_drafts_never_block_plan_save` +
+`ai_drafts_never_duplicate_the_mechanical_preamble` (`tests/parsers.rs`) pin the invariants;
+found in the M5 ollama dogfood rehearsal and the iteration-1 full-loop run (book:
+Development → The Adopt Read Slice).
 
 **`ai`-gated** (`src/ai/rig_provider.rs`): `RigProvider` wraps rig (aliased from `rig-core`) —
 Anthropic and Ollama (local) — on a current-thread tokio runtime, `block_on`-ing rig's agent.
@@ -522,16 +587,29 @@ template with no provider.
 ADR (shared `interview_and_draft`: Q&A → `ai::draft_body` → `splice_ai_draft`), then opens the
 editor; `require_provider` (no fallback). Flow: `new` → `draft` → `edit` → PR.
 
-**`plan <ID>`**: **read-only** — reads an ADR + corpus, asks for an ordered implementation
-checklist, prints it (or `--out`); `-o json` emits a `view::Plan` envelope
-(`reference`/`title`/`plan`, markdown). Bails (not degrades) with no provider. **`summarize
+**`plan <ID>`** (ADR-0008, `src/plan.rs`): generation reads an ADR + corpus and asks for an
+ordered implementation checklist; **`--save` persists it INSIDE the ADR document** as a
+`<!-- adroit:plan -->`…`<!-- /adroit:plan -->`-bracketed `## Implementation` section (pure
+splice/extract engine in `src/plan.rs`; replaces the template's placeholder section in place,
+tolerates trailing supersession banners, refuses a stored plan without `--force` and a
+hand-written `## Implementation` always; `--save --dry-run` previews). With a stored plan the
+bare `plan <ID>` is a **deterministic, provider-free read** (verbatim, byte-stable);
+`--regenerate` forces a fresh call (print-only). `-o json` emits `view::Plan`
+(`reference`/`title`/`plan`/`stored` — `stored` additive); `show -o json`/`AdrDetail` carries
+the stored plan as `plan`. Generation bails (not degrades) with no provider; the AI body
+splice (`draft`/`compose`/`import --ai`) **preserves** a stored plan section. **`summarize
 <ID>`**: a one-paragraph read-only TL;DR (stdout or `--out`).
 
 **`lint <ID>`** (`src/lint.rs`): authoring-quality checks, **distinct from `check`**
 (structural validity). `lint::lint(body)` is the deterministic core — leftover MADR
-placeholders, missing/empty `### Negative Consequences`, `## Considered Options` with <2 items.
-Needs **no AI** (CI-usable); `--ai` appends one advisory finding. Exits non-zero on
-**mechanical** findings only.
+placeholders, missing/empty Negative Consequences (`##` and `###` depth both accepted —
+models write h2 where MADR nests h3; depth is shape, not substance), `## Considered
+Options` with <2 recorded options (list items and `###` sub-headings both count — MADR's
+long form and most models record options as sub-headings), and a **Warning** on repeated
+top-level (`##`) sections (the run-1 skeleton-echo shape). Findings carry `severity`
+(reusing `view::Severity`): Errors gate the exit, Warnings (incl. the `--ai` advisory
+finding) don't. Needs **no AI** (CI-usable); `--ai` appends one advisory finding. Exits
+non-zero on **mechanical Error** findings only.
 
 **`related <ID>` / `dedupe <ID>`** (`src/similar.rs`): retrieval but **mechanical — NO AI**:
 TF-IDF cosine over the corpus. `related` excludes ADRs already linked to the target; `dedupe`

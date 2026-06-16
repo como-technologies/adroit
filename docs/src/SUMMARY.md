@@ -23,12 +23,15 @@
 
 - [CLI Reference](./reference/cli.md)
 - [ADR Format](./reference/adr-format.md)
+- [Changelog](./reference/changelog.md)
 
 # Development
 
 - [Design Principles](./dev/design.md)
 - [Architecture & Conventions](./dev/architecture.md)
+- [Decision Records (adr/)](./dev/decisions.md)
 - [Testing & Fuzzing](./dev/testing.md)
 - [Hardening & Quality](./dev/hardening.md)
+- [The Adopt Read Slice (Dogfood)](./dev/adopt-read-slice.md)
 - [Project Skills](./dev/skills.md)
 - [Roadmap](./dev/roadmap.md)

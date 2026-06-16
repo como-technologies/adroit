@@ -139,7 +139,8 @@ the seeded prose is a starting point to refine (`adroit draft <id>`, `edit`).
 
 ```sh
 adroit import --from-assessment maturity.json
-adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothing
+adroit import --from-assessment maturity.yaml --dry-run    # preview, write nothing
+adroit import --from-assessment maturity.yaml -o json      # machine seed summary
 ```
 
 | Flag | Description |
@@ -151,8 +152,12 @@ adroit import --from-assessment maturity.yaml --dry-run   # preview, write nothi
 
 **Re-runnable.** Practices whose (case-insensitive) title already has an ADR are
 skipped — `(N skipped — already present)` — so importing an *updated* assessment
-only adds what's new. Under the `by_category` layout each domain becomes the
-category. See [The ADR Workflow](../usage/workflow.md#seed-a-backlog-from-an-assessment--adroit-import).
+only adds what's new. Pass `--force` to seed anyway. Under the `by_category`
+layout each domain becomes the category. With `-o json` the run emits an
+`ImportSummary` machine summary (`seeded` / `skipped`) on stdout instead of the
+human report — see
+[Automation & AI](../usage/automation.md#-o-json-on-the-read-verbs-and-import).
+See [The ADR Workflow](../usage/workflow.md#seed-a-backlog-from-an-assessment--adroit-import).
 
 #### `adroit draft <ID>`
 
@@ -236,7 +241,8 @@ adroit finds your editor using this precedence chain:
 Check one ADR's **authoring quality** (read-only) — distinct from `check`, which
 validates structural repo integrity. The mechanical checks need no AI: sections
 still left as their italic `_…_` prompt, a missing or empty
-`### Negative Consequences`, and fewer than two `## Considered Options`. The
+`### Negative Consequences`, and fewer than two recorded options under
+`## Considered Options` (list items and `###` sub-headings both count). The
 prompt check is template-agnostic — any section whose only content is the prompt
 the template shipped. `--ai` adds a model review against ADR best
 practices + house style (needs a provider; see
