@@ -23,7 +23,7 @@ A bare `adroit new` would write into the dogfood repo by mistake.
 
 ## When to record one
 A decision belongs in `adr/` when it shapes adroit's architecture and a future
-contributor would ask "why is it this way?": a new dependency (e.g. ADR-0001
+contributor would ask "why is it this way?": a new dependency (e.g. ADR-0002
 adopting rig), a sync/async boundary, a seam design, an on-disk format change, a
 feature-gating choice. Routine bug fixes and refactors don't.
 

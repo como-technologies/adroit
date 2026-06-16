@@ -30,4 +30,6 @@ code-vs-doc defaults (a port, a default value, a precedence order).
 - `just book` must build with no broken links.
 - Keep examples **generic** — never put a specific client's tech/titles in adroit
   docs, comments, or examples.
-- No CHANGELOG yet — don't create one until asked.
+- The changelog is a **book chapter** (`docs/src/reference/changelog.md`,
+  ADR-0012) — never a standalone `CHANGELOG.md`. A release (version bump +
+  tag) gets its entry there.

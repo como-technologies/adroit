@@ -3,8 +3,9 @@
 A snappy tool for managing Architecture Decision Records — the name hides
 **ADR** in plain sight.
 
-> **Status: Phase 1 — dogfooding.** We use adroit on our own consulting gigs to
-> manage ADRs in-repo. Not published yet; build from source. Expect rough edges.
+> **Status: dogfooded daily.** We use adroit on our own consulting gigs to
+> manage ADRs in-repo. Distributed as source by decision (ADR-0013): build it
+> with `just build`, pin releases by tag (see the book's Changelog chapter).
 
 By default it speaks a **status-by-directory** convention: status is the
 directory (`proposed/`, `accepted/`, `rejected/`, `superseded/`, `deprecated/`), number and
