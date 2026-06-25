@@ -121,6 +121,9 @@ mod tests {
         run(dir, &["init", "-q"]).unwrap();
         run(dir, &["config", "user.email", "t@example.com"]).unwrap();
         run(dir, &["config", "user.name", "Tester"]).unwrap();
+        // Disposable repo with a keyless throwaway identity: disable signing so a
+        // contributor's global `commit.gpgsign = true` can't fail the commit.
+        run(dir, &["config", "commit.gpgsign", "false"]).unwrap();
     }
 
     #[test]
@@ -178,6 +181,7 @@ mod tests {
             .unwrap();
         run(&a, &["config", "user.email", "t@example.com"]).unwrap();
         run(&a, &["config", "user.name", "Tester"]).unwrap();
+        run(&a, &["config", "commit.gpgsign", "false"]).unwrap();
         std::fs::write(a.join("seed.txt"), "seed\n").unwrap();
         add(&a, &a.join("seed.txt")).unwrap();
         commit(&a, "seed").unwrap();

@@ -305,8 +305,16 @@ mod tests {
             let ok = Command::new("git")
                 .arg("-C")
                 .arg(root)
-                // Deterministic identity so commits succeed in any environment.
-                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                // Deterministic identity so commits succeed in any environment;
+                // signing off so a contributor's global commit.gpgsign can't fail it.
+                .args([
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
                 .env("GIT_AUTHOR_DATE", date)
                 .env("GIT_COMMITTER_DATE", date)
                 .args(args)

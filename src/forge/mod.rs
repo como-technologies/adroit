@@ -1857,6 +1857,7 @@ mod tests {
         git(dir, &["init", "-q"]);
         git(dir, &["config", "user.email", "t@example.com"]);
         git(dir, &["config", "user.name", "T"]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.join("seed"), "x").unwrap();
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-q", "-m", "seed"]);
